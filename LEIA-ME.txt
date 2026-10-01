@@ -1,0 +1,26 @@
+PokeIdle Multi — 4 contas do PokéIdle numa janela, cada uma com sessão própria
+================================================================================
+
+COMO ABRIR
+  1. Tenha o Node.js instalado (https://nodejs.org, versão LTS).
+  2. Dê dois cliques em INICIAR.bat. Na primeira vez ele baixa o Electron (~1-2 min).
+  3. Faça login em cada um dos 4 quadros. Cada quadro é um "navegador" separado:
+     cookies e login não se misturam, e ficam salvos para a próxima vez.
+
+  Quer um .exe? Rode GERAR-EXE.bat — ele cria um executável portátil na pasta "dist".
+
+NA JANELA
+  - Grade 2x2. O botão ⛶ de um quadro expande aquela conta; Esc ou "Grade 2×2" volta.
+  - − / + : zoom de cada conta (fica salvo).
+  - 🔊/🔇 : som de cada conta (só a conta 1 começa com som).
+  - Clique no nome ("Conta 1") para renomear.
+  - ⟳ recarrega a conta, "Sair" desloga só aquela conta.
+    ATENÇÃO: recarregar ou fechar no meio de uma luta conta como derrota no jogo.
+    Faça isso com a conta no Centro Pokémon.
+
+POKEBOT EMBUTIDO
+  - Cada conta tem o próprio botão 🤖 Bot (canto inferior esquerdo), com configuração
+    separada por conta.
+  - Os arquivos do bot ficam em Documentos\PokeIdleMulti\bot (botão "Pasta do bot").
+    Quando logica.js muda ali, as 4 contas recebem a versão nova na hora, sem recarregar.
+    Para receber atualizações direto do Claude, conecte essa pasta à conversa ("Add folder").
