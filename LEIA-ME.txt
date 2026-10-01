@@ -21,6 +21,9 @@ NA JANELA
 POKEBOT EMBUTIDO
   - Cada conta tem o próprio botão 🤖 Bot (canto inferior esquerdo), com configuração
     separada por conta.
-  - Os arquivos do bot ficam em Documentos\PokeIdleMulti\bot (botão "Pasta do bot").
-    Quando logica.js muda ali, as 4 contas recebem a versão nova na hora, sem recarregar.
-    Para receber atualizações direto do Claude, conecte essa pasta à conversa ("Add folder").
+  - O bot se atualiza sozinho, sem recarregar o jogo:
+      * Rodando pelo INICIAR.bat: o bot é lido da pasta "bot" do projeto. Salvou lá,
+        as 4 contas recebem a versão nova na hora.
+      * No .exe: o bot fica em Documentos\PokeIdleMultiot (botão "Pasta do bot") e o app
+        busca a versão nova no GitHub (branch main) a cada 5 minutos. Para desligar, ponha
+        "autoAtualizar": false no multi.json (pasta de dados do app).

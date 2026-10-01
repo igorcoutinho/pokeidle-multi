@@ -10,6 +10,7 @@
 const { app, BrowserWindow, ipcMain, shell, dialog, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const vm = require('vm');
 
 const URL_JOGO = 'https://pokeidle.io/app';
 const N_CONTAS = 4;
@@ -20,12 +21,19 @@ const UA = `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 app.userAgentFallback = UA;
 
 // ------------------------------------------------------------------ a pasta do bot
-// Fica em Documentos\PokeIdleMulti\bot — fácil de achar e de conectar ao Claude para receber
-// atualizações. Na primeira execução é semeada com a cópia que vem dentro do app.
-const PASTA_BOT = path.join(app.getPath('documents'), 'PokeIdleMulti', 'bot');
+// Rodando pelo código (INICIAR.bat / npm start) o bot é lido direto de ./bot do repositório:
+// editar ali já chega nas 4 contas. No .exe ele fica em Documentos\PokeIdleMulti\bot, semeada
+// na primeira execução com a cópia embutida e mantida em dia pelo GitHub (ver atualizarDoGitHub).
+const EM_DESENVOLVIMENTO = !app.isPackaged;
 const PASTA_BOT_EMBUTIDA = path.join(__dirname, 'bot');
+const PASTA_BOT = EM_DESENVOLVIMENTO
+  ? PASTA_BOT_EMBUTIDA
+  : path.join(app.getPath('documents'), 'PokeIdleMulti', 'bot');
+const URL_BOT_GITHUB = 'https://raw.githubusercontent.com/igorcoutinho/pokeidle-multi/main/bot/';
+const INTERVALO_GITHUB_MS = 5 * 60 * 1000;
 
 function semearPastaDoBot() {
+  if (EM_DESENVOLVIMENTO) return;
   fs.mkdirSync(PASTA_BOT, { recursive: true });
   for (const f of ['core.js', 'logica.js']) {
     const destino = path.join(PASTA_BOT, f);
@@ -139,9 +147,32 @@ function vigiarBot() {
   });
 }
 
+// No .exe: baixa core.js/logica.js do GitHub e, se mudaram, grava na pasta do bot — o vigia
+// acima cuida de empurrar para as contas. Código que nem compila é descartado, e qualquer
+// falha de rede só adia para a próxima rodada. Desligável com "autoAtualizar": false no multi.json.
+async function atualizarDoGitHub() {
+  if (lerCfg().autoAtualizar === false) return;
+  for (const f of ['core.js', 'logica.js']) {
+    try {
+      const r = await fetch(URL_BOT_GITHUB + f, { cache: 'no-store' });
+      if (!r.ok) continue;
+      const codigo = await r.text();
+      if (!codigo.trim() || codigo === lerBot(f)) continue;
+      new vm.Script(codigo, { filename: f });
+      fs.writeFileSync(path.join(PASTA_BOT, f), codigo);
+    } catch (e) {
+      console.warn('[PokeIdle Multi] atualização do GitHub falhou para', f, e.message);
+    }
+  }
+}
+
 app.whenReady().then(() => {
   semearPastaDoBot();
   criarJanela();
   vigiarBot();
+  if (!EM_DESENVOLVIMENTO) {
+    atualizarDoGitHub();
+    setInterval(atualizarDoGitHub, INTERVALO_GITHUB_MS);
+  }
 });
 app.on('window-all-closed', () => app.quit());
