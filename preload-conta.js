@@ -3,6 +3,26 @@
 // o WebSocket. A lógica vem depois, injetada pela janela.
 const { ipcRenderer, webFrame } = require('electron');
 
+// Captcha do login (Cloudflare Turnstile). O <script> da API chama `window.onTurnstilePronto`
+// assim que carrega, mas quem define essa função é o app.js do jogo — um módulo grande que
+// costuma chegar depois. Aí o Turnstile desiste, o widget nunca aparece e o login falha.
+// Aqui a chamada fica guardada e é repassada ao jogo quando ele definir a função.
+const ESPERA_TURNSTILE = `(() => {
+  let apiPronta = false;
+  let real = null;
+  Object.defineProperty(window, 'onTurnstilePronto', {
+    configurable: true,
+    get() { return real ?? (() => { apiPronta = true; }); },
+    set(fn) { real = fn; if (apiPronta && typeof fn === 'function') setTimeout(fn, 0); },
+  });
+})();`;
+
+try {
+  webFrame.executeJavaScript(ESPERA_TURNSTILE);
+} catch (e) {
+  console.error('[PokeIdle Multi] ajuste do captcha não entrou', e);
+}
+
 try {
   const core = ipcRenderer.sendSync('pb:core');
   if (core) webFrame.executeJavaScript(core);

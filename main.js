@@ -96,6 +96,14 @@ function criarJanela() {
 }
 
 // ------------------------------------------------------------------ webviews
+const HOSTS_LOGIN = /(^|\.)(google\.com|discord\.com)$/;
+function navegacaoPermitida(url) {
+  try {
+    const u = new URL(url);
+    return u.protocol === 'https:' && (u.host === 'pokeidle.io' || HOSTS_LOGIN.test(u.hostname));
+  } catch { return false; }
+}
+
 app.on('web-contents-created', (_ev, wc) => {
   if (wc.getType() !== 'webview') return;
   // Links que tentam abrir janela nova (Discord, termos…) vão para o navegador padrão.
@@ -103,9 +111,10 @@ app.on('web-contents-created', (_ev, wc) => {
     if (url.startsWith('https://')) shell.openExternal(url);
     return { action: 'deny' };
   });
-  // Não deixar uma conta navegar para fora do jogo por engano.
+  // Não deixar uma conta navegar para fora do jogo por engano — exceto o login com Google/Discord,
+  // que sai para o provedor e volta para o jogo com a sessão; ele precisa acontecer ali dentro.
   wc.on('will-navigate', (ev, url) => {
-    if (!url.startsWith('https://pokeidle.io/')) { ev.preventDefault(); shell.openExternal(url); }
+    if (!navegacaoPermitida(url)) { ev.preventDefault(); shell.openExternal(url); }
   });
 });
 
