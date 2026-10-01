@@ -35,11 +35,14 @@ const INTERVALO_GITHUB_MS = 5 * 60 * 1000;
 function semearPastaDoBot() {
   if (EM_DESENVOLVIMENTO) return;
   fs.mkdirSync(PASTA_BOT, { recursive: true });
-  for (const f of ['core.js', 'logica.js']) {
+  for (const f of ARQUIVOS_BOT) {
     const destino = path.join(PASTA_BOT, f);
     if (!fs.existsSync(destino)) fs.copyFileSync(path.join(PASTA_BOT_EMBUTIDA, f), destino);
   }
 }
+// core.js entra antes do jogo; o resto é a parte trocada a quente, injetada como um bloco só.
+const ARQUIVOS_BOT = ['core.js', 'logica.js', 'analise.js'];
+const lerLogica = () => ARQUIVOS_BOT.slice(1).map(lerBot).join('\n;\n');
 const lerBot = (f) => {
   try { return fs.readFileSync(path.join(PASTA_BOT, f), 'utf8'); }
   catch { return fs.readFileSync(path.join(PASTA_BOT_EMBUTIDA, f), 'utf8'); }
@@ -231,7 +234,7 @@ app.on('web-contents-created', (_ev, wc) => {
 
 // ------------------------------------------------------------------ IPC
 ipcMain.on('pb:core', (ev) => { ev.returnValue = lerBot('core.js'); });
-ipcMain.handle('pb:logica', () => lerBot('logica.js'));
+ipcMain.handle('pb:logica', () => lerLogica());
 ipcMain.handle('multi:cfg', () => ({ ...lerCfg(), nContas: N_CONTAS, urlJogo: URL_JOGO, pastaBot: PASTA_BOT, rotom }));
 ipcMain.handle('multi:abrirCockpit', (_e, n) => abrirCockpit(n));
 ipcMain.handle('multi:salvar', (_e, parcial) => { salvarCfg({ ...lerCfg(), ...parcial }); return true; });
@@ -245,11 +248,11 @@ ipcMain.handle('multi:sairDaConta', async (_e, n) => {
 // Vigia a pasta do bot: lógica nova é empurrada para as 4 contas na hora.
 function vigiarBot() {
   let espera = null;
-  let ultimo = { logica: lerBot('logica.js'), core: lerBot('core.js') };
+  let ultimo = { logica: lerLogica(), core: lerBot('core.js') };
   fs.watch(PASTA_BOT, () => {
     clearTimeout(espera);
     espera = setTimeout(() => {
-      const agora = { logica: lerBot('logica.js'), core: lerBot('core.js') };
+      const agora = { logica: lerLogica(), core: lerBot('core.js') };
       if (agora.logica !== ultimo.logica) janela?.webContents.send('pb:logicaMudou', agora.logica);
       if (agora.core !== ultimo.core) janela?.webContents.send('pb:coreMudou');
       ultimo = agora;
@@ -262,7 +265,7 @@ function vigiarBot() {
 // falha de rede só adia para a próxima rodada. Desligável com "autoAtualizar": false no multi.json.
 async function atualizarDoGitHub() {
   if (lerCfg().autoAtualizar === false) return;
-  for (const f of ['core.js', 'logica.js']) {
+  for (const f of ARQUIVOS_BOT) {
     try {
       const r = await fetch(URL_BOT_GITHUB + f, { cache: 'no-store' });
       if (!r.ok) continue;

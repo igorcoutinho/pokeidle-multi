@@ -9,7 +9,7 @@
   'use strict';
   if (window.__pokebotCore) return;
 
-  const VERSAO_CORE = 1;
+  const VERSAO_CORE = 2;
 
   // Mesma remontagem de `/shared/estado-delta.mjs` do jogo: chave ausente = não mudou;
   // coleção de pokémon chega por pkMud/pkFora; `cheio` recomeça do zero.
@@ -37,6 +37,7 @@
     versao: VERSAO_CORE,
     eu: null,
     catalogoBolas: [],
+    tabelaTipos: null,  // a grade 18×18 de efetividade do jogo (vem no welcome)
     itens: new Map(),
     ws: null,
     logado: false,
@@ -90,6 +91,7 @@
       if (m.t === 'welcome') {
         core.logado = true;
         core.catalogoBolas = m.catalogoBolas ?? core.catalogoBolas;
+        if (m.tabelaTipos && Object.keys(m.tabelaTipos).length) core.tabelaTipos = m.tabelaTipos;
         for (const i of m.itensNossos ?? []) core.itens.set(i.id, i);
         core.eu = mesclar(m.estado);
       } else if (m.t === 'estado') {

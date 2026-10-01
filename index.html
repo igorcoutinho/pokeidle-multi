@@ -104,6 +104,7 @@
         <span class="estado carregando" title="conexão"></span>
         <input class="nome" value="${c.nome.replace(/"/g, '&quot;')}" spellcheck="false" title="Clique para renomear">
         <span class="esp"></span>
+        <button data-a="time" title="Análise do time para PvP: quem colocar no lugar de quem">📊 Time</button>
         <button data-a="eco" class="eco" title="Ligar/desligar o Modo Economia do jogo nesta conta">🍃 Eco</button>
         ${cfg.rotom ? '<button data-a="rotom" title="Abrir o Cockpit do Rotom Sniper desta conta">🎯 Rotom</button>' : ''}
         <button data-a="menos" title="Diminuir zoom">−</button>
@@ -157,6 +158,8 @@
       if (a === 'mais' || a === 'menos') {
         c.zoom = Math.min(1.5, Math.max(0.3, +(c.zoom + (a === 'mais' ? 0.05 : -0.05)).toFixed(2)));
         wv.setZoomFactor(c.zoom); pintar(); salvar();
+      } else if (a === 'time') {
+        wv.executeJavaScript('window.__pokeAnalise?.abrir()').catch(() => aviso('Análise: a conta ainda está carregando.'));
       } else if (a === 'eco') {
         wv.executeJavaScript(JS_ECO_ALTERNAR).then(pintarEco).catch(() => aviso('Modo Economia: a conta ainda está carregando.'));
       } else if (a === 'rotom') {

@@ -20,6 +20,16 @@ NA JANELA
     estiver fora do Centro, o app pergunta antes de recarregar.
     Faça isso com a conta no Centro Pokémon.
 
+ANÁLISE DE TIME (PvP) — botão 📊 Time
+  - Mostra seu time (equipe de PvP salva ou equipe atual) e as fraquezas dele por tipo.
+  - Adicione times rivais pelo nick, ou "Top 10 do PvP". Eles ficam salvos por conta.
+  - Clique em quem você quer tirar: o app simula a luta de desgaste do PvP (as mesmas contas
+    do jogo) contra cada rival e sugere quem colocar no lugar, em três listas:
+      * Da sua bolsa (dá para trocar agora)
+      * Dos times rivais (o que está funcionando para os outros)
+      * Qualquer espécie (meta de captura, no mesmo nível, IV 24/32 e sem TM)
+  - A porcentagem é quanto a margem média de vitória melhora com a troca.
+
 ROTOM SNIPER (extensão)
   - Se a extensão "Rotom Sniper - Assistente PokéIdle" estiver instalada no Chrome, o app a
     carrega sozinho em cada conta (sempre a versão mais nova instalada no Chrome).
