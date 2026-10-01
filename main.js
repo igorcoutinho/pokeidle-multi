@@ -95,6 +95,71 @@ function criarJanela() {
   });
 }
 
+// ------------------------------------------------------------------ Rotom Sniper (extensão)
+// A extensão não vem no app nem no repositório (o código é do autor dela): é carregada de onde
+// ela já está instalada — Documentos\PokeIdleMulti\extensoes\rotom-sniper se existir, senão a
+// versão mais nova instalada no Chrome. Cada conta carrega a sua cópia, então regras, config e
+// log ficam separados por conta. O Cockpit (que no Chrome abre pelo ícone) abre pelo botão 🎯.
+const ID_ROTOM = 'olccbpdjdkbfgondiiaicmlifhbcggmk';
+let rotom = null; // { id, versao, pasta }
+const cockpits = new Map();
+
+function acharRotom() {
+  const manual = path.join(app.getPath('documents'), 'PokeIdleMulti', 'extensoes', 'rotom-sniper');
+  if (fs.existsSync(path.join(manual, 'manifest.json'))) return manual;
+  const dadosChrome = path.join(app.getPath('appData'), '..', 'Local', 'Google', 'Chrome', 'User Data');
+  let perfis = [];
+  try { perfis = fs.readdirSync(dadosChrome); } catch { return null; }
+  const candidatos = [];
+  for (const perfil of perfis) {
+    const base = path.join(dadosChrome, perfil, 'Extensions', ID_ROTOM);
+    let versoes = [];
+    try { versoes = fs.readdirSync(base); } catch { continue; }
+    for (const v of versoes) {
+      if (fs.existsSync(path.join(base, v, 'manifest.json'))) candidatos.push({ v, pasta: path.join(base, v) });
+    }
+  }
+  candidatos.sort((a, b) => b.v.localeCompare(a.v, undefined, { numeric: true }));
+  return candidatos[0]?.pasta ?? null;
+}
+
+async function carregarRotom() {
+  const pasta = acharRotom();
+  if (!pasta) return;
+  for (let n = 1; n <= N_CONTAS; n++) {
+    const ses = session.fromPartition(`persist:conta${n}`);
+    try {
+      const ext = await (ses.extensions ?? ses).loadExtension(pasta);
+      rotom = { id: ext.id, versao: ext.version, pasta };
+    } catch (e) {
+      console.warn('[PokeIdle Multi] Rotom Sniper não carregou na conta', n, e.message);
+    }
+  }
+}
+
+function abrirCockpit(n) {
+  if (!rotom) return false;
+  const aberta = cockpits.get(n);
+  if (aberta && !aberta.isDestroyed()) { aberta.focus(); return true; }
+  const nome = lerCfg().contas?.[n - 1]?.nome ?? `Conta ${n}`;
+  const w = new BrowserWindow({
+    width: 1160,
+    height: 760,
+    title: `Rotom Sniper — ${nome}`,
+    backgroundColor: '#1d1010',
+    autoHideMenuBar: true,
+    webPreferences: { partition: `persist:conta${n}`, contextIsolation: true, nodeIntegration: false },
+  });
+  w.on('page-title-updated', (ev) => ev.preventDefault());
+  w.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith('https://')) shell.openExternal(url);
+    return { action: 'deny' };
+  });
+  w.loadURL(`chrome-extension://${rotom.id}/cockpit.html`);
+  cockpits.set(n, w);
+  return true;
+}
+
 // ------------------------------------------------------------------ webviews
 const HOSTS_LOGIN = /(^|\.)(google\.com|discord\.com)$/;
 function navegacaoPermitida(url) {
@@ -132,7 +197,8 @@ app.on('web-contents-created', (_ev, wc) => {
 // ------------------------------------------------------------------ IPC
 ipcMain.on('pb:core', (ev) => { ev.returnValue = lerBot('core.js'); });
 ipcMain.handle('pb:logica', () => lerBot('logica.js'));
-ipcMain.handle('multi:cfg', () => ({ ...lerCfg(), nContas: N_CONTAS, urlJogo: URL_JOGO, pastaBot: PASTA_BOT }));
+ipcMain.handle('multi:cfg', () => ({ ...lerCfg(), nContas: N_CONTAS, urlJogo: URL_JOGO, pastaBot: PASTA_BOT, rotom }));
+ipcMain.handle('multi:abrirCockpit', (_e, n) => abrirCockpit(n));
 ipcMain.handle('multi:salvar', (_e, parcial) => { salvarCfg({ ...lerCfg(), ...parcial }); return true; });
 ipcMain.handle('multi:abrirPastaBot', () => shell.openPath(PASTA_BOT));
 ipcMain.handle('multi:sairDaConta', async (_e, n) => {
@@ -175,8 +241,9 @@ async function atualizarDoGitHub() {
   }
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   semearPastaDoBot();
+  await carregarRotom(); // antes das webviews: o content script precisa estar lá quando o jogo abrir
   criarJanela();
   vigiarBot();
   if (!EM_DESENVOLVIMENTO) {

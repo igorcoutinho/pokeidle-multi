@@ -18,6 +18,14 @@ NA JANELA
     ATENÇÃO: recarregar ou fechar no meio de uma luta conta como derrota no jogo.
     Faça isso com a conta no Centro Pokémon.
 
+ROTOM SNIPER (extensão)
+  - Se a extensão "Rotom Sniper - Assistente PokéIdle" estiver instalada no Chrome, o app a
+    carrega sozinho em cada conta (sempre a versão mais nova instalada no Chrome).
+  - O botão 🎯 Rotom de cada conta abre o Cockpit daquela conta. Regras, configuração e log
+    são separados por conta.
+  - Sem Chrome? Copie a pasta da extensão para Documentos\PokeIdleMulti\extensoes\rotom-sniper
+    (a pasta que tem o manifest.json) — essa tem prioridade sobre a do Chrome.
+
 POKEBOT EMBUTIDO
   - Cada conta tem o próprio botão 🤖 Bot (canto inferior esquerdo), com configuração
     separada por conta.
