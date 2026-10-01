@@ -16,7 +16,8 @@ NA JANELA
   - Clique no nome ("Conta 1") para renomear.
   - 🍃 Eco : liga/desliga o Modo Economia do jogo naquela conta (fica verde quando ligado).
   - ⟳ recarrega a conta, "Sair" desloga só aquela conta.
-    ATENÇÃO: recarregar ou fechar no meio de uma luta conta como derrota no jogo.
+    ATENÇÃO: recarregar ou fechar no meio de uma luta conta como derrota no jogo — se a conta
+    estiver fora do Centro, o app pergunta antes de recarregar.
     Faça isso com a conta no Centro Pokémon.
 
 ROTOM SNIPER (extensão)

@@ -166,7 +166,9 @@
       } else if (a === 'foco') {
         focar(grade.classList.contains('solo') && caixa.classList.contains('foco') ? null : c);
       } else if (a === 'recarregar') {
-        if (confirm(`Recarregar "${c.nome}"?\n\nSe ela estiver no meio de uma luta, o jogo conta como derrota (perde XP). Faça isso no Centro Pokémon.`)) wv.reload();
+        // Sem confirmação aqui: se a conta estiver em risco (hunt, boss, Arena), o próprio jogo
+        // segura a saída e o app pergunta (ver 'will-prevent-unload' no main.js).
+        wv.reload();
       } else if (a === 'sair') {
         if (confirm(`Deslogar "${c.nome}"? Os dados de login desta conta neste app serão apagados.`)) {
           window.multi.sairDaConta(n).then(() => wv.loadURL(cfg.urlJogo));

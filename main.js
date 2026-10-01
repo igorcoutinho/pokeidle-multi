@@ -193,6 +193,24 @@ app.on('web-contents-created', (_ev, wc) => {
     if (url.startsWith('https://')) shell.openExternal(url);
     return { action: 'deny' };
   });
+  // O jogo segura a saída (beforeunload) quando a conta está em hunt, boss ou Arena — o Chrome
+  // perguntaria "Sair do site?", mas o Electron só cancela em silêncio, e aí nem o ⟳ nem o
+  // "Recarregar agora" do jogo fazem nada. Aqui a pergunta volta.
+  wc.on('will-prevent-unload', (ev) => {
+    const n = [...Array(N_CONTAS).keys()].map((i) => i + 1)
+      .find((i) => session.fromPartition(`persist:conta${i}`) === wc.session);
+    const nome = (n && lerCfg().contas?.[n - 1]?.nome) || (n ? `Conta ${n}` : 'Esta conta');
+    const r = dialog.showMessageBoxSync(janela, {
+      type: 'warning',
+      buttons: ['Recarregar mesmo assim', 'Cancelar'],
+      defaultId: 1,
+      cancelId: 1,
+      title: 'Conta fora do Centro Pokémon',
+      message: `"${nome}" está caçando ou em luta.`,
+      detail: 'Recarregar agora conta como derrota no jogo (time ao chão e perda de XP). O ideal é levar a conta ao Centro Pokémon antes.',
+    });
+    if (r === 0) ev.preventDefault(); // no Electron, preventDefault aqui = ignorar o beforeunload e seguir
+  });
   // Não deixar uma conta navegar para fora do jogo por engano — exceto o login com Google/Discord,
   // que sai para o provedor e volta para o jogo com a sessão; ele precisa acontecer ali dentro.
   wc.on('will-navigate', (ev, url) => {
