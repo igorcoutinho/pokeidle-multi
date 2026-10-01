@@ -104,6 +104,7 @@
         <span class="estado carregando" title="conexão"></span>
         <input class="nome" value="${c.nome.replace(/"/g, '&quot;')}" spellcheck="false" title="Clique para renomear">
         <span class="esp"></span>
+        <button data-a="shiny" class="eco" title="Caçador de shiny: registra os bichos do mapa e arremessa Great Ball quando um shiny cai">✨ Shiny</button>
         <button data-a="rota" class="eco" title="Rotação de mapas: troca de mapa sozinho quando a onda acaba">🔄 Rota</button>
         <button data-a="vendas" title="Relatório de compras e vendas no Mercado: preço médio, taxa, lucro e preço de venda">💰 Vendas</button>
         <button data-a="time" title="Análise do time para PvP: quem colocar no lugar de quem">📊 Time</button>
@@ -143,7 +144,11 @@
     const lerRota = () => wv.executeJavaScript('!!window.__pokeRotacao?.ativo')
       .then((on) => { elRota.classList.toggle('on', on); elRota.textContent = on ? '🔄 Rota ON' : '🔄 Rota'; })
       .catch(() => {});
-    const lerEco = () => { lerRota(); return wv.executeJavaScript(JS_ECO_ESTADO).then(pintarEco).catch(() => {}); };
+    const elShiny = caixa.querySelector('[data-a="shiny"]');
+    const lerShiny = () => wv.executeJavaScript('!!window.__pokeShiny?.ativo')
+      .then((on) => { elShiny.classList.toggle('on', on); elShiny.textContent = on ? '✨ Shiny ON' : '✨ Shiny'; })
+      .catch(() => {});
+    const lerEco = () => { lerRota(); lerShiny(); return wv.executeJavaScript(JS_ECO_ESTADO).then(pintarEco).catch(() => {}); };
     // O modo também pode ser trocado pelo próprio jogo — o botão acompanha.
     setInterval(lerEco, 3000);
     pintar();
@@ -164,6 +169,8 @@
       if (a === 'mais' || a === 'menos') {
         c.zoom = Math.min(1.5, Math.max(0.3, +(c.zoom + (a === 'mais' ? 0.05 : -0.05)).toFixed(2)));
         wv.setZoomFactor(c.zoom); pintar(); salvar();
+      } else if (a === 'shiny') {
+        wv.executeJavaScript('window.__pokeShiny?.abrir()').catch(() => aviso('Shiny: a conta ainda está carregando.'));
       } else if (a === 'rota') {
         wv.executeJavaScript('window.__pokeRotacao?.abrir()').catch(() => aviso('Rotação: a conta ainda está carregando.'));
       } else if (a === 'vendas') {

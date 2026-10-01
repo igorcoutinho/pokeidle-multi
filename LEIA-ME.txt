@@ -20,6 +20,15 @@ NA JANELA
     estiver fora do Centro, o app pergunta antes de recarregar.
     Faça isso com a conta no Centro Pokémon.
 
+CAÇADOR DE SHINY — botão ✨ Shiny (fica verde quando ligado)
+  - Registra os bichos que aparecem no mapa e avisa na tela quando surge um shiny.
+  - Ligado: quando um shiny cai, arremessa a bola escolhida (Great Ball por padrão) no corpo
+    dele até capturar, ele fugir, o corpo sumir (30 s) ou acabar a bola. Se a escolhida
+    acabar, usa a reserva (Ultra Ball por padrão). Dá para limitar as bolas por shiny.
+  - Histórico de shinies: quando, em que mapa, quantas bolas e o resultado.
+  - Precisa da cena ligada: no Modo Economia o jogo não informa os bichos do mapa.
+  - A rotação de mapas espera enquanto há um shiny no chão sendo capturado.
+
 ROTAÇÃO DE MAPAS — botão 🔄 Rota (fica verde quando ligada)
   - Monte a lista de mapas (da lista do jogo ou "Adicionar o mapa onde estou") e a ordem.
   - Quando a onda acaba — o mesmo momento em que o jogo libera "Ir para o Centro Pokémon" —

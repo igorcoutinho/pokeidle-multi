@@ -94,6 +94,10 @@
       registrar(`onda limpa, mas a porta do Mapa só abre em ${Math.ceil((mem.portaEm - agora) / 1000)} s — fico mais uma onda`);
       return;
     }
+    if (window.__pokeShiny?.ocupado) {
+      registrar('onda limpa, mas há um shiny no chão sendo capturado — fico mais uma onda');
+      return;
+    }
     const alvo = proximoMapa();
     if (!alvo || (alvo === core.eu.huntSlug && cfg.mapas.length === 1)) return;
     mem.pedidoEm = agora;
