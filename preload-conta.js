@@ -15,6 +15,17 @@ const ESPERA_TURNSTILE = `(() => {
     get() { return real ?? (() => { apiPronta = true; }); },
     set(fn) { real = fn; if (apiPronta && typeof fn === 'function') setTimeout(fn, 0); },
   });
+
+  // Depois do login o jogo não remove o widget: cada conta ficava com um iframe do Cloudflare
+  // vivo para sempre, num processo próprio de ~200-350 MB. Logou, sai. (Deslogar recarrega a
+  // página, e aí o captcha volta normalmente.)
+  const faxina = setInterval(() => {
+    if (!window.__pokebotCore?.logado || !window.turnstile) return;
+    for (const id of ['#turnstile-entrar', '#turnstile-criar', '#turnstile-esqueci']) {
+      try { if (document.querySelector(id)?.childElementCount) window.turnstile.remove(id); } catch {}
+    }
+    clearInterval(faxina);
+  }, 5000);
 })();`;
 
 try {
