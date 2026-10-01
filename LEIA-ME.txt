@@ -24,6 +24,6 @@ POKEBOT EMBUTIDO
   - O bot se atualiza sozinho, sem recarregar o jogo:
       * Rodando pelo INICIAR.bat: o bot é lido da pasta "bot" do projeto. Salvou lá,
         as 4 contas recebem a versão nova na hora.
-      * No .exe: o bot fica em Documentos\PokeIdleMultiot (botão "Pasta do bot") e o app
+      * No .exe: o bot fica em Documentos\PokeIdleMulti\bot (botão "Pasta do bot") e o app
         busca a versão nova no GitHub (branch main) a cada 5 minutos. Para desligar, ponha
         "autoAtualizar": false no multi.json (pasta de dados do app).
