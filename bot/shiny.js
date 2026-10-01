@@ -1,15 +1,20 @@
 // PokéIdle Bot — CAÇADOR DE SHINY. Trocado a quente junto com a lógica.
 //
 // Grava os selvagens que aparecem no mapa (pelas mensagens `campo`: cada bicho vem com nome,
-// nível e `sh` = shiny) e, quando um SHINY cai, arremessa a bola escolhida (Great Ball por
-// padrão) no corpo dele com `ball.throw` — o mesmo pedido do painel "caídos" do jogo — até
-// capturar, ele fugir, o corpo sumir (30 s no chão) ou acabar a bola.
+// nível e `sh` = shiny). O jogo só aceita UMA bola por pokémon caído, então a bola certa tem de
+// estar escolhida antes de ele cair:
+//   · com o arremesso automático (VIP) ligado, assim que o shiny APARECE o app deixa só a Great
+//     Ball ativa nos chips de bola das Automações (`auto.set` com `ballIds`) — o automático
+//     joga a Great quando ele cai — e devolve as bolas de antes depois do arremesso;
+//   · com o automático desligado, o app arremessa uma Great Ball no corpo (`ball.throw`).
+// O contador "shinies vistos" da sessão do jogo sobe no evento `bola` com `shiny`; se ele
+// marcar um shiny que o app não viu, fica no histórico como detecção perdida.
 //
 // Precisa da cena: no Modo Economia o servidor não manda `campo`, e não há como saber quem é
-// shiny. A rotação de mapas espera enquanto há um shiny no chão (`ocupado`).
+// shiny antes da bola. A rotação de mapas espera enquanto há um shiny no mapa (`ocupado`).
 (() => {
   'use strict';
-  const VERSAO_SHINY = '1.0.0';
+  const VERSAO_SHINY = '1.1.0';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -20,7 +25,7 @@
   const S = {
     versao: VERSAO_SHINY,
     get ativo() { return cfg.ativo; },
-    /** Há shiny no chão sendo capturado — a rotação de mapas espera. */
+    /** Há shiny no mapa (vivo ou no chão esperando a bola) — a rotação de mapas espera. */
     get ocupado() { return cfg.ativo && alvos.size > 0; },
     desmontar() { for (const f of limpezas.splice(0)) { try { f(); } catch {} } },
     abrir: () => abrir(),
@@ -31,13 +36,12 @@
   // ---------------------------------------------------------------- constantes
   const CHAVE_CFG = 'pokeshiny.v1';
   const CHAVE_HIST = 'pokeshiny.hist.v1';
-  const TEMPO_CHAO_MS = 30_000;    // o corpo fica 30 s no chão (TEMPO_CHAO_MS do jogo)
-  const PAUSA_ENTRE_MS = 600;      // entre um arremesso e o próximo
-  const SEM_RESPOSTA_MS = 3000;    // sem evento `bola` nesse tempo, tenta de novo
+  const ESPERA_AUTO_MS = 2500;     // automático ligado: se ele não jogar nesse tempo, o app joga
+  const SEM_RESPOSTA_MS = 5000;    // sem evento `bola` depois do arremesso: desiste
   const HIST_MAX = 200;
 
   function lerCfg() {
-    const padrao = { ativo: false, bola: 'Great Ball', reserva: 'Ultra Ball', maxBolas: 0, aviso: true };
+    const padrao = { ativo: false, bola: 'Great Ball', reserva: 'Ultra Ball', aviso: true };
     try { return { ...padrao, ...JSON.parse(localStorage.getItem(CHAVE_CFG)) }; } catch { return padrao; }
   }
   const cfg = lerCfg();
@@ -46,13 +50,14 @@
   const salvarHist = () => { try { localStorage.setItem(CHAVE_HIST, JSON.stringify(hist.slice(0, HIST_MAX))); } catch {} };
 
   // Os selvagens do mapa e a contagem do que já apareceu (sobrevivem à troca a quente).
-  const mem = (core.memoria.shiny ??= { mobs: new Map(), vistos: new Map(), mapa: null, ultimoCampo: 0 });
-  const alvos = new Map(); // slot -> { nome, nivel, desde, tentativas, aguardando, registro }
+  const mem = (core.memoria.shiny ??= { mobs: new Map(), vistos: new Map(), mapa: null, ultimoCampo: 0, ballIdsAntes: null });
+  const alvos = new Map(); // slot -> { nome, nivel, caido, jogou, timer, registro }
   const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const hora = (ms = Date.now()) => new Date(ms).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
   const nomeBola = (b) => b?.nome ?? b?.name ?? '';
   const idBola = (nome) => (core.catalogoBolas ?? []).find((b) => nomeBola(b) === nome)?.id ?? null;
+  const nomeDoId = (id) => nomeBola((core.catalogoBolas ?? []).find((b) => b.id === Number(id))) || `bola ${id}`;
   const qtd = (id) => Number(core.eu?.balls?.[id] ?? 0);
   /** A bola da vez: a escolhida, ou a reserva se a escolhida acabou. */
   function bolaDaVez() {
@@ -62,6 +67,7 @@
     }
     return null;
   }
+  const semBola = () => `sem ${cfg.bola}${cfg.reserva ? ` nem ${cfg.reserva}` : ''}`;
 
   function avisar(txt) {
     if (!cfg.aviso) return;
@@ -85,41 +91,109 @@
     pintar();
   }
 
-  // ---------------------------------------------------------------- captura
-  function arremessar(slot) {
-    const a = alvos.get(slot);
-    if (!a || !cfg.ativo) return;
-    if (Date.now() - a.desde > TEMPO_CHAO_MS) return encerrar(slot, 'sumiu do chão');
-    if (cfg.maxBolas > 0 && a.tentativas >= cfg.maxBolas) return encerrar(slot, `parou após ${a.tentativas} bolas`);
-    const bola = bolaDaVez();
-    if (!bola) return encerrar(slot, `sem ${cfg.bola}${cfg.reserva ? ` nem ${cfg.reserva}` : ''}`);
-    if (!core.send({ t: 'ball.throw', ballId: bola.id, slot })) return;
-    a.tentativas++;
-    a.registro.bolas = a.tentativas;
-    a.registro.bola = bola.nome;
-    a.aguardando = setTimeout(() => arremessar(slot), SEM_RESPOSTA_MS);
-    pintar();
+  // ---------------------------------------------------------------- bolas ativas (Automações)
+  const auto = () => core.eu?.automation ?? {};
+  const autoBallLigado = () => !!(auto().autoBallAteCapturar || auto().autoBallSemParar || auto().autoBall);
+  const mesmaLista = (a, b) => a.length === b.length && a.every((x) => b.includes(x));
+
+  /** Deixa só a bola do shiny ativa no arremesso automático — guardando as de antes. */
+  function ativarBolaDoShiny(bola) {
+    const atuais = auto().ballIds ?? [];
+    if (mem.ballIdsAntes == null) mem.ballIdsAntes = [...atuais];
+    if (mesmaLista(atuais, [bola.id])) return;
+    core.send({ t: 'auto.set', ...auto(), ballIds: [bola.id] });
   }
 
+  /** Devolve as bolas ativas de antes, quando não há mais shiny no mapa. */
+  function restaurarBolas() {
+    if (mem.ballIdsAntes == null || alvos.size) return;
+    const antes = mem.ballIdsAntes;
+    mem.ballIdsAntes = null;
+    if (!mesmaLista(auto().ballIds ?? [], antes)) core.send({ t: 'auto.set', ...auto(), ballIds: antes });
+  }
+
+  // ---------------------------------------------------------------- captura
   function encerrar(slot, resultado) {
     const a = alvos.get(slot);
     if (!a) return;
-    clearTimeout(a.aguardando);
+    clearTimeout(a.timer);
     alvos.delete(slot);
     a.registro.resultado = resultado;
     salvarHist();
     avisar(`✨ ${a.nome}: ${resultado}`);
+    restaurarBolas();
+    pintar();
+  }
+
+  /** Um shiny apareceu (vivo): registra e, com o automático ligado, já troca a bola ativa. */
+  function shinyApareceu(slot, m) {
+    if (alvos.has(slot)) return alvos.get(slot);
+    const registro = { em: Date.now(), mapa: core.eu?.huntSlug ?? '', nome: m.nome, nivel: m.nivel, resultado: 'à vista', bolas: 0, bola: '' };
+    registrarHist(registro);
+    if (!cfg.ativo) {
+      registro.resultado = 'caçador desligado';
+      salvarHist();
+      avisar(`✨ SHINY no mapa: ${m.nome} Nv ${m.nivel} (caçador desligado)`);
+      return null;
+    }
+    const a = { nome: m.nome, nivel: m.nivel, caido: false, jogou: false, timer: null, registro };
+    alvos.set(slot, a);
+    const bola = bolaDaVez();
+    if (!bola) { encerrar(slot, semBola()); return null; }
+    if (autoBallLigado()) {
+      ativarBolaDoShiny(bola);
+      registro.resultado = `${bola.nome} ativa — esperando ele cair`;
+    } else registro.resultado = `esperando ele cair para jogar ${bola.nome}`;
+    salvarHist();
+    avisar(`✨ SHINY no mapa: ${m.nome} Nv ${m.nivel} — ${bola.nome} pronta!`);
+    pintar();
+    return a;
+  }
+
+  /** O jogo aceita UMA bola por caído: joga uma vez e espera o resultado. */
+  function arremessarUmaVez(slot) {
+    const a = alvos.get(slot);
+    if (!a || a.jogou || !cfg.ativo) return;
+    const bola = bolaDaVez();
+    if (!bola) return encerrar(slot, semBola());
+    if (!core.send({ t: 'ball.throw', ballId: bola.id, slot })) return;
+    a.jogou = true;
+    a.registro.bolas = 1;
+    a.registro.bola = bola.nome;
+    a.registro.resultado = `${bola.nome} arremessada…`;
+    clearTimeout(a.timer);
+    a.timer = setTimeout(() => encerrar(slot, 'o servidor não respondeu ao arremesso'), SEM_RESPOSTA_MS);
     pintar();
   }
 
   function shinyCaiu(slot, m) {
-    if (alvos.has(slot)) return;
-    const registro = { em: Date.now(), mapa: core.eu?.huntSlug ?? '', nome: m.nome, nivel: m.nivel, resultado: 'capturando…', bolas: 0, bola: '' };
-    registrarHist(registro);
-    if (!cfg.ativo) { registro.resultado = 'caçador desligado'; salvarHist(); return; }
-    alvos.set(slot, { nome: m.nome, nivel: m.nivel, desde: Date.now(), tentativas: 0, aguardando: null, registro });
-    avisar(`✨ Shiny caído: ${m.nome} Nv ${m.nivel} — arremessando ${cfg.bola}!`);
-    arremessar(slot);
+    const a = alvos.get(slot) ?? shinyApareceu(slot, m); // caiu no mesmo pacote em que apareceu
+    if (!a || a.caido) return;
+    a.caido = true;
+    if (autoBallLigado()) {
+      // O automático joga a bola ativa (a Great). Se em 2,5 s nada acontecer, o app joga.
+      a.timer = setTimeout(() => arremessarUmaVez(slot), ESPERA_AUTO_MS);
+    } else arremessarUmaVez(slot);
+  }
+
+  /** Resultado de uma bola (do app ou do automático do jogo). */
+  function aoBola(e) {
+    const a = alvos.get(e.slot);
+    const nome = nomeDoId(e.ballId);
+    if (!a) {
+      // O contador "shinies vistos" do jogo marcou um shiny que o app não viu chegar.
+      if (e.shiny) {
+        registrarHist({
+          em: Date.now(), mapa: core.eu?.huntSlug ?? '', nome: e.nome ?? '?', nivel: e.level ?? '?', bolas: 1, bola: nome,
+          resultado: `⚠ detecção perdida (o jogo contou o shiny na bola)${e.sucesso ? ' — capturado' : ''}`,
+        });
+      }
+      return;
+    }
+    a.jogou = true;
+    a.registro.bolas = 1;
+    a.registro.bola = nome;
+    encerrar(e.slot, e.sucesso ? `capturado com ${nome}` : `escapou da ${nome} (o jogo só deixa 1 bola por shiny)`);
   }
 
   // ---------------------------------------------------------------- escuta do jogo
@@ -143,11 +217,13 @@
     if (b.tr || b.dn !== undefined || b.tn !== undefined) m.ignorar = true; // treinador/boneco, não selvagem
     if (!core.eu?.huntSlug || core.eu.noCentro) m.ignorar = true;          // Centro, PvP: não são selvagens
     if (m.ignorar) return;
-    if (nasceu || (eraMorto && !m.morto)) {
+    const reviveu = eraMorto && !m.morto; // o slot foi reaproveitado por um bicho novo
+    if (nasceu || reviveu) {
       contarVisto(m);
-      if (m.shiny && !m.morto) avisar(`✨ SHINY no mapa: ${m.nome} Nv ${m.nivel}!`);
+      if (reviveu && alvos.has(b.s)) encerrar(b.s, alvos.get(b.s).jogou ? 'sumiu do chão' : 'sumiu do chão sem bola');
+      if (m.shiny && !m.morto) shinyApareceu(b.s, m);
     }
-    if (m.shiny && m.morto && !eraMorto) shinyCaiu(b.s, m);
+    if (m.shiny && m.morto && (!eraMorto || nasceu)) shinyCaiu(b.s, m);
   }
 
   function aoMensagem(ev) {
@@ -157,7 +233,7 @@
     let m;
     try { m = JSON.parse(d); } catch { return; }
     if (m.t === 'campo.init') {
-      for (const slot of alvos.keys()) encerrar(slot, 'mudou de mapa');
+      for (const slot of [...alvos.keys()]) encerrar(slot, 'mudou de mapa');
       mem.mobs.clear();
       if (mem.mapa !== core.eu?.huntSlug) { mem.vistos.clear(); mem.mapa = core.eu?.huntSlug ?? null; }
       for (const b of m.mobs ?? []) aplicarMob(b, true);
@@ -167,18 +243,14 @@
       for (const b of m.mobs ?? []) aplicarMob(b, false);
       for (const s of m.fora ?? []) {
         mem.mobs.delete(s);
-        if (alvos.has(s)) encerrar(s, 'sumiu do chão');
+        if (alvos.has(s)) encerrar(s, alvos.get(s).jogou ? 'sumiu do chão' : 'sumiu do chão sem bola');
       }
       mem.ultimoCampo = Date.now();
     } else if (m.t === 'batalha') {
       for (const e of m.ev ?? []) {
-        if (e.k === 'bola' && alvos.has(e.slot)) {
-          const a = alvos.get(e.slot);
-          clearTimeout(a.aguardando);
-          if (e.sucesso) encerrar(e.slot, `capturado com ${a.registro.bola} (${a.tentativas} bola${a.tentativas > 1 ? 's' : ''})`);
-          else a.aguardando = setTimeout(() => arremessar(e.slot), PAUSA_ENTRE_MS);
-        } else if (e.k === 'fugiu') {
-          for (const [slot, a] of alvos) if (a.nome === e.nome) encerrar(slot, `fugiu após ${a.tentativas} bola(s)`);
+        if (e.k === 'bola') aoBola(e);
+        else if (e.k === 'fugiu') {
+          for (const [slot, a] of alvos) if (a.nome === e.nome && a.caido) encerrar(slot, 'fugiu');
         }
       }
     }
@@ -192,10 +264,12 @@
     wsOuvido?.addEventListener('message', aoMensagem);
   }
   ligarWs();
+  // Se a lógica foi recarregada no meio de uma troca, devolve as bolas de antes.
+  restaurarBolas();
   const vigia = setInterval(() => { ligarWs(); if (estaAberto()) pintarStatus(); }, 1000);
   limpezas.push(() => {
     clearInterval(vigia);
-    for (const a of alvos.values()) clearTimeout(a.aguardando);
+    for (const a of alvos.values()) clearTimeout(a.timer);
     wsOuvido?.removeEventListener('message', aoMensagem);
   });
 
@@ -219,7 +293,6 @@
   .pbsh-sw::after{content:'';position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#fff;transition:left .15s}
   .pbsh-sw.on{background:#2f9a4a}.pbsh-sw.on::after{left:23px}
   .pbsh-in{background:#2a1515;border:1px solid #8a5a4a;color:#f6e7d4;border-radius:6px;padding:4px 8px;font:inherit}
-  .pbsh-in[type=number]{width:60px}
   .pbsh-bt{background:#5a3232;border:1px solid #8a5a4a;color:#f6e7d4;border-radius:6px;padding:4px 9px;cursor:pointer;font:inherit}
   .pbsh-tab{width:100%;border-collapse:collapse;font-size:12px}
   .pbsh-tab th{text-align:left;color:#f3c77a;padding:4px 6px;font-weight:700}
@@ -240,7 +313,7 @@
     fundo.addEventListener('change', (e) => {
       const c = e.target.dataset.c;
       if (!c) return;
-      cfg[c] = c === 'maxBolas' ? Math.max(0, Number(e.target.value) || 0) : e.target.value;
+      cfg[c] = e.target.value;
       salvarCfg();
       pintar();
     });
@@ -258,6 +331,8 @@
       .concat(bolas.map((n) => `<option ${n === sel ? 'selected' : ''}>${esc(n)}</option>`)).join('');
   }
 
+  const classeResultado = (r) => (/capturado/.test(r) ? 'pbsh-ok' : /esperando|ativa|arremessada|à vista/.test(r) ? '' : 'pbsh-ruim');
+
   function pintar() {
     const modal = document.getElementById('pbsh-modal');
     if (!modal || !estaAberto()) return;
@@ -267,15 +342,15 @@
       <section>
         <div class="pbsh-linha">
           <button class="pbsh-sw ${cfg.ativo ? 'on' : ''}" data-a="ativo"></button>
-          <b>${cfg.ativo ? 'Ligado: arremessa quando um shiny cair' : 'Desligado (só registra)'}</b>
+          <b>${cfg.ativo ? 'Ligado: prepara a bola quando um shiny aparece' : 'Desligado (só registra)'}</b>
         </div>
         <div class="pbsh-linha">
-          Bola: <select class="pbsh-in" data-c="bola">${opcoesBola(cfg.bola, false)}</select>
+          Bola para shiny: <select class="pbsh-in" data-c="bola">${opcoesBola(cfg.bola, false)}</select>
           se acabar, usar: <select class="pbsh-in" data-c="reserva">${opcoesBola(cfg.reserva, true)}</select>
-          · máximo de bolas por shiny: <input type="number" class="pbsh-in" data-c="maxBolas" min="0" value="${esc(cfg.maxBolas)}"> <small>(0 = até capturar)</small>
+          <small>(o jogo só aceita 1 bola por shiny)</small>
         </div>
         <div class="pbsh-linha">
-          <label><input type="checkbox" data-a="aviso" ${cfg.aviso ? 'checked' : ''}> avisar na tela quando aparecer/cair um shiny</label>
+          <label><input type="checkbox" data-a="aviso" ${cfg.aviso ? 'checked' : ''}> avisar na tela quando aparecer um shiny</label>
         </div>
         <p id="pbsh-status" style="margin:4px 0 0"></p>
       </section>
@@ -285,10 +360,10 @@
       </section>
       <section>
         <h4>Shinies encontrados <button class="pbsh-bt" data-a="limparHist" style="margin-left:8px">limpar</button></h4>
-        ${hist.length ? `<table class="pbsh-tab"><tr><th>Quando</th><th>Mapa</th><th>Pokémon</th><th>Bolas</th><th>Resultado</th></tr>
+        ${hist.length ? `<table class="pbsh-tab"><tr><th>Quando</th><th>Mapa</th><th>Pokémon</th><th>Bola</th><th>Resultado</th></tr>
           ${hist.map((h) => `<tr><td>${hora(h.em)}</td><td>${esc(core.hunts?.find((x) => x.slug === h.mapa)?.nome ?? h.mapa)}</td>
-            <td class="pbsh-sh">✨ ${esc(h.nome)} Nv ${h.nivel}</td><td>${h.bolas ? `${h.bolas} ${esc(h.bola)}` : '—'}</td>
-            <td class="${/capturado/.test(h.resultado) ? 'pbsh-ok' : /capturando/.test(h.resultado) ? '' : 'pbsh-ruim'}">${esc(h.resultado)}</td></tr>`).join('')}</table>`
+            <td class="pbsh-sh">✨ ${esc(h.nome)} Nv ${esc(h.nivel)}</td><td>${h.bolas ? esc(h.bola) : '—'}</td>
+            <td class="${classeResultado(h.resultado)}">${esc(h.resultado)}</td></tr>`).join('')}</table>`
           : '<span class="pbsh-aviso">Nenhum shiny encontrado ainda.</span>'}
       </section>`;
     pintarStatus();
@@ -300,9 +375,12 @@
     const semCena = Date.now() - mem.ultimoCampo > 8000 && !!core.eu?.huntSlug;
     const b = idBola(cfg.bola), r = idBola(cfg.reserva);
     el.innerHTML = [
+      autoBallLigado()
+        ? 'Arremesso automático do jogo: <b>ligado</b> — quando um shiny aparece, o app deixa só a bola escolhida ativa e devolve as outras depois'
+        : 'Arremesso automático do jogo: <b>desligado</b> — o app joga 1 bola quando o shiny cair',
       `${esc(cfg.bola)}: <b>${b != null ? qtd(b).toLocaleString('pt-BR') : '?'}</b>`,
       cfg.reserva ? `${esc(cfg.reserva)}: <b>${r != null ? qtd(r).toLocaleString('pt-BR') : '?'}</b>` : '',
-      alvos.size ? `<span class="pbsh-sh">capturando ${[...alvos.values()].map((a) => `${esc(a.nome)} (${a.tentativas} bola${a.tentativas === 1 ? '' : 's'})`).join(', ')}</span>` : '',
+      alvos.size ? `<span class="pbsh-sh">shiny no mapa: ${[...alvos.values()].map((a) => `${esc(a.nome)}${a.caido ? ' (caído)' : ''}`).join(', ')}</span>` : '',
       semCena ? '<span class="pbsh-aviso">⚠ sem informações do mapa — no Modo Economia o jogo não mostra os bichos; desligue o 🍃 Eco nesta conta</span>' : '',
     ].filter(Boolean).join(' · ');
   }
