@@ -20,6 +20,16 @@ NA JANELA
     estiver fora do Centro, o app pergunta antes de recarregar.
     Faça isso com a conta no Centro Pokémon.
 
+COMPRAS E VENDAS — botão 💰 Vendas
+  - Lê o seu extrato do Mercado (Histórico de compras e de vendas do RMT) e agrupa por item.
+  - Período: Hoje, Últimos 3 dias, 7 dias, 30 dias, Tudo ou entre duas datas.
+  - Filtros: busca por nome do item, moeda (Coins/Gemas) e tipo (Itens/Pokémon/Diamantes).
+  - Por item: quanto comprou e o preço médio, quanto vendeu, a taxa paga, o lucro, e
+    "Vender p/ empatar" / "Vender c/ X%": o menor preço por unidade que devolve o preço
+    médio de compra (ou a margem escolhida) DEPOIS da taxa do Mercado.
+  - Taxa: Coins 15%; Gemas 15% em itens e por faixas em pokémon (13% · 10% · 7,5%).
+  - Clique num item para ver cada compra e venda.
+
 ANÁLISE DE TIME (PvP) — botão 📊 Time
   - Mostra seu time (equipe de PvP salva ou equipe atual) e as fraquezas dele por tipo.
   - Adicione times rivais pelo nick, ou "Top 10 do PvP". Eles ficam salvos por conta.
