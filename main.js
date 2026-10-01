@@ -56,6 +56,19 @@ function salvarCfg(c) {
 
 let janela = null;
 
+// No Windows, focus() numa janela minimizada não a traz de volta — precisa restaurar antes.
+function trazerParaFrente(w) {
+  if (w.isMinimized()) w.restore();
+  w.show();
+  w.focus();
+}
+
+// Uma instância só: abrir o .exe de novo com o app já aberto (ex.: minimizado) traz a janela de
+// volta, em vez de subir uma segunda cópia brigando pelas mesmas sessões das contas.
+const instanciaUnica = app.requestSingleInstanceLock();
+if (!instanciaUnica) app.quit();
+app.on('second-instance', () => { if (janela && !janela.isDestroyed()) trazerParaFrente(janela); });
+
 function criarJanela() {
   const cfg = lerCfg();
   janela = new BrowserWindow({
@@ -140,7 +153,7 @@ async function carregarRotom() {
 function abrirCockpit(n) {
   if (!rotom) return false;
   const aberta = cockpits.get(n);
-  if (aberta && !aberta.isDestroyed()) { aberta.focus(); return true; }
+  if (aberta && !aberta.isDestroyed()) { trazerParaFrente(aberta); return true; }
   const nome = lerCfg().contas?.[n - 1]?.nome ?? `Conta ${n}`;
   const w = new BrowserWindow({
     width: 1160,
@@ -242,6 +255,7 @@ async function atualizarDoGitHub() {
 }
 
 app.whenReady().then(async () => {
+  if (!instanciaUnica) return;
   semearPastaDoBot();
   await carregarRotom(); // antes das webviews: o content script precisa estar lá quando o jogo abrir
   criarJanela();
