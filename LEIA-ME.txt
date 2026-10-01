@@ -20,6 +20,15 @@ NA JANELA
     estiver fora do Centro, o app pergunta antes de recarregar.
     Faça isso com a conta no Centro Pokémon.
 
+ROTAÇÃO DE MAPAS — botão 🔄 Rota (fica verde quando ligada)
+  - Monte a lista de mapas (da lista do jogo ou "Adicionar o mapa onde estou") e a ordem.
+  - Quando a onda acaba — o mesmo momento em que o jogo libera "Ir para o Centro Pokémon" —
+    o app troca para o próximo mapa da lista. Do último volta para o primeiro.
+  - "Trocar a cada N ondas": quantas ondas limpar em cada mapa antes de trocar.
+  - Respeita as travas do servidor: não troca em combate, nos 10 s depois de entrar num mapa,
+    no Centro Pokémon, em boss ou Arena. Se o servidor recusar, tenta na próxima onda.
+  - Funciona também no Modo Economia. A configuração é separada por conta.
+
 COMPRAS E VENDAS — botão 💰 Vendas
   - Lê o seu extrato do Mercado (Histórico de compras e de vendas do RMT) e agrupa por item.
   - Período: Hoje, Últimos 3 dias, 7 dias, 30 dias, Tudo ou entre duas datas.

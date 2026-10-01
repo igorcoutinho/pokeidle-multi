@@ -38,6 +38,7 @@
     eu: null,
     catalogoBolas: [],
     tabelaTipos: null,  // a grade 18×18 de efetividade do jogo (vem no welcome)
+    hunts: null,        // os mapas de caça (slug, nome, nível, espécies) — também só no welcome
     itens: new Map(),
     ws: null,
     logado: false,
@@ -92,6 +93,7 @@
         core.logado = true;
         core.catalogoBolas = m.catalogoBolas ?? core.catalogoBolas;
         if (m.tabelaTipos && Object.keys(m.tabelaTipos).length) core.tabelaTipos = m.tabelaTipos;
+        if (Array.isArray(m.hunts)) core.hunts = m.hunts;
         for (const i of m.itensNossos ?? []) core.itens.set(i.id, i);
         core.eu = mesclar(m.estado);
       } else if (m.t === 'estado') {
