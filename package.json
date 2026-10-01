@@ -1,7 +1,7 @@
 {
   "name": "pokeidle-multi",
   "productName": "PokeIdle Multi",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "4 contas do PokéIdle em grade, cada uma com sessão própria, com o PokeBot embutido.",
   "main": "main.js",
   "scripts": {
