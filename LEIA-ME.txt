@@ -14,6 +14,7 @@ NA JANELA
   - − / + : zoom de cada conta (fica salvo).
   - 🔊/🔇 : som de cada conta (só a conta 1 começa com som).
   - Clique no nome ("Conta 1") para renomear.
+  - 🍃 Eco : liga/desliga o Modo Economia do jogo naquela conta (fica verde quando ligado).
   - ⟳ recarrega a conta, "Sair" desloga só aquela conta.
     ATENÇÃO: recarregar ou fechar no meio de uma luta conta como derrota no jogo.
     Faça isso com a conta no Centro Pokémon.

@@ -65,6 +65,10 @@ function trazerParaFrente(w) {
 
 // Uma instância só: abrir o .exe de novo com o app já aberto (ex.: minimizado) traz a janela de
 // volta, em vez de subir uma segunda cópia brigando pelas mesmas sessões das contas.
+// POKEIDLE_PERFIL=teste roda um app separado (outras sessões, outra trava) ao lado do de uso.
+if (process.env.POKEIDLE_PERFIL) {
+  app.setPath('userData', path.join(app.getPath('appData'), `PokeIdle Multi (${process.env.POKEIDLE_PERFIL})`));
+}
 const instanciaUnica = app.requestSingleInstanceLock();
 if (!instanciaUnica) app.quit();
 app.on('second-instance', () => { if (janela && !janela.isDestroyed()) trazerParaFrente(janela); });
