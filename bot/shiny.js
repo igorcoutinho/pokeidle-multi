@@ -14,7 +14,7 @@
 // shiny antes da bola. A rotação de mapas espera enquanto há um shiny no mapa (`ocupado`).
 (() => {
   'use strict';
-  const VERSAO_SHINY = '1.1.0';
+  const VERSAO_SHINY = '1.1.1';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -38,6 +38,7 @@
   const CHAVE_HIST = 'pokeshiny.hist.v1';
   const ESPERA_AUTO_MS = 2500;     // automático ligado: se ele não jogar nesse tempo, o app joga
   const SEM_RESPOSTA_MS = 5000;    // sem evento `bola` depois do arremesso: desiste
+  const DEVOLVER_MS = 5000;        // garantia: tantos ms depois de cair, a bola ativa volta de qualquer jeito
   const HIST_MAX = 200;
 
   function lerCfg() {
@@ -96,20 +97,30 @@
   const autoBallLigado = () => !!(auto().autoBallAteCapturar || auto().autoBallSemParar || auto().autoBall);
   const mesmaLista = (a, b) => a.length === b.length && a.every((x) => b.includes(x));
 
+  /**
+   * Manda a lista de bolas ativas e já a anota na cópia local das Automações: a confirmação do
+   * servidor chega depois, e comparar com a cópia velha fazia a devolução nunca ser enviada.
+   */
+  function definirBolasAtivas(ids) {
+    const nova = { ...auto(), ballIds: [...ids] };
+    if (core.eu) core.eu.automation = nova;
+    core.send({ t: 'auto.set', ...nova });
+  }
+
   /** Deixa só a bola do shiny ativa no arremesso automático — guardando as de antes. */
   function ativarBolaDoShiny(bola) {
     const atuais = auto().ballIds ?? [];
     if (mem.ballIdsAntes == null) mem.ballIdsAntes = [...atuais];
     if (mesmaLista(atuais, [bola.id])) return;
-    core.send({ t: 'auto.set', ...auto(), ballIds: [bola.id] });
+    definirBolasAtivas([bola.id]);
   }
 
-  /** Devolve as bolas ativas de antes, quando não há mais shiny no mapa. */
+  /** Devolve as bolas ativas de antes (sempre manda — não confia na cópia local). */
   function restaurarBolas() {
     if (mem.ballIdsAntes == null || alvos.size) return;
     const antes = mem.ballIdsAntes;
     mem.ballIdsAntes = null;
-    if (!mesmaLista(auto().ballIds ?? [], antes)) core.send({ t: 'auto.set', ...auto(), ballIds: antes });
+    definirBolasAtivas(antes);
   }
 
   // ---------------------------------------------------------------- captura
@@ -117,6 +128,7 @@
     const a = alvos.get(slot);
     if (!a) return;
     clearTimeout(a.timer);
+    clearTimeout(a.garantia);
     alvos.delete(slot);
     a.registro.resultado = resultado;
     salvarHist();
@@ -174,10 +186,18 @@
       // O automático joga a bola ativa (a Great). Se em 2,5 s nada acontecer, o app joga.
       a.timer = setTimeout(() => arremessarUmaVez(slot), ESPERA_AUTO_MS);
     } else arremessarUmaVez(slot);
+    // Garantia: com 1 bola por shiny, depois de alguns segundos não há mais o que esperar —
+    // encerra e devolve as bolas ativas mesmo que o resultado da bola não tenha chegado.
+    a.garantia = setTimeout(() => encerrar(slot, a.jogou ? 'bola jogada (resultado não chegou)' : 'sem bola a tempo'), ESPERA_AUTO_MS + DEVOLVER_MS);
   }
 
   /** Resultado de uma bola (do app ou do automático do jogo). */
   function aoBola(e) {
+    // Sem slot no evento (o automático pode não mandar): é do shiny caído, se houver um só.
+    if (e.slot == null && e.shiny) {
+      const caidos = [...alvos.entries()].filter(([, x]) => x.caido);
+      if (caidos.length === 1) e = { ...e, slot: caidos[0][0] };
+    }
     const a = alvos.get(e.slot);
     const nome = nomeDoId(e.ballId);
     if (!a) {
@@ -269,7 +289,7 @@
   const vigia = setInterval(() => { ligarWs(); if (estaAberto()) pintarStatus(); }, 1000);
   limpezas.push(() => {
     clearInterval(vigia);
-    for (const a of alvos.values()) clearTimeout(a.timer);
+    for (const a of alvos.values()) { clearTimeout(a.timer); clearTimeout(a.garantia); }
     wsOuvido?.removeEventListener('message', aoMensagem);
   });
 
