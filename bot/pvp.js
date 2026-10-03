@@ -14,7 +14,7 @@
 //    servidor só puxa a próxima partida 20 s depois do fim, então dá tempo.
 (() => {
   'use strict';
-  const VERSAO_PVP = '1.7.1';
+  const VERSAO_PVP = '1.7.2';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -722,7 +722,7 @@
       if (cm) {
         const r = soma(minhas, cm.chave, { rotulo: cm.rotulo, parcial: cm.parcial });
         r.n++; if (h.venci) r.v++; r.delta += h.delta || 0;
-        if (cr) somaX(r, cr.chave, cr.rotulo, h.venci);
+        somaX(r, String(h.nick).toLowerCase(), h.nick, h.venci); // melhor/pior contra: pelo JOGADOR, não pela comp dele
       }
       if (cr) {
         const r = soma(rivais, cr.chave, { rotulo: cr.rotulo, parcial: cr.parcial, nicks: new Set() });
@@ -790,7 +790,7 @@
       </section>
       <section>
         <h4>Suas composições</h4>
-        ${tabMinhas ? `<table class="ppvp-tab"><tr><th>Comp</th><th>Duelos</th><th>V-D</th><th>%</th><th>Pontos</th><th>Vai melhor contra</th><th>Vai pior contra</th><th>Aplicar</th></tr>${tabMinhas}</table>`
+        ${tabMinhas ? `<table class="ppvp-tab"><tr><th>Comp</th><th>Duelos</th><th>V-D</th><th>%</th><th>Pontos</th><th>Vai melhor contra (jogador)</th><th>Vai pior contra (jogador)</th><th>Aplicar</th></tr>${tabMinhas}</table>`
           : '<span class="ppvp-aviso">Sem duelos com a sua comp registrada ainda.</span>'}
       </section>
       <section>
