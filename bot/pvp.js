@@ -14,7 +14,7 @@
 //    servidor só puxa a próxima partida 20 s depois do fim, então dá tempo.
 (() => {
   'use strict';
-  const VERSAO_PVP = '1.2.0';
+  const VERSAO_PVP = '1.3.0';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -50,6 +50,8 @@
   let busca = '';
   let pagina = 0;
   let aba = 'historico';      // 'historico' | 'stats'
+  const sugestoes = new Map(); // id do duelo -> { carregando, erro, r } (a "melhor ordem" calculada)
+  let abertaSug = null;        // id do duelo com a sugestão aberta
   const st = { porOrdem: false, minimo: 1, periodo: 'tudo' }; // filtros da aba Estatísticas
   let meuTimeIds = null; // a ordem salva da sua equipe de PvP (ids), do último `pvp` com `time`
 
@@ -158,7 +160,7 @@
     if (!meuTimeIds?.length) return [];
     const porId = new Map((core.eu?.pokemons ?? []).map((p) => [p.id, p]));
     return meuTimeIds.map((id) => porId.get(id)).filter(Boolean)
-      .map((p) => ({ nome: p.nome, nivel: p.level, shiny: !!p.shiny })); // espécie, não apelido: é o que define a comp
+      .map((p) => ({ id: p.id, nome: p.nome, nivel: p.level, shiny: !!p.shiny })); // espécie, não apelido: é o que define a comp
   }
 
   /** Quem está em `todos` e não em `entrou` (por nome, respeitando repetidos). */
@@ -280,6 +282,11 @@
   .ppvp-ordem b{color:#f3c77a;margin-right:3px}
   .ppvp-ordem .ppvp-fora{opacity:.6;font-style:italic}
   .ppvp-pags{display:flex;gap:8px;align-items:center;justify-content:center;margin-top:8px}
+  .ppvp-sug-bt{display:block;margin-top:4px;font-size:11px;padding:2px 8px}
+  .ppvp-sug{background:#2a1515;border:1px solid #6a4040;border-radius:10px;padding:8px 10px;white-space:normal}
+  .ppvp-sug h5{margin:6px 0 4px;color:#f3c77a;font-size:12px}
+  .ppvp-sug ol{margin:2px 0 2px 18px;padding:0;font-size:12px}
+  .ppvp-sug .ppvp-op{background:#3a2020;border-radius:8px;padding:6px 8px;margin-top:6px}
   .ppvp-bt.ppvp-on{background:#b04ad0;border-color:#f3c77a;color:#fff}
   #ppvp-modal header .ppvp-x{background:#b04ad0;border:2px solid #f3c77a;color:#fff;border-radius:8px;width:30px;height:30px;cursor:pointer;font-weight:800}
   .ppvp-aviso{color:#f3c77a;font-size:11px}
@@ -463,6 +470,61 @@
     pintarStatus();
   }
 
+  // ---------------------------------------------------------------- melhor ordem (derrotas)
+  async function calcularSugestao(h) {
+    if (!window.__pokeAnalise?.sugerirOrdem) {
+      sugestoes.set(h.id, { erro: 'o módulo 📊 Time não está carregado nesta conta' });
+      return pintarTabela();
+    }
+    sugestoes.set(h.id, { carregando: true });
+    pintarTabela();
+    try {
+      const r = await window.__pokeAnalise.sugerirOrdem({
+        meus: h.meu.map((x) => ({ id: x.id, nome: x.nome, nivel: x.nivel })),
+        rivalNick: h.nick,
+        ordemRival: h.deleSemOrdem ? [] : (h.dele ?? []),
+        restoRival: [...(h.deleSemOrdem ? h.dele ?? [] : []), ...(h.naoEntrou ?? [])],
+      });
+      sugestoes.set(h.id, { r });
+    } catch (e) {
+      sugestoes.set(h.id, { erro: e.message });
+    }
+    pintarTabela();
+  }
+
+  const margemTxt = (m) => `${m >= 0 ? '+' : ''}${Math.round(m * 100)}%`;
+  function opcaoHtml(o, titulo) {
+    const res = o.vitorias === o.total
+      ? `<b class="ppvp-v">vence</b>${o.total > 1 ? ` nos ${o.total} cenários` : ''}`
+      : o.vitorias ? `<b>vence ${o.vitorias} de ${o.total} cenários</b>` : '<b class="ppvp-d">perde</b>';
+    const passos = o.passos.map((s) => s.venceu === 'eu'
+      ? `<span class="ppvp-v">seu ${esc(s.eu)}</span> derruba ${esc(s.ele)}${s.golpe ? ` <small>(${esc(s.golpe)}${s.ef > 1 ? ', super efetivo' : ''})</small>` : ''} — fica com ${Math.round(s.sobra * 100)}% de HP`
+      : `<span class="ppvp-d">${esc(s.ele)} dele</span> derruba seu ${esc(s.eu)}${s.golpe ? ` <small>(${esc(s.golpe)}${s.ef > 1 ? ', super efetivo' : ''})</small>` : ''} — fica com ${Math.round(s.sobra * 100)}%`);
+    return `<div class="ppvp-op"><b>${titulo}:</b> ${o.ordem.map((p, i) => `<b style="color:#f3c77a">${i + 1}</b> ${esc(p.nome)}`).join(' → ')}
+      <div>${res} · margem ${margemTxt(o.pior)}${o.total > 1 ? ` no pior cenário (média ${margemTxt(o.media)})` : ''}</div>
+      <details><summary class="ppvp-aviso">como a luta se desenrola</summary><ol>${passos.map((p) => `<li>${p}</li>`).join('')}</ol></details></div>`;
+  }
+
+  function htmlSugestao(h) {
+    const s = sugestoes.get(h.id);
+    if (!s || s.carregando) return '<div class="ppvp-sug ppvp-aviso">Simulando as 120 ordens do seu time contra a dele… (busca os stats atuais dele no perfil)</div>';
+    if (s.erro) return `<div class="ppvp-sug ppvp-d">Não deu para calcular: ${esc(s.erro)}</div>`;
+    const r = s.r;
+    const melhor = r.melhores[0];
+    const mesma = melhor && melhor.ordem.map((p) => p.nome).join() === r.usada.ordem.map((p) => p.nome).join();
+    return `<div class="ppvp-sug">
+      <div>Rival na simulação: ${r.rival.map((p, i) => `${i < r.fixos ? `<b>${i + 1}</b>` : `<i>${i + 1}?</i>`} ${esc(p.nome)}`).join(' → ')}
+        ${r.cenarios > 1 ? `<span class="ppvp-aviso"> · as posições com "?" não são conhecidas: testei as ${r.cenarios} combinações</span>` : ''}</div>
+      ${opcaoHtml(r.usada, 'A ordem que você usou')}
+      ${mesma ? '<p class="ppvp-aviso">A ordem que você usou já é a melhor possível com esse time — para virar, só trocando pokémon (use o 📊 Time).</p>'
+        : r.melhores.map((o, i) => opcaoHtml(o, i === 0 ? '💡 Melhor ordem' : `${i + 1}ª opção`)).join('')}
+      ${melhor && !melhor.vitorias ? '<p class="ppvp-d">Nenhuma ordem desse time vence a dele na simulação — vale trocar pokémon (📊 Time sugere quem).</p>' : ''}
+      ${r.usada.vitorias === r.usada.total ? '<p class="ppvp-aviso">⚠ A simulação diz que a ordem usada venceria, mas você perdeu: o rival pode ter mudado o time desde o duelo, ou a sorte do dano pesou.</p>' : ''}
+      ${r.avisos.length ? `<p class="ppvp-aviso">${r.avisos.map(esc).join(' · ')}</p>` : ''}
+      <p class="ppvp-aviso">Simulação com as regras de combate do jogo (luta de desgaste, status, golpe escolhido e tipos${r.tabelaOficial ? '' : ' — tabela de tipos padrão até recarregar a conta'}). É uma previsão, não garantia.</p>
+    </div>`;
+  }
+
   function pintarTabela() {
     const host = document.getElementById('ppvp-tabela');
     if (!host) return;
@@ -478,7 +540,9 @@
           <td><b>${esc(h.nick)}</b></td>
           <td class="${h.venci ? 'ppvp-v' : 'ppvp-d'}">${h.venci ? 'V' : 'D'} <small>${h.delta >= 0 ? '+' : ''}${h.delta}</small></td>
           <td>${ordemHtml(h.dele, h.naoEntrou, h.deleSemOrdem)}${h.deleSemOrdem ? '<div class="ppvp-aviso">sem fita: quem entrou, fora de ordem</div>' : h.aviso ? `<div class="ppvp-aviso">${esc(h.aviso)}</div>` : ''}</td>
-          <td>${ordemHtml(h.meu)}</td></tr>`).join('')}</table>
+          <td>${ordemHtml(h.meu)}${!h.venci && h.meu?.length && (h.dele?.length || h.naoEntrou?.length)
+            ? `<button class="ppvp-bt ppvp-sug-bt" data-a="sugerir" data-v="${esc(h.id)}">💡 ${abertaSug === h.id ? 'fechar' : 'Melhor ordem'}</button>` : ''}</td></tr>
+          ${abertaSug === h.id ? `<tr><td colspan="5">${htmlSugestao(h)}</td></tr>` : ''}`).join('')}</table>
         ${paginas > 1 ? `<div class="ppvp-pags">
           <button class="ppvp-bt" data-a="pag" data-v="-1" ${pagina === 0 ? 'disabled' : ''}>‹</button>
           <span>página ${pagina + 1} de ${paginas} · ${todas.length} duelos</span>
@@ -506,6 +570,12 @@
     else if (a === 'limpar') { hist = []; salvarHist(); }
     else if (a === 'pag') { pagina = Math.max(0, pagina + Number(b.dataset.v)); return pintarTabela(); }
     else if (a === 'aba') aba = b.dataset.v;
+    else if (a === 'sugerir') {
+      const h = hist.find((x) => String(x.id) === b.dataset.v);
+      abertaSug = abertaSug === h?.id ? null : h?.id ?? null;
+      if (h && abertaSug != null && !sugestoes.get(h.id)?.r) calcularSugestao(h);
+      return pintarTabela();
+    }
     else if (a === 'stPeriodo') st.periodo = b.dataset.v;
     else if (a === 'stOrdem') st.porOrdem = b.checked;
     salvarCfg();

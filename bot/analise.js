@@ -7,7 +7,7 @@
 // fica) do seu time contra os times de outros jogadores, e mede quanto cada candidato melhora.
 (() => {
   'use strict';
-  const VERSAO_ANALISE = '1.0.0';
+  const VERSAO_ANALISE = '1.1.0';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -231,7 +231,7 @@
    * derrubar o outro vence e segue com o HP que sobrou contra o próximo.
    * `margem` vai de −1 (perdeu sem tirar nada) a +1 (venceu sem perder nada).
    */
-  function lutar(T, O) {
+  function lutar(T, O, log = null) {
     let i = 0, j = 0, fa = 1, fb = 1; // fração de HP de quem está em campo
     let passos = 0;
     while (i < T.length && j < O.length && passos++ < 64) {
@@ -240,8 +240,15 @@
       const tA = p.dpsA > 0 ? (fb * p.ehpB) / p.dpsA : Infinity; // tempo para A derrubar B
       const tB = p.dpsB > 0 ? (fa * p.ehpA) / p.dpsB : Infinity;
       if (tA === Infinity && tB === Infinity) { if (fa >= fb) { j++; fb = 1; } else { i++; fa = 1; } continue; }
-      if (tA <= tB) { fa -= (p.dpsB * tA) / p.ehpA; j++; fb = 1; }
-      else { fb -= (p.dpsA * tB) / p.ehpB; i++; fa = 1; }
+      if (tA <= tB) {
+        fa -= (p.dpsB * tA) / p.ehpA;
+        log?.push({ eu: T[i], ele: O[j], venceu: 'eu', sobra: Math.max(0, fa), golpe: p.golpeA, ef: p.efA });
+        j++; fb = 1;
+      } else {
+        fb -= (p.dpsA * tB) / p.ehpB;
+        log?.push({ eu: T[i], ele: O[j], venceu: 'ele', sobra: Math.max(0, fb), golpe: p.golpeB, ef: p.efB });
+        i++; fa = 1;
+      }
     }
     const sobraA = i < T.length ? (T.length - i - 1 + Math.max(0, fa)) / T.length : 0;
     const sobraB = j < O.length ? (O.length - j - 1 + Math.max(0, fb)) / O.length : 0;
@@ -298,6 +305,105 @@
     if (cand.ivsEstimados) m.push('IVs estimados');
     return m.slice(0, 4);
   }
+
+  // ---------------------------------------------------------------- melhor ordem contra um rival
+  function permutacoes(lista) {
+    if (lista.length <= 1) return [lista.slice()];
+    const out = [];
+    lista.forEach((x, i) => { for (const p of permutacoes([...lista.slice(0, i), ...lista.slice(i + 1)])) out.push([x, ...p]); });
+    return out;
+  }
+  const especiePorNome = (nome) => [...st.catalogo.values()].find((e) => e.name?.toLowerCase() === String(nome).toLowerCase());
+
+  /** Acha cada pokémon de `nomes` em `pool` (por nome, nível mais próximo), sem repetir. */
+  function casar(nomesNiveis, pool, chaveNome) {
+    const livres = [...pool];
+    return nomesNiveis.map((x) => {
+      const cand = livres.filter((p) => chaveNome(p).toLowerCase() === String(x.nome).toLowerCase());
+      if (!cand.length) return null;
+      cand.sort((a, b) => Math.abs((a.level ?? 0) - (x.nivel ?? 0)) - Math.abs((b.level ?? 0) - (x.nivel ?? 0)));
+      livres.splice(livres.indexOf(cand[0]), 1);
+      return cand[0];
+    });
+  }
+
+  /**
+   * Testa as ordens possíveis do SEU time contra a ordem do rival e devolve as melhores.
+   * `meus`: [{ id?, nome, nivel }] (a sua equipe daquele duelo). `ordemRival`: os que entraram,
+   * na ordem; `restoRival`: quem não entrou (posição desconhecida — testa todas as combinações).
+   * Os stats do rival vêm do perfil dele agora (`ranking.perfil`); quem não estiver mais na equipe
+   * dele entra como estimativa (espécie no nível do duelo, IV médio).
+   */
+  async function sugerirOrdem({ meus, rivalNick, ordemRival = [], restoRival = [] }) {
+    await carregarModulos();
+    await carregarCatalogo();
+    const avisos = [];
+    const bolsa = meusPokemons();
+    const porId = new Map(bolsa.map((p) => [p.id, p]));
+    let meusPk = meus.map((m) => (m.id != null ? porId.get(m.id) : null));
+    const semId = meus.map((m, i) => (meusPk[i] ? null : m));
+    const casados = casar(semId.filter(Boolean), bolsa.filter((p) => !meusPk.includes(p)), (p) => p._esp.name);
+    let k = 0;
+    meusPk = meusPk.map((p, i) => p ?? (semId[i] ? casados[k++] : null));
+    meusPk = meusPk.map((p, i) => p ?? (() => {
+      const esp = especiePorNome(meus[i].nome);
+      if (!esp) return null;
+      avisos.push(`${meus[i].nome} não está mais na sua bolsa — usei uma estimativa`);
+      return hipotetico(esp, meus[i].nivel || 150);
+    })()).filter(Boolean);
+    if (meusPk.length < 2) throw new Error('não achei os seus pokémon desse duelo na bolsa');
+
+    let timeRival = [];
+    try { timeRival = (await carregarOponente(rivalNick)).time; }
+    catch (e) { avisos.push(`não consegui o perfil de ${rivalNick} (${e.message}) — usei estimativas`); }
+    const estimar = (x) => {
+      const esp = especiePorNome(x.nome);
+      if (!esp) return null;
+      avisos.push(`${x.nome} do rival: estimado (não está mais na equipe dele)`);
+      return hipotetico(esp, x.nivel || 150);
+    };
+    const fixos = casar(ordemRival, timeRival, (p) => p._esp.name).map((p, i) => p ?? estimar(ordemRival[i])).filter(Boolean);
+    const sobra = timeRival.filter((p) => !fixos.includes(p));
+    let resto = restoRival.length
+      ? casar(restoRival, sobra, (p) => p._esp.name).map((p, i) => p ?? estimar(restoRival[i])).filter(Boolean)
+      : sobra.slice(0, Math.max(0, 5 - fixos.length));
+    if (fixos.length + resto.length < 5 && resto.length < sobra.length) resto = sobra.slice(0, 5 - fixos.length);
+    const ordensRival = permutacoes(resto).map((r) => [...fixos, ...r]);
+
+    const avaliarOrdem = (ordem) => {
+      let vit = 0, soma = 0, pior = Infinity;
+      for (const O of ordensRival) {
+        const x = lutar(ordem, O);
+        if (x.venceu) vit++;
+        soma += x.margem;
+        pior = Math.min(pior, x.margem);
+      }
+      return { vitorias: vit, total: ordensRival.length, media: soma / ordensRival.length, pior };
+    };
+    const ranking = permutacoes(meusPk).map((ordem) => ({ ordem, ...avaliarOrdem(ordem) }))
+      .sort((a, b) => b.vitorias - a.vitorias || b.pior - a.pior || b.media - a.media);
+    const nomeDe = (p) => p._esp.name;
+    const resumo = (r) => {
+      const log = [];
+      lutar(r.ordem, ordensRival[0], log);
+      return {
+        ordem: r.ordem.map((p) => ({ nome: nomeDe(p), nivel: p.level })),
+        vitorias: r.vitorias, total: r.total, media: r.media, pior: r.pior,
+        passos: log.map((s) => ({ eu: nomeDe(s.eu), ele: nomeDe(s.ele), venceu: s.venceu, sobra: s.sobra, golpe: s.golpe?.name ?? '', ef: s.ef })),
+      };
+    };
+    const usada = { ordem: meusPk, ...avaliarOrdem(meusPk) };
+    return {
+      usada: resumo(usada),
+      melhores: ranking.slice(0, 3).map(resumo),
+      rival: ordensRival[0].map((p) => ({ nome: nomeDe(p), nivel: p.level })),
+      fixos: fixos.length,
+      cenarios: ordensRival.length,
+      avisos,
+      tabelaOficial: tabelaOficial(),
+    };
+  }
+  A.sugerirOrdem = sugerirOrdem;
 
   function hipotetico(esp, nivel) {
     return normalizar({ speciesId: esp.pokeId, level: nivel, ivs: ivsIguais(IV_PADRAO), quality: 1, potencia: 1, shiny: false }, 'espécie');

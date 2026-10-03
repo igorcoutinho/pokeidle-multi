@@ -58,6 +58,8 @@ PvP — botão ⚔ PvP
     Os que chegaram a lutar aparecem na ordem exata; os que não lutaram completam os 5,
     marcados com "?" (estão na equipe, mas a posição não é revelada). Paginado, 10 por página.
   - Histórico com data, rival, vitória/derrota, pontos e as duas ordens. Filtro por nick.
+  - Derrota: o botão 💡 Melhor ordem simula as 120 ordens do seu time contra a ordem do rival
+    (stats atuais dele, pelo perfil) e mostra as melhores, com o passo a passo da luta.
   - Aba Estatísticas: suas composições (duelos, V-D, %, pontos, contra qual comp rival vai
     melhor e pior), as comps rivais (seu resultado e qual comp sua mais vence cada uma) e os
     pokémon (seus com maior % de vitória e os rivais que mais te derrotam). Por período.
