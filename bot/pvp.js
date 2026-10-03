@@ -18,7 +18,7 @@
 //    (vitórias > derrotas), encerra de vez. Enquanto a sessão roda, ela substitui a trava do item 2.
 (() => {
   'use strict';
-  const VERSAO_PVP = '1.12.0';
+  const VERSAO_PVP = '1.12.1';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -53,7 +53,7 @@
     // armário que não entram na rotação; `usoEm` = quando cada slot foi usado por último.
     // `sessao` = o Auto PvP em andamento: { inicio, v, d, seguidas, estado: rodando|pausada|encerrada, motivo }.
     const padrao = { trava: true, derrotas: 2, seguidas: 0, log: [], sessao: null, autoPvp: { maxSeguidas: 3, checarCada: 10 },
-      auto: { ativo: false, modo: 'prever', vitorias: 1, naDerrota: true, focoAmeacas: true, contraCounter: true, ultimoAnti: null, abertura: true, minUso: 2, foraKeys: [], seguidas: 0, usoEm: {} } };
+      auto: { ativo: false, modo: 'prever', vitorias: 1, naDerrota: true, focoAmeacas: true, contraCounter: true, ultimoAnti: null, abertura: true, sempreTrocar: 'zator, alan', minUso: 2, foraKeys: [], seguidas: 0, usoEm: {} } };
     try {
       const s = JSON.parse(localStorage.getItem(CHAVE_CFG)) ?? {};
       return { ...padrao, ...s, auto: { ...padrao.auto, ...(s.auto ?? {}) }, autoPvp: { ...padrao.autoPvp, ...(s.autoPvp ?? {}) } };
@@ -720,6 +720,10 @@
     if (minha === rodadaSwitch) await ajustarAbertura(preverProximo(reg.nick), minha);
   }
 
+  /** Rivais de "sempre trocar" (lista separada por vírgula; vale parte do nick: "alan" pega "xAlanx"). */
+  const sempreTrocarContra = (nick) => String(cfg.auto.sempreTrocar ?? '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean)
+    .some((x) => String(nick ?? '').toLowerCase().includes(x));
+
   async function escolherFormacao(reg, minha) {
     const previstos = preverProximo(reg.nick);
     if (!previstos.length) {
@@ -756,18 +760,22 @@
       const c0 = anti.counters[0];
       registrar(`🧠 counter previsto de ${c0.nick} contra o seu time: ${c0.x.join(' → ')} (${c0.fonte})`);
     }
-    // Perdeu (e "trocar após derrota" ligado): a formação que acabou de perder SAI — entra a melhor
-    // das outras, mesmo que no papel a atual ainda pontue mais contra o grupo.
-    const forcar = !reg.venci && cfg.auto.naDerrota;
-    const notas = cand.filter((f) => !forcar || f.k !== chaveAtual())
+    // Troca obrigatória: perdeu (com "trocar após derrota") OU jogou contra um dos rivais de
+    // "sempre trocar" (Zator, Alan…), ganhando ou perdendo — ele já viu esse time e vai counterar.
+    // O time que jogou SAI (os mesmos 5 em outra ordem também não contam como troca).
+    const sempre = sempreTrocarContra(reg.nick);
+    const forcar = (!reg.venci && cfg.auto.naDerrota) || sempre;
+    const conjunto = (ids) => [...(ids ?? [])].map(Number).sort((x, y) => x - y).join(',');
+    const jogou = conjunto(meuTimeIds);
+    const notas = cand.filter((f) => !forcar || (f.k !== chaveAtual() && conjunto(f.ids) !== jogou))
       .map((f) => ({ f, ...nota(f) })).sort((x, y) => y.nota - x.nota);
     const melhor = notas[0];
     const notaAtual = atual ? nota(atual).nota : 0;
     if (cfg.auto.ultimoAnti && anti) { cfg.auto.ultimoAnti.escolhida = melhor?.f.nome ?? null; salvarCfg(); }
     const quem = previstos.slice(0, 2).map((x) => `${x.nick} (${Math.round(x.p * 100)}%)`).join(', ');
     if (forcar && !melhor) {
-      registrar(`auto-switch: perdeu para ${reg.nick}, mas não há outra formação na rotação para entrar`);
-      anotarTroca(reg, { acao: 'sem opção', previstos, de: atual?.nome, motivo: 'derrota, mas sem outra formação' });
+      registrar(`auto-switch: ${reg.venci ? 'venceu' : 'perdeu para'} ${reg.nick} e queria trocar, mas não há outra formação na rotação para entrar`);
+      anotarTroca(reg, { acao: 'sem opção', previstos, de: atual?.nome, motivo: `${sempre ? `jogou contra ${reg.nick}` : 'derrota'}, mas sem outra formação` });
       return;
     }
     if (!forcar && (!melhor || melhor.f.k === chaveAtual() || melhor.nota < notaAtual + 0.02)) {
@@ -775,12 +783,12 @@
       anotarTroca(reg, { acao: 'manteve', previstos, de: atual?.nome, para: atual?.nome, motivo: 'a atual já é a melhor contra eles' });
       return;
     }
-    if (aplicarEquipe(melhor.f.ids, forcar ? `derrota para ${reg.nick}` : `próximo provável: ${previstos[0].nick}`)) {
+    if (aplicarEquipe(melhor.f.ids, forcar ? `${reg.venci ? 'vitória sobre' : 'derrota para'} ${reg.nick}` : `próximo provável: ${previstos[0].nick}`)) {
       cfg.auto.usoEm[melhor.f.k] = Date.now();
       reg.trocouDepois = true;
       salvarHist();
       salvarCfg();
-      const porque = `${forcar ? `perdeu para ${reg.nick} — a formação que perdeu saiu · ` : ''}${melhor.det.join(' · ')}`;
+      const porque = `${forcar ? `${sempre ? `jogou contra ${reg.nick} (${reg.venci ? 'venceu' : 'perdeu'}) — ele vai counterar, o time saiu` : `perdeu para ${reg.nick} — a formação que perdeu saiu`} · ` : ''}${melhor.det.join(' · ')}`;
       registrar(`🔮 auto-switch: próximo provável ${quem} → "${melhor.f.nome}" (${porque})`);
       anotarTroca(reg, { acao: 'trocou', previstos, de: atual?.nome, para: melhor.f.nome, paraK: melhor.f.k, motivo: porque });
       avisar(`🔮 Próximo deve ser ${previstos[0].nick}${anti ? ' (contra o counter dele)' : ''}: troquei para "${melhor.f.nome}"`);
@@ -951,6 +959,7 @@
         ${a.modo === 'prever' ? htmlPrevisao(todas) : ''}
         <div class="ppvp-linha">
           <span ${a.modo === 'prever' ? 'style="display:none"' : ''}>trocar depois de <input type="number" class="ppvp-in" data-c="autoVitorias" min="1" max="10" value="${esc(a.vitorias)}"> vitória(s) seguida(s)</span>
+          <label title="depois de jogar contra estes (vitória OU derrota), o time sempre troca — eles já viram o seu time e vão counterar. Vírgula separa; vale parte do nick.">sempre trocar depois de jogar contra: <input class="ppvp-in" data-c="sempreTrocar" value="${esc(a.sempreTrocar ?? '')}" style="width:160px" spellcheck="false"></label>
           <label title="se o próximo provável sempre abre com o mesmo pokémon, quem vence esse 1×1 vai na frente (o resto mantém a ordem)"><input type="checkbox" data-a="autoAbertura" ${a.abertura ? 'checked' : ''}> abertura (contra quem sempre abre igual, põe na frente quem vence o abridor)</label>
           <label title="quem te enfrentar vai montar um time para bater o que você acabou de jogar; o switch escolhe a formação que vence ESSE time (o counter do counter)"><input type="checkbox" data-a="autoAnti" ${a.contraCounter ? 'checked' : ''}> counter do counter (vencer o time que vão montar contra o que você jogou)</label>
           <label title="dá mais peso aos adversários que costumam te vencer (ex.: quem você perde quase sempre), em vez de tratar todos igual"><input type="checkbox" data-a="autoFoco" ${a.focoAmeacas ? 'checked' : ''}> foco nas ameaças (priorizar comps que ganham de quem te vence)</label>
@@ -1086,6 +1095,7 @@
       }
     });
     fundo.addEventListener('change', (e) => {
+      if (e.target.dataset.c === 'sempreTrocar') { cfg.auto.sempreTrocar = e.target.value; salvarCfg(); }
       if (e.target.dataset.c === 'apSeg') { cfg.autoPvp.maxSeguidas = Math.max(1, Math.min(10, Number(e.target.value) || 3)); salvarCfg(); pintar(); }
       if (e.target.dataset.c === 'apCada') { cfg.autoPvp.checarCada = Math.max(2, Math.min(50, Number(e.target.value) || 10)); salvarCfg(); pintar(); }
       if (e.target.dataset.c === 'derrotas') { cfg.derrotas = Math.max(1, Math.min(10, Number(e.target.value) || 2)); salvarCfg(); pintar(); }

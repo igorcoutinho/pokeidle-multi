@@ -109,6 +109,9 @@ PvP — botão ⚔ PvP
     já usou contra esse seu time (ou logo depois de enfrentá-lo) e o melhor counter simulado com
     os pokémon dele — e escolhe a sua formação que vence ESSE counter (60% da nota; 40% placar
     real). O counter previsto aparece na aba Formações e no Registro.
+    Sempre trocar (padrão: zator, alan): depois de jogar contra eles — vitória OU derrota — o
+    time sempre sai (os mesmos 5 em outra ordem não contam) e entra o que vence o counter do
+    time que você acabou de usar. Lista editável na aba Formações (vale parte do nick).
     🎯 Abertura (padrão): se o próximo provável sempre abre com o mesmo pokémon (3+ duelos, 60%+;
     ex.: Zator → Venusaur), quem do time vence esse 1×1 vai na frente (ex.: Camerupt); o resto
     mantém a ordem. Se alguém seu já abriu contra ele e venceu 60%+ (2+ duelos), esse tem
