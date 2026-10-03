@@ -5,7 +5,7 @@
 // (`core.log`, `core.memoria`) ou no localStorage (a configuração).
 (() => {
   'use strict';
-  const VERSAO_LOGICA = '2.0.0';
+  const VERSAO_LOGICA = '2.1.0';
 
   const core = window.__pokebotCore;
   const estavaAberto = !!document.getElementById('pb-fundo')?.classList.contains('aberto');
@@ -23,23 +23,35 @@
   const ESPERA_POS_COMPRA_MS = 4000;
   const NOME_BOLA = 'Ultra Ball';
 
+  // A configuração padrão. `versao` sobe quando o padrão muda e deve valer para quem já tinha
+  // uma configuração salva: a antiga é trocada pela nova UMA vez; depois, o que o jogador mexer
+  // no painel continua valendo.
+  const VERSAO_CFG = 3;
   const CFG_PADRAO = {
-    ativo: false,
+    versao: VERSAO_CFG,
+    ativo: true,
     reservaOuro: 1000000,
-    bola: { alvo: 30000, gatilho: 28000 },
-    pocao: { alvo: 10000, gatilho: 9000, modo: 'auto', fixa: 204 },
+    bola: { alvo: 30000, gatilho: 5000 },
+    pocao: { alvo: 5000, gatilho: 2000, modo: 'auto', fixa: 204 }, // 204 = Ultimate Potion
     ajustarFila: true,
   };
 
   function lerCfg() {
     try {
       const c = JSON.parse(localStorage.getItem(CHAVE_CFG));
-      if (c && c.bola && c.pocao) return { ...structuredClone(CFG_PADRAO), ...c };
+      if (c && c.bola && c.pocao && c.versao === VERSAO_CFG) return { ...structuredClone(CFG_PADRAO), ...c };
     } catch {}
     return structuredClone(CFG_PADRAO);
   }
   const cfg = lerCfg();
   const salvarCfg = () => { try { localStorage.setItem(CHAVE_CFG, JSON.stringify(cfg)); } catch {} };
+  // Sempre começa LIGADO quando a conta abre. Só na primeira carga da página: a troca a quente
+  // desta lógica (atualização do GitHub) não religa quem desligou no meio da sessão.
+  if (core && !core.memoria.botIniciou) {
+    core.memoria.botIniciou = true;
+    cfg.ativo = true;
+  }
+  salvarCfg();
 
   // ---------------------------------------------------------------- UI base
   const fmt = (n) => Number(n ?? 0).toLocaleString('pt-BR', { maximumFractionDigits: 0 });
