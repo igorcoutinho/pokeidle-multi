@@ -32,6 +32,19 @@
   .cab .estado.ok{background:#6f6;box-shadow:0 0 5px #6f6}
   .cab .estado.carregando{background:#fc6}
   webview{flex:1;width:100%;min-height:0}
+  #reb-fundo{position:fixed;inset:0;z-index:20;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center}
+  #reb-fundo.aberto{display:flex}
+  #reb-modal{width:min(820px,95vw);max-height:90vh;overflow:auto;background:#3a2020;border:3px solid var(--borda);border-radius:14px;padding:0 0 12px}
+  #reb-modal header{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:#c9754a;color:#2a1212;font-weight:800}
+  #reb-modal section{padding:10px 14px;border-bottom:1px solid #5a3232}
+  #reb-modal .linha{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:6px}
+  #reb-modal select,#reb-modal input{background:#2a1515;border:1px solid #8a5a4a;color:var(--texto);border-radius:6px;padding:4px 8px;font:inherit}
+  #reb-modal input{width:64px}
+  #reb-modal table{width:100%;border-collapse:collapse;font-size:12px}
+  #reb-modal th{text-align:left;color:var(--ouro);padding:4px 6px}
+  #reb-modal td{padding:5px 6px;border-top:1px solid #4a2a2a}
+  #reb-modal .ok{color:#7fdc8f;font-weight:700}#reb-modal .ruim{color:#ff8a8a;font-weight:700}#reb-modal .ajuda{opacity:.7;font-size:12px}
+  #reb-modal button.on{background:var(--roxo);border-color:var(--ouro);color:#fff}
   #aviso{position:fixed;left:50%;top:48px;transform:translateX(-50%);z-index:10;background:#2a1515;border:2px solid var(--ouro);border-radius:10px;padding:8px 14px;font-weight:600;display:none}
 </style>
 </head>
@@ -41,10 +54,12 @@
   <button id="bt-grade" class="prim" title="Mostrar as 4 contas">Grade 2×2</button>
   <span class="esp"></span>
   <span class="info" id="info-bot">bot: carregando…</span>
+  <button id="bt-rebaixar" title="Anunciar uma pedra abaixo do mercado em todas as contas alternativas, de uma vez">📉 Pedra abaixo do mercado</button>
   <button id="bt-pasta" title="Abre a pasta onde ficam core.js e logica.js">Pasta do bot</button>
 </div>
 <div id="grade"></div>
 <div id="aviso"></div>
+<div id="reb-fundo"><div id="reb-modal"></div></div>
 
 <script>
 (async () => {
@@ -208,6 +223,126 @@
   }
   document.getElementById('bt-grade').onclick = () => focar(null);
   document.getElementById('bt-pasta').onclick = () => window.multi.abrirPastaBot();
+
+  // ---------------------------------------------------------------- pedra abaixo do mercado, em todas as contas
+  // Você dá a ordem; cada conta alternativa anuncia a pedra em Coins, 5–10% abaixo do menor anúncio.
+  // A conta protegida (Bekazin) é sempre pulada — a trava também existe dentro do módulo da conta.
+  const reb = { info: [], nome: '', qtd: 1, desconto: '', previas: null, rodando: false, resultados: null };
+  const escH = (x) => String(x ?? '').replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+  const fmtN = (n) => Number(n ?? 0).toLocaleString('pt-BR', { maximumFractionDigits: 0 });
+  const naConta = (c, js) => c.wv.executeJavaScript(js).catch(() => null);
+
+  async function lerContasReb() {
+    reb.info = await Promise.all(contas.map(async (c) => ({ c, i: await naConta(c, 'window.__pokeVendas?.infoRebaixar ? window.__pokeVendas.infoRebaixar() : null') })));
+  }
+
+  function pintarReb() {
+    const host = document.getElementById('reb-modal');
+    const alvos = reb.info.filter((x) => x.i?.logado && !x.i.protegida);
+    const pedras = new Map();
+    for (const x of alvos) for (const p of x.i.pedras ?? []) {
+      const r = pedras.get(p.nome) ?? { nome: p.nome, total: 0, contas: 0 };
+      r.total += p.q; r.contas++;
+      pedras.set(p.nome, r);
+    }
+    const lista = [...pedras.values()].sort((a, b) => a.nome.localeCompare(b.nome));
+    if (!reb.nome || !pedras.has(reb.nome)) reb.nome = lista[0]?.nome ?? '';
+    const linhaConta = (x) => {
+      const nome = x.i?.nick ?? x.c.nome;
+      if (!x.i) return `<tr><td>${escH(x.c.nome)}</td><td colspan="4" class="ajuda">carregando / sem o módulo</td></tr>`;
+      if (!x.i.logado) return `<tr><td>${escH(x.c.nome)}</td><td colspan="4" class="ajuda">deslogada</td></tr>`;
+      if (x.i.protegida) return `<tr><td><b>${escH(nome)}</b></td><td colspan="4" class="ruim">🔒 protegida — nunca anuncia</td></tr>`;
+      const pv = reb.previas?.get(x.c.n);
+      const res = reb.resultados?.get(x.c.n);
+      const tem = (x.i.pedras ?? []).find((p) => p.nome === reb.nome)?.q ?? 0;
+      return `<tr><td><b>${escH(nome)}</b></td><td>${tem ? fmtN(tem) : '<span class="ajuda">não tem</span>'}</td>
+        <td>${pv ? (pv.erro ? `<span class="ruim">${escH(pv.erro)}</span>` : pv.preco ? `${fmtN(pv.ref)} <span class="ajuda">(${escH(pv.fonte)}, ${fmtN(pv.anuncios)} anúncios)</span>` : '—') : '—'}</td>
+        <td>${pv?.preco ? `<b>${fmtN(pv.preco)}</b> <span class="ajuda">−${Math.round(pv.desconto * 1000) / 10}%</span>` : '—'}</td>
+        <td>${res ? (res.ok ? `<span class="ok">✅ ${res.qtd}× por ${fmtN(res.preco)}</span>` : `<span class="ruim">${escH(res.msg)}</span>`) : ''}</td></tr>`;
+    };
+    const prontas = reb.previas ? alvos.filter((x) => reb.previas.get(x.c.n)?.preco) : [];
+    host.innerHTML = `
+      <header><span>📉 Pedra abaixo do mercado — todas as contas alternativas</span><button data-reb="fechar">×</button></header>
+      <section>
+        ${lista.length ? `<div class="linha">
+          Pedra <select data-reb-c="nome">${lista.map((p) => `<option ${p.nome === reb.nome ? 'selected' : ''}>${escH(p.nome)}</option>`).join('')}</select>
+          <span class="ajuda">${(() => { const p = pedras.get(reb.nome); return p ? `${fmtN(p.total)} no total, em ${p.contas} conta(s)` : ''; })()}</span>
+        </div>
+        <div class="linha">
+          Quantidade por conta ${[1, 2].map((n) => `<button data-reb="qtd" data-v="${n}" class="${reb.qtd === n ? 'on' : ''}">${n}</button>`).join('')}
+          · desconto <input data-reb-c="desconto" type="number" min="5" max="10" step="0.5" placeholder="auto" value="${escH(reb.desconto)}"> % <span class="ajuda">(vazio = automático entre 5% e 10%)</span>
+        </div>
+        <div class="linha">
+          <button data-reb="previa" ${reb.rodando ? 'disabled' : ''}>🔎 Ver preços em cada conta</button>
+          <button data-reb="publicar" class="on" ${reb.rodando || !prontas.length ? 'disabled' : ''}>📢 Publicar em ${prontas.length} conta(s)</button>
+          ${reb.rodando ? `<span class="ajuda">${escH(reb.rodando)}</span>` : ''}
+        </div>` : '<p class="ajuda">Nenhuma pedra nas contas alternativas logadas.</p>'}
+        <p class="ajuda">Em COINS. O preço de cada conta é calculado no "Ver preços", antes de qualquer publicação — assim uma conta não baixa em cima do anúncio da outra.</p>
+      </section>
+      <section>
+        <table><tr><th>Conta</th><th>Tem</th><th>Referência</th><th>Vai anunciar por (cada)</th><th>Resultado</th></tr>
+          ${reb.info.map(linhaConta).join('')}</table>
+      </section>`;
+  }
+
+  async function abrirReb() {
+    reb.previas = null; reb.resultados = null;
+    document.getElementById('reb-fundo').classList.add('aberto');
+    document.getElementById('reb-modal').innerHTML = '<p style="padding:14px">Lendo as contas…</p>';
+    await lerContasReb();
+    pintarReb();
+  }
+
+  async function previaReb() {
+    reb.rodando = 'lendo os preços…'; reb.resultados = null; pintarReb();
+    reb.previas = new Map();
+    const alvos = reb.info.filter((x) => x.i?.logado && !x.i.protegida);
+    const arg = JSON.stringify({ nome: reb.nome, desconto: reb.desconto === '' ? null : Number(reb.desconto) });
+    await Promise.all(alvos.map(async (x) => {
+      reb.previas.set(x.c.n, (await naConta(x.c, `window.__pokeVendas.previaRebaixar(${arg})`)) ?? { erro: 'sem resposta' });
+    }));
+    reb.rodando = false;
+    pintarReb();
+  }
+
+  async function publicarReb() {
+    const alvos = reb.info.filter((x) => x.i?.logado && !x.i.protegida && reb.previas?.get(x.c.n)?.preco);
+    if (!alvos.length) return;
+    const linhas = alvos.map((x) => { const pv = reb.previas.get(x.c.n); return `${x.i.nick}: ${Math.min(pv.tem, reb.qtd)}× por ${fmtN(pv.preco)} Coins`; }).join('\n');
+    if (!confirm(`Publicar ${reb.nome} em ${alvos.length} conta(s)?\n\n${linhas}\n\nMoeda: COINS. A conta protegida não entra.`)) return;
+    reb.resultados = new Map();
+    reb.rodando = 'publicando…'; pintarReb();
+    for (const x of alvos) {
+      const pv = reb.previas.get(x.c.n);
+      const arg = JSON.stringify({ nome: reb.nome, qtd: reb.qtd, preco: pv.preco, itemId: pv.itemId, ref: pv.ref, desconto: Math.round(pv.desconto * 100) });
+      reb.resultados.set(x.c.n, (await naConta(x.c, `window.__pokeVendas.rebaixarAgora(${arg})`)) ?? { ok: false, msg: 'sem resposta' });
+      pintarReb();
+    }
+    reb.rodando = false;
+    await lerContasReb(); // quantidades novas
+    pintarReb();
+    const ok = [...reb.resultados.values()].filter((r) => r.ok).length;
+    aviso(`📉 ${reb.nome}: anunciado em ${ok} de ${alvos.length} conta(s)`);
+  }
+
+  document.getElementById('bt-rebaixar').onclick = abrirReb;
+  document.getElementById('reb-fundo').addEventListener('click', (e) => {
+    if (e.target.id === 'reb-fundo') return e.currentTarget.classList.remove('aberto');
+    const b = e.target.closest('[data-reb]');
+    if (!b || b.disabled) return;
+    const a = b.dataset.reb;
+    if (a === 'fechar') document.getElementById('reb-fundo').classList.remove('aberto');
+    else if (a === 'qtd') { reb.qtd = Number(b.dataset.v); pintarReb(); }
+    else if (a === 'previa') previaReb();
+    else if (a === 'publicar') publicarReb();
+  });
+  document.getElementById('reb-fundo').addEventListener('change', (e) => {
+    const c = e.target.dataset.rebC;
+    if (!c) return;
+    reb[c] = e.target.value;
+    reb.previas = null; reb.resultados = null;
+    pintarReb();
+  });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') focar(null); });
 
   // Atualização ao vivo: lógica nova entra nas 4 contas sem recarregar nada.

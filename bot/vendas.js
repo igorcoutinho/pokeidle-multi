@@ -7,7 +7,7 @@
 // A comissão é a do jogo: `shared/taxa-mercado.mjs`, o mesmo arquivo que o servidor usa.
 (() => {
   'use strict';
-  const VERSAO_VENDAS = '1.0.0';
+  const VERSAO_VENDAS = '1.1.0';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -19,6 +19,10 @@
     versao: VERSAO_VENDAS,
     desmontar() { for (const f of limpezas.splice(0)) { try { f(); } catch {} } },
     abrir: () => abrir(),
+    // Para a janela do app comandar todas as contas de uma vez (botão "📉 Pedra abaixo do mercado").
+    infoRebaixar: () => infoRebaixar(),
+    previaRebaixar: (o) => previaRebaixar(o),
+    rebaixarAgora: (o) => rebaixarAgora(o),
     fechar: () => fechar(),
   };
   window.__pokeVendas = V;
@@ -50,6 +54,169 @@
   let ocupado = false;
   let msg = '';
   let aberto = null; // chave do item com o detalhe aberto
+  let modo = 'relatorio'; // 'relatorio' | 'rebaixar'
+
+  // ---------------------------------------------------------------- anunciar abaixo do mercado
+  // Publica 1 ou 2 unidades de uma pedra em Coins, 5–10% abaixo do menor anúncio atual. NUNCA nas
+  // contas protegidas (a principal): o modo fica bloqueado nelas.
+  const CONTAS_PROTEGIDAS = ['bekazin'];
+  const CHAVE_REB = 'pokevendas.rebaixar.v1';
+  const reb = { itemId: null, qtd: 1, desconto: null, mercado: null, carregando: false, publicando: false, msg: '',
+    log: (() => { try { return JSON.parse(localStorage.getItem(CHAVE_REB)) ?? []; } catch { return []; } })() };
+  const salvarReb = () => { try { localStorage.setItem(CHAVE_REB, JSON.stringify(reb.log.slice(0, 50))); } catch {} };
+  const contaProtegida = () => CONTAS_PROTEGIDAS.includes(String(core.eu?.nick ?? '').toLowerCase());
+  const nomeItem = (id) => core.itens?.get?.(Number(id))?.name ?? core.itens?.get?.(Number(id))?.nome ?? `item ${id}`;
+
+  /** As pedras da bolsa desta conta: itens com "Stone"/"Pedra" no nome e quantidade > 0. */
+  function pedrasNaBolsa() {
+    return Object.entries(core.eu?.items ?? {})
+      .map(([id, q]) => ({ id: Number(id), q: Math.floor(Number(q) || 0), nome: nomeItem(id) }))
+      .filter((x) => x.q > 0 && /stone|pedra/i.test(x.nome))
+      .sort((a, b) => a.nome.localeCompare(b.nome));
+  }
+
+  async function carregarMercadoReb() {
+    reb.carregando = true;
+    pintar();
+    try {
+      const m = await pedir({ t: 'market.itens' }, (x) => x.aba === 'itens');
+      reb.mercado = { resumo: m.resumo ?? {}, medias: m.medias ?? {}, em: Date.now() };
+      reb.msg = '';
+    } catch (e) { reb.msg = `Não deu para ler os preços: ${e.message}`; }
+    reb.carregando = false;
+    pintar();
+  }
+
+  /**
+   * O preço sugerido: o menor anúncio atual em Coins (sem anúncio, a média de 7 dias) menos um
+   * desconto entre 5% e 10% — 5% com pouca concorrência, subindo até 10% com 10+ anúncios; se o
+   * menor já está bem abaixo da média (preço já caindo), fica nos 5%.
+   */
+  function precoSugerido(itemId) {
+    const r = reb.mercado?.resumo?.[itemId];
+    const menor = r?.anuncios && r.minGold ? Number(r.minGold) : null;
+    const media = Number(reb.mercado?.medias?.[itemId]?.gold?.media) || null;
+    const ref = menor ?? media;
+    if (!ref) return null;
+    let d = 0.05 + 0.05 * Math.min(1, (r?.anuncios ?? 0) / 10);
+    if (menor && media && menor < media * 0.8) d = 0.05;
+    if (reb.desconto != null) d = Math.min(0.10, Math.max(0.05, reb.desconto / 100));
+    return { ref, fonte: menor ? 'menor anúncio' : 'média de 7 dias', anuncios: r?.anuncios ?? 0, media, desconto: d, preco: Math.max(2, Math.floor(ref * (1 - d))) };
+  }
+
+  // ---- comandado pela janela do app (todas as contas de uma vez)
+  function infoRebaixar() {
+    return { nick: core.eu?.nick ?? null, logado: !!core.logado, protegida: contaProtegida(), pedras: core.logado ? pedrasNaBolsa() : [] };
+  }
+
+  /** O preço que esta conta anunciaria (lê o Mercado agora). `desconto` em % (5–10) ou null = automático. */
+  async function previaRebaixar({ nome, desconto = null }) {
+    if (!core.logado) return { erro: 'conta deslogada' };
+    if (contaProtegida()) return { protegida: true };
+    const it = pedrasNaBolsa().find((x) => x.nome.toLowerCase() === String(nome).toLowerCase());
+    if (!it) return { tem: 0 };
+    const antes = reb.desconto;
+    reb.desconto = desconto == null || desconto === '' ? null : Number(desconto);
+    try {
+      const m = await pedir({ t: 'market.itens' }, (x) => x.aba === 'itens');
+      reb.mercado = { resumo: m.resumo ?? {}, medias: m.medias ?? {}, em: Date.now() };
+      const sug = precoSugerido(it.id);
+      return sug ? { tem: it.q, itemId: it.id, ...sug } : { tem: it.q, erro: 'sem referência de preço em Coins' };
+    } catch (e) {
+      return { tem: it.q, erro: e.message };
+    } finally { reb.desconto = antes; }
+  }
+
+  /**
+   * Publica já (sem perguntar — a janela do app já confirmou com o jogador). Com `preco` (e
+   * `itemId`), usa o preço calculado ANTES de qualquer conta publicar: sem isso, cada conta veria
+   * o anúncio da anterior como "menor" e baixaria de novo, em cascata.
+   */
+  async function rebaixarAgora({ nome, qtd = 1, desconto = null, preco: precoFixo = null, itemId = null, ref: refFixo = null }) {
+    if (contaProtegida()) return { ok: false, protegida: true, msg: 'conta protegida — pulada' };
+    const tem = pedrasNaBolsa().find((x) => x.nome.toLowerCase() === String(nome).toLowerCase());
+    const pv = precoFixo && itemId && tem
+      ? { tem: tem.q, itemId, preco: Math.max(2, Math.floor(precoFixo)), ref: refFixo, desconto: (desconto ?? 0) / 100 }
+      : await previaRebaixar({ nome, desconto });
+    if (pv.erro || !pv.preco) return { ok: false, msg: pv.erro ?? 'não tem essa pedra' };
+    const n = Math.min(pv.tem, Math.max(1, Math.min(2, Number(qtd) || 1)));
+    const registro = { em: Date.now(), conta: core.eu?.nick ?? '?', item: nome, qtd: n, preco: pv.preco, ref: pv.ref, desconto: Math.round(pv.desconto * 100), resultado: 'enviado' };
+    let ok = false;
+    try {
+      await pedir({ t: 'market.criar', tipo: 'item', itemId: pv.itemId, pokemonId: null, caixaId: null, casaId: null, bicicletaId: null, qtd: n, preco: pv.preco, moeda: 'gold', dias: null }, (x) => x.aba === 'criado', 8000);
+      registro.resultado = 'publicado';
+      ok = true;
+    } catch (e) { registro.resultado = `sem confirmação (${e.message})`; }
+    reb.log.unshift(registro);
+    salvarReb();
+    return { ok, qtd: n, preco: pv.preco, ref: pv.ref, desconto: pv.desconto, msg: registro.resultado };
+  }
+
+  async function publicarReb() {
+    if (contaProtegida()) return;
+    const it = pedrasNaBolsa().find((x) => x.id === reb.itemId);
+    const sug = it && precoSugerido(it.id);
+    if (!it || !sug) return;
+    const qtd = Math.min(it.q, Math.max(1, Math.min(2, Number(reb.qtd) || 1)));
+    if (!confirm(`Anunciar ${qtd}× ${it.nome} por ${fmt(sug.preco)} Coins cada?\n\n${Math.round(sug.desconto * 100)}% abaixo do ${sug.fonte} (${fmt(sug.ref)}).\nConta: ${core.eu?.nick ?? '?'} · moeda: COINS`)) return;
+    reb.publicando = true;
+    pintar();
+    const pacote = { t: 'market.criar', tipo: 'item', itemId: it.id, pokemonId: null, caixaId: null, casaId: null, bicicletaId: null, qtd, preco: sug.preco, moeda: 'gold', dias: null };
+    const registro = { em: Date.now(), conta: core.eu?.nick ?? '?', item: it.nome, qtd, preco: sug.preco, ref: sug.ref, desconto: Math.round(sug.desconto * 100), resultado: 'enviado' };
+    try {
+      await pedir(pacote, (x) => x.aba === 'criado', 8000);
+      registro.resultado = 'publicado';
+      reb.msg = `✅ Anunciado: ${qtd}× ${it.nome} por ${fmt(sug.preco)} Coins cada.`;
+    } catch (e) {
+      registro.resultado = `sem confirmação (${e.message}) — confira em "Meus anúncios"`;
+      reb.msg = `⚠ O jogo não confirmou o anúncio: confira em Mercado → Meus anúncios.`;
+    }
+    reb.log.unshift(registro);
+    salvarReb();
+    reb.publicando = false;
+    setTimeout(carregarMercadoReb, 1500);
+  }
+
+  function htmlRebaixar() {
+    if (contaProtegida()) {
+      return `<section><p class="pv-neg"><b>🔒 Bloqueado nesta conta (${esc(core.eu?.nick ?? '')}).</b> O anúncio abaixo do mercado só roda nas contas alternativas.</p></section>`;
+    }
+    const pedras = pedrasNaBolsa();
+    if (reb.itemId == null || !pedras.some((x) => x.id === reb.itemId)) reb.itemId = pedras[0]?.id ?? null;
+    const it = pedras.find((x) => x.id === reb.itemId);
+    const sug = it && precoSugerido(it.id);
+    return `
+      <section>
+        <p class="pv-ajuda" style="margin-top:0">Publica 1 ou 2 unidades de uma pedra em <b>Coins</b>, entre 5% e 10% abaixo do menor anúncio atual. Conta: <b>${esc(core.eu?.nick ?? '?')}</b>.</p>
+        ${pedras.length ? `
+        <div class="pv-linha"><span class="pv-rot">Pedra</span>
+          <select class="pv-in" data-c="rebItem">${pedras.map((x) => `<option value="${x.id}" ${x.id === reb.itemId ? 'selected' : ''}>${esc(x.nome)} (${fmt(x.q)} na bolsa)</option>`).join('')}</select>
+          <span class="pv-rot" style="min-width:auto">Qtd</span>
+          ${[1, 2].map((n) => `<button class="pv-bt ${Number(reb.qtd) === n ? 'on' : ''}" data-a="rebQtd" data-v="${n}" ${it && it.q < n ? 'disabled' : ''}>${n}</button>`).join('')}
+          <span class="pv-rot" style="min-width:auto">Desconto</span>
+          <input type="number" class="pv-in" data-c="rebDesc" min="5" max="10" step="0.5" value="${sug ? (Math.round(sug.desconto * 1000) / 10) : ''}" placeholder="auto"> %
+          <button class="pv-bt" data-a="rebAuto" title="volta ao desconto automático">auto</button>
+          <span style="flex:1"></span>
+          <button class="pv-bt" data-a="rebPrecos" ${reb.carregando ? 'disabled' : ''}>⟳ Atualizar preços</button>
+        </div>
+        ${reb.carregando ? '<p class="pv-msg">Lendo os preços do Mercado…</p>' : !reb.mercado ? '' : sug ? `
+        <div class="pv-cards">
+          <div class="pv-card"><small>Menor anúncio agora</small><b>${sug.fonte === 'menor anúncio' ? preco(sug.ref, 'gold') : '—'}</b><small>${fmt(sug.anuncios)} anúncio(s)</small></div>
+          <div class="pv-card"><small>Média de 7 dias</small><b>${sug.media ? preco(sug.media, 'gold') : '—'}</b></div>
+          <div class="pv-card"><small>Seu preço (−${Math.round(sug.desconto * 1000) / 10}%)</small><b class="pv-alvo">${preco(sug.preco, 'gold')}</b><small>por unidade · você recebe ${preco(Math.floor(sug.preco * 0.85), 'gold')} líquido</small></div>
+        </div>
+        <div class="pv-linha" style="margin-top:8px"><button class="pv-bt on" data-a="rebPublicar" ${reb.publicando ? 'disabled' : ''}>${reb.publicando ? 'publicando…' : `📢 Publicar ${Math.min(it.q, Number(reb.qtd) || 1)}× ${esc(it.nome)} por ${fmt(sug.preco)} Coins`}</button></div>`
+          : '<p class="pv-msg">Ninguém anuncia nem vendeu esta pedra em Coins recentemente — sem referência de preço.</p>'}
+        ` : '<p class="pv-msg">Nenhuma pedra na bolsa desta conta.</p>'}
+        ${reb.msg ? `<p>${esc(reb.msg)}</p>` : ''}
+      </section>
+      <section>
+        <h4 class="pv-rot">Anúncios feitos por aqui</h4>
+        ${reb.log.length ? `<table class="pv-tab"><tr><th>Quando</th><th>Conta</th><th>Pedra</th><th>Qtd</th><th>Preço</th><th>Referência</th><th>Resultado</th></tr>
+          ${reb.log.slice(0, 15).map((l) => `<tr><td>${dataHora(l.em)}</td><td>${esc(l.conta)}</td><td>${esc(l.item)}</td><td>${l.qtd}</td><td>${preco(l.preco, 'gold')}</td><td>${preco(l.ref, 'gold')} −${l.desconto}%</td><td>${esc(l.resultado)}</td></tr>`).join('')}</table>`
+          : '<p class="pv-ajuda">Nenhum ainda.</p>'}
+      </section>`;
+  }
 
   const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const fmt = (n) => Number(n ?? 0).toLocaleString('pt-BR', { maximumFractionDigits: 0 });
@@ -239,7 +406,7 @@
   #pv-modal header{position:sticky;top:0;z-index:2;display:flex;justify-content:space-between;align-items:center;padding:10px 14px;
     background:#c9754a;color:#2a1212;font-weight:800;letter-spacing:.5px}
   #pv-modal header small{font-weight:600;opacity:.75;margin-left:8px}
-  #pv-modal header button{background:#b04ad0;border:2px solid #f3c77a;color:#fff;border-radius:8px;width:30px;height:30px;cursor:pointer;font-weight:800}
+  #pv-modal header button[data-a="fechar"]{background:#b04ad0;border:2px solid #f3c77a;color:#fff;border-radius:8px;width:30px;height:30px;cursor:pointer;font-weight:800}
   #pv-modal section{padding:10px 14px;border-bottom:1px solid #5a3232}
   .pv-linha{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:6px}
   .pv-rot{font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:#f3c77a;min-width:62px}
@@ -306,7 +473,12 @@
   function pintar() {
     const modal = document.getElementById('pv-modal');
     if (!modal || !document.getElementById('pv-fundo').classList.contains('aberto')) return;
-    const cab = `<header><span>💰 Compras e vendas no Mercado<small>v${VERSAO_VENDAS}</small></span><button data-a="fechar" title="Fechar">×</button></header>`;
+    const cab = `<header><span>💰 Compras e vendas no Mercado<small>v${VERSAO_VENDAS}</small></span>
+      <span class="pv-linha" style="margin:0">
+        <button class="pv-bt ${modo === 'relatorio' ? 'on' : ''}" data-a="modo" data-v="relatorio">📊 Relatório</button>
+        <button class="pv-bt ${modo === 'rebaixar' ? 'on' : ''}" data-a="modo" data-v="rebaixar">📉 Anunciar abaixo do mercado</button>
+        <button data-a="fechar" title="Fechar">×</button></span></header>`;
+    if (modo === 'rebaixar') { modal.innerHTML = cab + htmlRebaixar(); return; }
     const foco = document.activeElement?.dataset?.c;
     const cursor = document.activeElement?.selectionStart;
 
@@ -401,6 +573,8 @@
   function aoDigitar(e) {
     const c = e.target.dataset?.c;
     if (!c) return;
+    if (c === 'rebItem') { reb.itemId = Number(e.target.value); reb.msg = ''; return pintar(); }
+    if (c === 'rebDesc') { if (e.type === 'change') { reb.desconto = e.target.value === '' ? null : Number(e.target.value); pintar(); } return; }
     cfg[c] = e.target.value;
     salvarCfg();
     clearTimeout(espera);
@@ -417,6 +591,11 @@
     else if (a === 'moeda' || a === 'tipo' || a === 'ordem') { cfg[a] = b.dataset.v; salvarCfg(); pintar(); }
     else if (a === 'detalhe') { aberto = aberto === b.dataset.v ? null : b.dataset.v; pintar(); }
     else if (a === 'baixar') garantirDados(true);
+    else if (a === 'modo') { modo = b.dataset.v; if (modo === 'rebaixar' && !reb.mercado && !contaProtegida()) carregarMercadoReb(); else pintar(); }
+    else if (a === 'rebQtd') { reb.qtd = Number(b.dataset.v); pintar(); }
+    else if (a === 'rebAuto') { reb.desconto = null; pintar(); }
+    else if (a === 'rebPrecos') carregarMercadoReb();
+    else if (a === 'rebPublicar') publicarReb();
   }
 
   function abrir() {
