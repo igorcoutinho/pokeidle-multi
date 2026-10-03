@@ -104,9 +104,23 @@ PvP — botão ⚔ PvP
     Botões 🔬: simula de uma vez a melhor ordem do seu time (ou a melhor comp da bolsa) contra os
     times reais de todos os ativos — o resultado entra como candidato no auto-switch.
     O modo 🔁 rotação simples (trocar após N vitórias) continua disponível.
+    🧠 Counter do counter (padrão): quem te enfrentar vai montar um time para bater o que você
+    ACABOU de jogar. Para cada rival provável, o app monta esse counter — os times reais que ele
+    já usou contra esse seu time (ou logo depois de enfrentá-lo) e o melhor counter simulado com
+    os pokémon dele — e escolhe a sua formação que vence ESSE counter (60% da nota; 40% placar
+    real). O counter previsto aparece na aba Formações e no Registro.
+    🎯 Abertura (padrão): se o próximo provável sempre abre com o mesmo pokémon (3+ duelos, 60%+;
+    ex.: Zator → Venusaur), quem do time vence esse 1×1 vai na frente (ex.: Camerupt); o resto
+    mantém a ordem. Se alguém seu já abriu contra ele e venceu 60%+ (2+ duelos), esse tem
+    preferência. Formações com resposta clara ao abridor ganham bônus na escolha.
   - Aba Estatísticas: destaque 🏆 da sua comp mais efetiva no geral, suas composições (duelos, V-D, %, pontos, contra qual comp rival vai
     melhor e pior), as comps rivais (seu resultado e qual comp sua mais vence cada uma) e os
     pokémon (seus com maior % de vitória e os rivais que mais te derrotam). Por período.
+  - ⚔ Auto PvP (botão no topo do painel ⚔ PvP): liga a fila automática e o auto-switch juntos.
+    3 derrotas seguidas → pausa (desliga a fila; o botão retoma a mesma sessão). A cada 10
+    partidas da sessão, se o saldo não estiver positivo (vitórias > derrotas) → desliga DE VEZ
+    (para voltar, começa uma sessão nova). Os dois números são ajustáveis na aba Histórico.
+    Enquanto o Auto PvP roda, a trava abaixo fica em pausa (valem as regras dele).
   - Trava da fila: se a fila automática estiver ligada e você perder 2 seguidas (ajustável),
     o app desliga a fila automática sozinho e avisa na tela.
 

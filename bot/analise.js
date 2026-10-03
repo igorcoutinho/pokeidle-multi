@@ -7,7 +7,7 @@
 // fica) do seu time contra os times de outros jogadores, e mede quanto cada candidato melhora.
 (() => {
   'use strict';
-  const VERSAO_ANALISE = '1.1.0';
+  const VERSAO_ANALISE = '1.2.0';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -208,7 +208,7 @@
     setTimeout(() => document.getElementById('perfil')?.classList.add('hidden'), 0);
     const p = m.perfil;
     const time = (p.pvpTime ?? []).map((pk) => normalizar(pk, `de ${p.nick}`)).filter(Boolean);
-    st.oponentes.set(p.nick.toLowerCase(), { nick: p.nick, time });
+    st.oponentes.set(p.nick.toLowerCase(), { nick: p.nick, time, em: Date.now() });
     return st.oponentes.get(p.nick.toLowerCase());
   }
 
@@ -528,6 +528,130 @@
     };
   }
   A.sugerirContraVarios = sugerirContraVarios;
+
+  /**
+   * COUNTER DO COUNTER. Você acabou de jogar com o time A; quem te enfrentar vai montar um time X
+   * para bater o A. Para cada rival provável, monta os X dele: (1) os times reais que ele já usou
+   * contra o A ou logo depois de enfrentá-lo (`conhecidos`, pesam mais) e (2) o melhor counter
+   * simulado que ele consegue montar com o que tem (perfil de PvP de agora + pokémon já vistos com
+   * ele no histórico, os 8 mais fortes, combinações de 5 em todas as ordens, contra o A).
+   * Depois dá nota a cada formação sua (`candidatas`: [{ k, ids }]) contra esses X.
+   * `rivais`: [{ nick, peso, vistos: [{nome, nivel}], conhecidos: [[{nome, nivel}]] }].
+   * Devolve { notas: { k: { nota, margem, porRival } }, counters: [{ nick, x: [nomes], fonte, margem }], avisos }.
+   */
+  async function contraDoCounter({ timeA = [], rivais = [], candidatas = [] }) {
+    await carregarModulos();
+    await carregarCatalogo();
+    const avisos = [];
+    const porId = new Map(meusPokemons().map((p) => [p.id, p]));
+    const A = timeA.map((id) => porId.get(id)).filter(Boolean);
+    if (A.length < 2) throw new Error('não achei o time que acabou de jogar na bolsa');
+    const minhas = candidatas
+      .map((c) => ({ k: c.k, n: c.ids.length, time: c.ids.map((id) => porId.get(id)).filter(Boolean) }))
+      .filter((c) => c.time.length === c.n);
+    const estimar = (x) => { const esp = especiePorNome(x.nome); return esp ? hipotetico(esp, x.nivel || 150) : null; };
+    const grupos = [];
+    for (const r of rivais) {
+      let perfil = [];
+      try {
+        const o = st.oponentes.get(String(r.nick).toLowerCase());
+        perfil = o && Date.now() - (o.em ?? 0) < 10 * 60 * 1000 ? o.time : (await carregarOponente(r.nick)).time;
+      } catch (e) { avisos.push(`sem o perfil de ${r.nick} (${e.message})`); }
+      // Os pokémon que ele tem: os do perfil (stats reais) + os vistos com ele (estimados), sem repetir espécie.
+      const pool = [...perfil];
+      for (const x of r.vistos ?? []) {
+        if (pool.some((p) => p._esp.name.toLowerCase() === String(x.nome).toLowerCase())) continue;
+        const e = estimar(x);
+        if (e) pool.push(e);
+      }
+      const fortes = pool.map((p) => [p, forca(p)]).sort((a, b) => b[1] - a[1]).map(([p]) => p).slice(0, 8);
+      const xs = [];
+      // (1) reais: o que ele já usou contra o A / logo depois de enfrentá-lo
+      for (const t of r.conhecidos ?? []) {
+        const time = casar(t, pool, (p) => p._esp.name).map((p, i) => p ?? estimar(t[i])).filter(Boolean);
+        if (time.length >= 2) xs.push({ time, fonte: 'real', peso: 2 });
+      }
+      // (2) simulado: o melhor time de 5 (e a melhor ordem) que ele monta contra o A
+      if (fortes.length >= 2) {
+        const tops = [];
+        let n = 0;
+        for (const combo of combinacoes(fortes, Math.min(5, fortes.length))) {
+          if (new Set(combo.map((p) => p.speciesId)).size < combo.length) continue;
+          let melhor = null;
+          for (const ordem of permutacoes(combo)) {
+            const x = lutar(ordem, A);
+            const m = x.margem + (x.venceu ? 1 : 0);
+            if (!melhor || m > melhor.m) melhor = { time: ordem, m };
+          }
+          tops.push(melhor);
+          if (++n % 6 === 0) await dormir(0);
+        }
+        tops.sort((a, b) => b.m - a.m);
+        // Os 3 melhores counters (ele pode não achar o perfeito): o 1º pesa mais.
+        tops.slice(0, 3).forEach((t, i) => xs.push({ time: t.time, fonte: 'simulado', peso: [1.5, 1, 0.7][i] }));
+      }
+      if (!xs.length) { avisos.push(`${r.nick}: não deu para montar o counter dele`); continue; }
+      grupos.push({ nick: r.nick, peso: Math.max(0.01, Number(r.peso) || 1), xs });
+      await dormir(0);
+    }
+    if (!grupos.length) throw new Error('não consegui montar o counter de nenhum rival');
+    const somaPesos = grupos.reduce((t, g) => t + g.peso, 0);
+    const notas = {};
+    for (const c of minhas) {
+      let nota = 0, margem = 0;
+      const porRival = [];
+      for (const g of grupos) {
+        let v = 0, mg = 0, w = 0;
+        for (const x of g.xs) { const r = lutar(c.time, x.time); v += x.peso * (r.venceu ? 1 : 0); mg += x.peso * r.margem; w += x.peso; }
+        nota += (g.peso / somaPesos) * (v / w);
+        margem += (g.peso / somaPesos) * (mg / w);
+        porRival.push({ nick: g.nick, vence: Math.round((v / w) * 100) });
+      }
+      notas[c.k] = { nota, margem, porRival };
+    }
+    return {
+      notas,
+      counters: grupos.map((g) => {
+        const x = g.xs.find((y) => y.fonte === 'simulado') ?? g.xs[0];
+        return { nick: g.nick, x: x.time.map((p) => p._esp.name), fonte: g.xs.some((y) => y.fonte === 'real') ? 'real + simulado' : 'simulado', margem: lutar(x.time, A).margem };
+      }),
+      avisos,
+    };
+  }
+  A.contraDoCounter = contraDoCounter;
+
+  /**
+   * Quem do seu time deve ABRIR contra o pokémon com que o rival costuma abrir (ex.: Zator sempre
+   * abre de Venusaur → Camerupt na frente). 1×1 pelas contas do jogo: nota = tempo que ele leva
+   * para te derrubar ÷ tempo que você leva para derrubá-lo (> 1 = você vence a troca).
+   * Devolve { ids (com o melhor na frente, resto na mesma ordem), lider, nota, notaAtual, contra }.
+   */
+  async function melhorAbertura({ ids = [], abertura, rivalNick }) {
+    await carregarModulos();
+    await carregarCatalogo();
+    const porId = new Map(meusPokemons().map((p) => [p.id, p]));
+    const time = ids.map((id) => porId.get(id));
+    if (time.some((p) => !p)) throw new Error('time fora da bolsa');
+    let ele = null;
+    const o = st.oponentes.get(String(rivalNick ?? '').toLowerCase());
+    if (o) ele = o.time.find((p) => p._esp.name.toLowerCase() === String(abertura.nome).toLowerCase()) ?? null;
+    if (!ele) { const esp = especiePorNome(abertura.nome); if (esp) ele = hipotetico(esp, abertura.nivel || 150); }
+    if (!ele) throw new Error(`não conheço ${abertura.nome}`);
+    const nota = (p) => {
+      const x = par(p, ele);
+      if (!x) return 0;
+      const tEu = x.dpsA > 0 ? x.ehpB / x.dpsA : Infinity;  // eu derrubo ele
+      const tEle = x.dpsB > 0 ? x.ehpA / x.dpsB : Infinity; // ele me derruba
+      if (tEu === Infinity) return 0;
+      return tEle === Infinity ? 99 : tEle / tEu;
+    };
+    const notas = time.map((p) => nota(p));
+    let i = 0;
+    notas.forEach((n, j) => { if (n > notas[i]) i = j; });
+    const novos = [ids[i], ...ids.filter((_, j) => j !== i)];
+    return { ids: novos, lider: time[i]._esp.name, nota: notas[i], notaAtual: notas[0], contra: ele._esp.name };
+  }
+  A.melhorAbertura = melhorAbertura;
 
   function hipotetico(esp, nivel) {
     return normalizar({ speciesId: esp.pokeId, level: nivel, ivs: ivsIguais(IV_PADRAO), quality: 1, potencia: 1, shiny: false }, 'espécie');

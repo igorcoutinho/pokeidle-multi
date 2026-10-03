@@ -12,9 +12,13 @@
 // 2) Trava da fila. Com a fila automática ligada (`automation.pvpAutoFila`), N derrotas seguidas
 //    (2 por padrão) desligam a fila com o mesmo `auto.set` que o interruptor do jogo manda. O
 //    servidor só puxa a próxima partida 20 s depois do fim, então dá tempo.
+//
+// 3) Auto PvP. Uma sessão: liga a fila automática e o auto-switch juntos. Pausa (desliga a fila)
+//    com 3 derrotas seguidas; a cada 10 partidas da sessão, se o saldo não estiver positivo
+//    (vitórias > derrotas), encerra de vez. Enquanto a sessão roda, ela substitui a trava do item 2.
 (() => {
   'use strict';
-  const VERSAO_PVP = '1.11.0';
+  const VERSAO_PVP = '1.12.0';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -26,6 +30,7 @@
     versao: VERSAO_PVP,
     get trava() { return cfg.trava; },
     get autoSwitch() { return !!cfg.auto.ativo; },
+    get autoPvp() { return cfg.sessao ? { ...cfg.sessao } : null; },
     /** Liga/desliga o auto-switch (o botão 🔁 Switch do cabeçalho da conta chama isto). */
     alternarAutoSwitch() { alternarAuto(); pintar(); return !!cfg.auto.ativo; },
     desmontar() { for (const f of limpezas.splice(0)) { try { f(); } catch {} } },
@@ -46,11 +51,12 @@
     // `auto` = o auto-switch de formações: troca depois de `vitorias` vitórias seguidas com a mesma
     // formação (o rival vai counterar) e, se `naDerrota`, logo após perder. `fora` = slots do
     // armário que não entram na rotação; `usoEm` = quando cada slot foi usado por último.
-    const padrao = { trava: true, derrotas: 2, seguidas: 0, log: [],
-      auto: { ativo: false, modo: 'prever', vitorias: 1, naDerrota: true, focoAmeacas: true, minUso: 2, foraKeys: [], seguidas: 0, usoEm: {} } };
+    // `sessao` = o Auto PvP em andamento: { inicio, v, d, seguidas, estado: rodando|pausada|encerrada, motivo }.
+    const padrao = { trava: true, derrotas: 2, seguidas: 0, log: [], sessao: null, autoPvp: { maxSeguidas: 3, checarCada: 10 },
+      auto: { ativo: false, modo: 'prever', vitorias: 1, naDerrota: true, focoAmeacas: true, contraCounter: true, ultimoAnti: null, abertura: true, minUso: 2, foraKeys: [], seguidas: 0, usoEm: {} } };
     try {
       const s = JSON.parse(localStorage.getItem(CHAVE_CFG)) ?? {};
-      return { ...padrao, ...s, auto: { ...padrao.auto, ...(s.auto ?? {}) } };
+      return { ...padrao, ...s, auto: { ...padrao.auto, ...(s.auto ?? {}) }, autoPvp: { ...padrao.autoPvp, ...(s.autoPvp ?? {}) } };
     } catch { return padrao; }
   }
   const cfg = lerCfg();
@@ -213,12 +219,64 @@
   }
 
   // ---------------------------------------------------------------- trava da fila automática
+  function ligarFila(ligada) {
+    if (!!auto().pvpAutoFila === ligada) return;
+    const nova = { ...auto(), pvpAutoFila: ligada };
+    if (core.eu) core.eu.automation = nova;
+    core.send({ t: 'auto.set', ...nova });
+  }
+
+  // ---------------------------------------------------------------- Auto PvP (sessão)
+  const sessaoRodando = () => cfg.sessao?.estado === 'rodando';
+  const placarSessao = (x = cfg.sessao) => `${x.v}V ${x.d}D`;
+
+  /** Começa (ou retoma, se pausada) o Auto PvP: fila automática + auto-switch ligados. */
+  function iniciarAutoPvp() {
+    if (!core.logado) { avisar('Entre na conta antes de ligar o Auto PvP'); return; }
+    const retomar = cfg.sessao?.estado === 'pausada';
+    if (retomar) Object.assign(cfg.sessao, { estado: 'rodando', seguidas: 0, motivo: '' });
+    else cfg.sessao = { inicio: Date.now(), v: 0, d: 0, seguidas: 0, estado: 'rodando', motivo: '' };
+    if (!cfg.auto.ativo) { cfg.auto.ativo = true; cfg.auto.seguidas = 0; registrar('🔁 auto-switch LIGADO pelo Auto PvP'); }
+    cfg.seguidas = 0;
+    ligarFila(true);
+    registrar(retomar ? `▶ Auto PvP RETOMADO (${placarSessao()})` : '▶ Auto PvP LIGADO — fila automática + auto-switch');
+    avisar(retomar ? `▶ Auto PvP retomado (${placarSessao()})` : '▶ Auto PvP ligado — fila automática + auto-switch');
+    salvarCfg();
+  }
+
+  /** Para o Auto PvP: desliga a fila. `estado` 'pausada' (dá para retomar) ou 'encerrada' (de vez). */
+  function pararAutoPvp(estado, motivo) {
+    if (!cfg.sessao) return;
+    Object.assign(cfg.sessao, { estado, motivo, fim: Date.now() });
+    ligarFila(false);
+    const txt = `${estado === 'encerrada' ? '⛔ Auto PvP ENCERRADO' : '⏸ Auto PvP PAUSADO'} — ${motivo} (sessão: ${placarSessao()})`;
+    registrar(txt);
+    avisar(txt);
+    salvarCfg();
+  }
+
+  /** Conta a partida na sessão e aplica as regras: N derrotas seguidas pausa; a cada M sem saldo positivo, encerra. */
+  function contarSessao(reg) {
+    if (!sessaoRodando()) return;
+    const x = cfg.sessao;
+    if (reg.venci) { x.v++; x.seguidas = 0; } else { x.d++; x.seguidas++; }
+    const n = x.v + x.d;
+    const cada = Math.max(1, Number(cfg.autoPvp.checarCada) || 10);
+    const maxSeg = Math.max(1, Number(cfg.autoPvp.maxSeguidas) || 3);
+    registrar(`Auto PvP: partida ${n} — ${reg.venci ? 'vitória' : 'derrota'} vs ${reg.nick} (${placarSessao()})`);
+    if (n % cada === 0 && x.v <= x.d) pararAutoPvp('encerrada', `${n} partidas sem saldo positivo`);
+    else if (x.seguidas >= maxSeg) pararAutoPvp('pausada', `${x.seguidas} derrotas seguidas`);
+    else salvarCfg();
+  }
+
   function contarResultado(reg) {
+    contarSessao(reg);
     if (reg.venci) { cfg.seguidas = 0; salvarCfg(); return; }
     cfg.seguidas = (cfg.seguidas ?? 0) + 1;
     registrar(`derrota para ${reg.nick} — ${cfg.seguidas} seguida(s)`);
     const limite = Math.max(1, Number(cfg.derrotas) || 2);
-    if (cfg.trava && cfg.seguidas >= limite && auto().pvpAutoFila) {
+    // Com o Auto PvP rodando, valem as regras dele (seguidas / saldo), não esta trava.
+    if (cfg.trava && !sessaoRodando() && cfg.seguidas >= limite && auto().pvpAutoFila) {
       const nova = { ...auto(), pvpAutoFila: false };
       if (core.eu) core.eu.automation = nova;
       core.send({ t: 'auto.set', ...nova });
@@ -539,11 +597,130 @@
     salvarCfg();
   }
 
+  // ---------------------------------------------------------------- counter do counter
+  const PESO_ANTI = 0.6;          // na nota final: 60% "vence o counter do time que jogou", 40% placar real
+  const TEMPO_ANTI_MS = 12_000;   // o jogo puxa a próxima partida ~20 s depois: a conta tem que caber antes
+
+  /** O time do rival naquele duelo (quem entrou + quem não entrou). */
+  const timeDoRival = (h) => [...(h.dele ?? []), ...(h.naoEntrou ?? [])].map((x) => ({ nome: x.nome, nivel: x.nivel }));
+
+  /**
+   * O que cada rival provável deve montar contra o time que você acabou de jogar (A), e a nota de
+   * cada formação sua contra esses counters. Reais primeiro: os times que ele já usou contra o A,
+   * o que usou na partida seguinte depois de enfrentar o A e, se ele acabou de te vencer, o time
+   * que venceu (ele não muda o que funcionou). O resto é simulado no analise.js.
+   */
+  async function calcularAntiCounter(reg, previstos, cand) {
+    const an = window.__pokeAnalise;
+    if (!an?.contraDoCounter) return null;
+    const timeA = meuTimeIds?.length ? [...meuTimeIds] : idsDoDuelo(reg); // a equipe salva = a que acabou de jogar (o switch ainda não trocou)
+    if (!timeA?.length) return null;
+    const kA = timeA.join(',');
+    const rivais = previstos.slice(0, 3).map((x) => {
+      const deles = hist.filter((h) => mesmoNick(h.nick, x.nick)).sort((a, b) => a.em - b.em);
+      const vistos = [];
+      for (const h of deles) for (const pk of timeDoRival(h)) if (!vistos.some((v) => v.nome === pk.nome)) vistos.push(pk);
+      const conhecidos = [];
+      deles.forEach((h, i) => {
+        if (idsDoDuelo(h)?.join(',') !== kA) return;
+        if (!h.venci) conhecidos.push(timeDoRival(h));             // ele bateu o A com este time
+        if (deles[i + 1]) conhecidos.push(timeDoRival(deles[i + 1])); // a resposta dele depois de ver o A
+      });
+      if (mesmoNick(reg.nick, x.nick) && !reg.venci) conhecidos.unshift(timeDoRival(reg));
+      return { nick: x.nick, peso: pesoNaEscolha(x), vistos, conhecidos: conhecidos.filter((t) => t.length >= 2).slice(0, 4) };
+    });
+    try {
+      const r = await Promise.race([
+        an.contraDoCounter({ timeA, rivais, candidatas: cand.map((f) => ({ k: f.k, ids: f.ids })) }),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('demorou demais')), TEMPO_ANTI_MS)),
+      ]);
+      cfg.auto.ultimoAnti = { em: Date.now(), timeA: nomesDosIds(timeA), counters: r.counters, avisos: (r.avisos ?? []).slice(0, 4) };
+      return r;
+    } catch (e) {
+      registrar(`counter do counter: não deu (${e.message}) — escolhendo só pelo histórico`);
+      return null;
+    }
+  }
+
   /**
    * Modo "prever": depois de CADA partida, olha quem deve vir agora (pela sequência de adversários)
-   * e põe a formação que mais ganha dele. Só troca se a escolhida for melhor que a atual contra ele.
+   * e põe a formação que mais ganha dele. Com "counter do counter" ligado, a nota principal é
+   * vencer o time que ESSES rivais montariam para counterar o que você acabou de jogar.
+   * Só troca se a escolhida for melhor que a atual.
    */
-  function autoSwitchPrevendo(reg) {
+  let rodadaSwitch = 0;
+
+  /**
+   * Com que pokémon o rival costuma abrir: o 1º da ordem real (da fita) nos duelos contra você.
+   * Só conta se for um hábito: 3+ duelos com ordem e o mesmo abridor em 60%+ deles.
+   */
+  function aberturaDe(nick) {
+    const conta = new Map();
+    let n = 0;
+    for (const h of hist) {
+      if (!mesmoNick(h.nick, nick) || h.deleSemOrdem || !h.dele?.length) continue;
+      n++;
+      const x = h.dele[0];
+      const k = String(x.nome).toLowerCase();
+      const c = conta.get(k) ?? { nome: x.nome, nivel: x.nivel, vezes: 0 };
+      c.vezes++;
+      conta.set(k, c);
+    }
+    const top = [...conta.values()].sort((a, b) => b.vezes - a.vezes)[0];
+    return top && n >= 3 && top.vezes / n >= 0.6 ? { ...top, de: n } : null;
+  }
+
+  /**
+   * Depois de escolher a formação: se o próximo provável tem abertura fixa (ex.: Zator → Venusaur),
+   * põe na frente quem do time vence esse 1×1 (ex.: Camerupt); o resto fica na mesma ordem.
+   */
+  async function ajustarAbertura(previstos, minha) {
+    const an = window.__pokeAnalise;
+    const alvo = previstos[0];
+    if (!cfg.auto.abertura || !an?.melhorAbertura || !alvo || alvo.p < 0.4 || !meuTimeIds?.length) return;
+    const ab = aberturaDe(alvo.nick);
+    if (!ab) return;
+    try {
+      const r = await an.melhorAbertura({ ids: [...meuTimeIds], abertura: ab, rivalNick: alvo.nick });
+      if (minha !== rodadaSwitch) return;
+      // O real vale mais que a simulação: quem do time já abriu contra ele e venceu 60%+ (2+ duelos) vai na frente.
+      const nomesTime = nomesDosIds(meuTimeIds).map((x) => String(x).toLowerCase());
+      const real = new Map();
+      for (const h of hist) {
+        if (!mesmoNick(h.nick, alvo.nick) || !h.meu?.length) continue;
+        const k = String(h.meu[0].nome).toLowerCase();
+        const c = real.get(k) ?? { n: 0, v: 0 };
+        c.n++; if (h.venci) c.v++;
+        real.set(k, c);
+      }
+      const doReal = [...real.entries()].filter(([k, c]) => c.n >= 2 && c.v / c.n >= 0.6 && nomesTime.includes(k))
+        .sort((a, b) => (b[1].v + 1) / (b[1].n + 2) - (a[1].v + 1) / (a[1].n + 2))[0];
+      if (doReal) {
+        const i = nomesTime.indexOf(doReal[0]);
+        Object.assign(r, { ids: [meuTimeIds[i], ...meuTimeIds.filter((_, j) => j !== i)], lider: nomesDosIds([meuTimeIds[i]])[0], nota: 99, notaAtual: i === 0 ? 99 : 0, real: `${doReal[1].v}V ${doReal[1].n - doReal[1].v}D abrindo contra ele` });
+      }
+      const txt = `${alvo.nick} abre de ${ab.nome} (${ab.vezes} de ${ab.de})`;
+      if (r.ids[0] === meuTimeIds[0] || r.nota < 1 || r.nota < r.notaAtual * 1.1) {
+        registrar(`abertura: ${txt} — ${r.ids[0] === meuTimeIds[0] ? `${r.lider} já abre` : `ninguém do time vence ele com folga melhor que o atual`}`);
+        return;
+      }
+      if (aplicarEquipe(r.ids, `abertura contra ${ab.nome} de ${alvo.nick}`)) {
+        registrar(`🎯 abertura: ${txt} → ${r.lider} na frente (${r.real ?? (r.nota >= 99 ? 'vence o 1×1 sem tomar dano' : `vence o 1×1 ${r.nota.toFixed(1)}× mais rápido`)})`);
+        avisar(`🎯 ${alvo.nick} abre de ${ab.nome}: ${r.lider} vai na frente`);
+        if (hist[0]) { hist[0].trocouDepois = true; salvarHist(); }
+        const t = trocas.find((x) => x.pendente); // a decisão pendente passa a apontar para a ordem nova
+        if (t) { t.paraK = r.ids.join(','); t.motivo = `${t.motivo ? `${t.motivo} · ` : ''}abertura: ${r.lider} na frente`; salvarTrocas(); }
+      }
+    } catch (e) { registrar(`abertura: não deu (${e.message})`); }
+  }
+
+  async function autoSwitchPrevendo(reg) {
+    const minha = ++rodadaSwitch;
+    await escolherFormacao(reg, minha);
+    if (minha === rodadaSwitch) await ajustarAbertura(preverProximo(reg.nick), minha);
+  }
+
+  async function escolherFormacao(reg, minha) {
     const previstos = preverProximo(reg.nick);
     if (!previstos.length) {
       registrar('auto-switch: ainda não há adversários suficientes no histórico para prever o próximo');
@@ -552,13 +729,41 @@
     }
     const cand = candidatasPara(previstos);
     const atual = cand.find((f) => f.k === chaveAtual()) ?? minhasFormacoes().find((f) => f.k === chaveAtual());
+    const anti = cfg.auto.contraCounter ? await calcularAntiCounter(reg, previstos, cand) : null;
+    // Abertura: contra quem sempre abre igual, formação com resposta clara ao abridor ganha bônus.
+    const bonusAb = new Map();
+    const ab0 = cfg.auto.abertura && previstos[0] ? aberturaDe(previstos[0].nick) : null;
+    if (ab0 && window.__pokeAnalise?.melhorAbertura) {
+      for (const f of cand) {
+        try {
+          const r = await window.__pokeAnalise.melhorAbertura({ ids: f.ids, abertura: ab0, rivalNick: previstos[0].nick });
+          const b = r.nota >= 2 ? 0.08 : r.nota >= 1 ? 0.04 : 0;
+          if (b) bonusAb.set(f.k, { b: b * previstos[0].p, lider: r.lider });
+        } catch {}
+      }
+    }
+    if (minha !== rodadaSwitch) return; // chegou outra partida enquanto calculava: ela decide
+    const nota = (f) => {
+      const r0 = pontuar(f, previstos);
+      const ba = bonusAb.get(f.k);
+      const r = ba ? { nota: r0.nota + ba.b, det: [...r0.det, `${ba.lider} responde ao ${ab0.nome} de ${previstos[0].nick}`] } : r0;
+      const a = anti?.notas?.[f.k];
+      if (!a) return r;
+      return { nota: PESO_ANTI * a.nota + (1 - PESO_ANTI) * r.nota,
+        det: [`vence ${Math.round(a.nota * 100)}% dos counters previstos (${a.porRival.map((x) => `${x.nick} ${x.vence}%`).join(', ')})`, ...r.det] };
+    };
+    if (anti?.counters?.length) {
+      const c0 = anti.counters[0];
+      registrar(`🧠 counter previsto de ${c0.nick} contra o seu time: ${c0.x.join(' → ')} (${c0.fonte})`);
+    }
     // Perdeu (e "trocar após derrota" ligado): a formação que acabou de perder SAI — entra a melhor
     // das outras, mesmo que no papel a atual ainda pontue mais contra o grupo.
     const forcar = !reg.venci && cfg.auto.naDerrota;
     const notas = cand.filter((f) => !forcar || f.k !== chaveAtual())
-      .map((f) => ({ f, ...pontuar(f, previstos) })).sort((x, y) => y.nota - x.nota);
+      .map((f) => ({ f, ...nota(f) })).sort((x, y) => y.nota - x.nota);
     const melhor = notas[0];
-    const notaAtual = atual ? pontuar(atual, previstos).nota : 0;
+    const notaAtual = atual ? nota(atual).nota : 0;
+    if (cfg.auto.ultimoAnti && anti) { cfg.auto.ultimoAnti.escolhida = melhor?.f.nome ?? null; salvarCfg(); }
     const quem = previstos.slice(0, 2).map((x) => `${x.nick} (${Math.round(x.p * 100)}%)`).join(', ');
     if (forcar && !melhor) {
       registrar(`auto-switch: perdeu para ${reg.nick}, mas não há outra formação na rotação para entrar`);
@@ -566,7 +771,7 @@
       return;
     }
     if (!forcar && (!melhor || melhor.f.k === chaveAtual() || melhor.nota < notaAtual + 0.02)) {
-      registrar(`auto-switch: próximo provável ${quem} — a equipe atual já é a melhor para ele${atual ? ` (${pontuar(atual, previstos).det[0] ?? ''})` : ''}`);
+      registrar(`auto-switch: próximo provável ${quem} — a equipe atual já é a melhor para ele${atual ? ` (${nota(atual).det[0] ?? ''})` : ''}`);
       anotarTroca(reg, { acao: 'manteve', previstos, de: atual?.nome, para: atual?.nome, motivo: 'a atual já é a melhor contra eles' });
       return;
     }
@@ -578,7 +783,7 @@
       const porque = `${forcar ? `perdeu para ${reg.nick} — a formação que perdeu saiu · ` : ''}${melhor.det.join(' · ')}`;
       registrar(`🔮 auto-switch: próximo provável ${quem} → "${melhor.f.nome}" (${porque})`);
       anotarTroca(reg, { acao: 'trocou', previstos, de: atual?.nome, para: melhor.f.nome, paraK: melhor.f.k, motivo: porque });
-      avisar(`🔮 Próximo deve ser ${previstos[0].nick}: troquei para "${melhor.f.nome}"`);
+      avisar(`🔮 Próximo deve ser ${previstos[0].nick}${anti ? ' (contra o counter dele)' : ''}: troquei para "${melhor.f.nome}"`);
     }
   }
 
@@ -659,12 +864,15 @@
     const geral = cand.map((f) => ({ f, ...pontuar(f, previstos) })).sort((x, y) => y.nota - x.nota)[0];
     return `<div class="ppvp-destaque" style="background:#2a2a4a;border-color:#8a8aff">
         🔮 Último adversário: <b>${esc(ultimo.nick)}</b> (${ultimo.venci ? '<span class="ppvp-v">venceu</span>' : '<span class="ppvp-d">perdeu</span>'}) · ativos na fila e chance de vir agora:
-        ${previstos.map((x) => { const d = dificuldade(x.nick); return `<b>${esc(x.nick)}</b> ${Math.round(x.p * 100)}% <small class="${d > 0.55 ? 'ppvp-d' : d < 0.35 ? 'ppvp-v' : ''}">(você ganha ${Math.round((1 - d) * 100)}%${d > 0.55 ? ' · ameaça' : ''})</small>`; }).join(' · ')}
+        ${previstos.map((x) => { const d = dificuldade(x.nick); return `<b>${esc(x.nick)}</b> ${Math.round(x.p * 100)}% <small class="${d > 0.55 ? 'ppvp-d' : d < 0.35 ? 'ppvp-v' : ''}">(você ganha ${Math.round((1 - d) * 100)}%${d > 0.55 ? ' · ameaça' : ''}${(() => { const ab = aberturaDe(x.nick); return ab ? ` · abre de ${esc(ab.nome)} ${ab.vezes}/${ab.de}` : ''; })()})</small>`; }).join(' · ')}
         <small class="ppvp-aviso">(${esc(previstos[0].base)}; quem acabou de lutar com você pesa menos)</small>
         <table class="ppvp-tab" style="margin-top:4px"><tr><th>Contra</th><th>Melhor formação</th><th>Por quê</th></tr>
         ${previstos.map((x) => { const m = melhorPara(x.nick); return `<tr><td><b>${esc(x.nick)}</b></td><td>${m ? esc(m.f.nome) + (m.f.simulada ? ' <small class="ppvp-aviso">(simulada)</small>' : '') : '—'}</td><td>${m ? esc(m.r.fonte) : '—'}</td></tr>`; }).join('')}
         </table>
         ${geral ? `<div>Melhor contra o grupo (ponderado): <b>${esc(geral.f.nome)}</b>${geral.f.k === chaveAtual() ? ' <small class="ppvp-v">(já em uso)</small>' : ''}</div>` : ''}
+        ${(() => { const u = cfg.auto.ultimoAnti; if (!u) return ''; return `<div style="margin-top:4px">🧠 <b>Counter do counter</b> <small>(${quando(u.em)})</small> — você jogou ${esc(u.timeA.join(' → '))}. Counters previstos:
+          ${u.counters.map((c) => `<br>· <b>${esc(c.nick)}</b>: ${esc(c.x.join(' → '))} <small class="ppvp-aviso">(${esc(c.fonte)})</small>`).join('')}
+          ${u.escolhida ? `<br>➜ escolhida: <b>${esc(u.escolhida)}</b>` : ''}${u.avisos?.length ? `<br><small class="ppvp-aviso">${esc(u.avisos.join(' · '))}</small>` : ''}</div>`; })()}
         <div style="margin-top:4px">
           <button class="ppvp-bt ppvp-mini" data-a="calcAtivos" data-v="ordem" ${calcAtivos && !calcAtivos.erro ? 'disabled' : ''}>${calcAtivos === 'ordem' ? 'calculando…' : '🔬 melhor ordem do meu time contra os ativos'}</button>
           <button class="ppvp-bt ppvp-mini" data-a="calcAtivos" data-v="bolsa" ${calcAtivos && !calcAtivos.erro ? 'disabled' : ''}>${calcAtivos === 'bolsa' ? 'procurando…' : '🔬 melhor comp da bolsa contra os ativos'}</button>
@@ -743,6 +951,8 @@
         ${a.modo === 'prever' ? htmlPrevisao(todas) : ''}
         <div class="ppvp-linha">
           <span ${a.modo === 'prever' ? 'style="display:none"' : ''}>trocar depois de <input type="number" class="ppvp-in" data-c="autoVitorias" min="1" max="10" value="${esc(a.vitorias)}"> vitória(s) seguida(s)</span>
+          <label title="se o próximo provável sempre abre com o mesmo pokémon, quem vence esse 1×1 vai na frente (o resto mantém a ordem)"><input type="checkbox" data-a="autoAbertura" ${a.abertura ? 'checked' : ''}> abertura (contra quem sempre abre igual, põe na frente quem vence o abridor)</label>
+          <label title="quem te enfrentar vai montar um time para bater o que você acabou de jogar; o switch escolhe a formação que vence ESSE time (o counter do counter)"><input type="checkbox" data-a="autoAnti" ${a.contraCounter ? 'checked' : ''}> counter do counter (vencer o time que vão montar contra o que você jogou)</label>
           <label title="dá mais peso aos adversários que costumam te vencer (ex.: quem você perde quase sempre), em vez de tratar todos igual"><input type="checkbox" data-a="autoFoco" ${a.focoAmeacas ? 'checked' : ''}> foco nas ameaças (priorizar comps que ganham de quem te vence)</label>
           <label><input type="checkbox" data-a="autoNaDerrota" ${a.naDerrota ? 'checked' : ''}> sempre trocar depois de uma derrota${a.modo === 'prever' ? ' (a formação que perdeu sai, mesmo que pontue bem contra o grupo)' : ''}</label>
         </div>
@@ -852,7 +1062,7 @@
   .ppvp-sug ol{margin:2px 0 2px 18px;padding:0;font-size:12px}
   .ppvp-sug .ppvp-op{background:#3a2020;border-radius:8px;padding:6px 8px;margin-top:6px}
   .ppvp-bt.ppvp-on{background:#b04ad0;border-color:#f3c77a;color:#fff}
-  .ppvp-auto-bt{font-weight:700}.ppvp-auto-bt.ligado{background:#2f9a4a;border-color:#7fdc8f;color:#fff}
+  .ppvp-auto-bt{font-weight:700}.ppvp-auto-bt.ligado{background:#2f9a4a;border-color:#7fdc8f;color:#fff}.ppvp-auto-bt.pausado{background:#9a7a2f;border-color:#f3c77a;color:#fff}
   #ppvp-modal header .ppvp-x{background:#b04ad0;border:2px solid #f3c77a;color:#fff;border-radius:8px;width:30px;height:30px;cursor:pointer;font-weight:800}
   .ppvp-aviso{color:#f3c77a;font-size:11px}
   .ppvp-log{font:11px ui-monospace,monospace;white-space:pre-wrap;max-height:110px;overflow:auto;background:#2a1515;border-radius:8px;padding:6px 8px;margin:0}`;
@@ -876,6 +1086,8 @@
       }
     });
     fundo.addEventListener('change', (e) => {
+      if (e.target.dataset.c === 'apSeg') { cfg.autoPvp.maxSeguidas = Math.max(1, Math.min(10, Number(e.target.value) || 3)); salvarCfg(); pintar(); }
+      if (e.target.dataset.c === 'apCada') { cfg.autoPvp.checarCada = Math.max(2, Math.min(50, Number(e.target.value) || 10)); salvarCfg(); pintar(); }
       if (e.target.dataset.c === 'derrotas') { cfg.derrotas = Math.max(1, Math.min(10, Number(e.target.value) || 2)); salvarCfg(); pintar(); }
       if (e.target.dataset.c === 'stMinimo') { st.minimo = Math.max(1, Math.min(50, Number(e.target.value) || 1)); pintar(); }
       if (e.target.dataset.c === 'autoMinUso') { cfg.auto.minUso = Math.max(1, Math.min(20, Number(e.target.value) || 2)); salvarCfg(); pintar(); }
@@ -1015,7 +1227,9 @@
   function pintar() {
     const modal = document.getElementById('ppvp-modal');
     if (!modal || !estaAberto()) return;
+    const sx = cfg.sessao;
     const abas = `<span class="ppvp-linha" style="margin:0">
+        <button class="ppvp-bt ppvp-auto-bt ${sessaoRodando() ? 'ligado' : sx?.estado === 'pausada' ? 'pausado' : ''}" data-a="autoPvp" title="Fila automática + auto-switch. Pausa com ${cfg.autoPvp.maxSeguidas} derrotas seguidas; a cada ${cfg.autoPvp.checarCada} partidas sem saldo positivo, desliga de vez.">⚔ Auto PvP: ${sessaoRodando() ? `RODANDO ${placarSessao()}` : sx?.estado === 'pausada' ? `pausado ${placarSessao()} — retomar` : sx?.estado === 'encerrada' ? `encerrado ${placarSessao()}` : 'desligado'}</button>
         <button class="ppvp-bt ppvp-auto-bt ${cfg.auto.ativo ? 'ligado' : ''}" data-a="autoAtivo" title="Liga/desliga o auto-switch de formações">🔁 Auto-switch: ${cfg.auto.ativo ? 'LIGADO' : 'desligado'}</button>
         <button class="ppvp-bt ${aba === 'historico' ? 'ppvp-on' : ''}" data-a="aba" data-v="historico">Histórico</button>
         <button class="ppvp-bt ${aba === 'stats' ? 'ppvp-on' : ''}" data-a="aba" data-v="stats">Estatísticas</button>
@@ -1037,11 +1251,24 @@
     modal.innerHTML = `
       <header><span>⚔ PvP — ordem dos rivais<small>v${VERSAO_PVP}</small></span>${abas}</header>
       <section>
+        <h4>⚔ Auto PvP</h4>
+        <div class="ppvp-linha">
+          <button class="ppvp-sw ${sessaoRodando() ? 'on' : ''}" data-a="autoPvp"></button>
+          <b>Fila automática + auto-switch</b> · pausa com
+          <input type="number" class="ppvp-in" data-c="apSeg" min="1" max="10" value="${esc(cfg.autoPvp.maxSeguidas)}"> derrotas seguidas · a cada
+          <input type="number" class="ppvp-in" data-c="apCada" min="2" max="50" value="${esc(cfg.autoPvp.checarCada)}"> partidas sem saldo positivo, desliga de vez
+          ${cfg.sessao && cfg.sessao.estado !== 'encerrada' ? '<button class="ppvp-bt" data-a="autoPvpFim">encerrar sessão</button>' : ''}
+        </div>
+        <p style="margin:4px 0 0">${cfg.sessao
+          ? `Sessão desde ${quando(cfg.sessao.inicio)}: <b>${placarSessao()}</b> em ${cfg.sessao.v + cfg.sessao.d} partidas · ${sessaoRodando() ? `<b>rodando</b> · derrotas seguidas: <b>${cfg.sessao.seguidas}</b> · próxima checagem de saldo na partida <b>${(Math.floor((cfg.sessao.v + cfg.sessao.d) / cfg.autoPvp.checarCada) + 1) * cfg.autoPvp.checarCada}</b>` : `<b>${cfg.sessao.estado}</b> — ${esc(cfg.sessao.motivo)}`}`
+          : '<span class="ppvp-aviso">Nenhuma sessão ainda.</span>'}</p>
+      </section>
+      <section>
         <div class="ppvp-linha">
           <button class="ppvp-sw ${cfg.trava ? 'on' : ''}" data-a="trava"></button>
           <b>Desligar a fila automática depois de</b>
           <input type="number" class="ppvp-in" data-c="derrotas" min="1" max="10" value="${esc(cfg.derrotas)}">
-          <b>derrotas seguidas</b>
+          <b>derrotas seguidas</b> ${sessaoRodando() ? '<span class="ppvp-aviso">(em pausa enquanto o Auto PvP roda — valem as regras dele)</span>' : ''}
         </div>
         <p id="ppvp-status" style="margin:4px 0 0"></p>
       </section>
@@ -1334,7 +1561,9 @@
     if (!b) return;
     const a = b.dataset.a;
     if (a === 'fechar') return fechar();
-    if (a === 'trava') { cfg.trava = !cfg.trava; registrar(cfg.trava ? 'trava da fila ligada' : 'trava da fila desligada'); }
+    if (a === 'autoPvp') { if (sessaoRodando()) pararAutoPvp('pausada', 'desligado na mão'); else if (cfg.sessao?.estado !== 'encerrada' || confirm('A última sessão foi encerrada (saldo não positivo). Começar uma sessão nova do zero?')) iniciarAutoPvp(); }
+    else if (a === 'autoPvpFim') pararAutoPvp('encerrada', 'encerrada na mão');
+    else if (a === 'trava') { cfg.trava = !cfg.trava; registrar(cfg.trava ? 'trava da fila ligada' : 'trava da fila desligada'); }
     else if (a === 'limpar') { hist = []; salvarHist(); }
     else if (a === 'pag') { pagina = Math.max(0, pagina + Number(b.dataset.v)); return pintarTabela(); }
     else if (a === 'aba') { aba = b.dataset.v; if ((aba === 'rivais' && !ladder.length) || (aba === 'formacoes' && formacoes == null)) core.send({ t: 'pvp.info' }); }
@@ -1357,6 +1586,8 @@
     else if (a === 'autoNaDerrota') cfg.auto.naDerrota = b.checked;
     else if (a === 'autoModo') cfg.auto.modo = b.dataset.v;
     else if (a === 'autoFoco') cfg.auto.focoAmeacas = b.checked;
+    else if (a === 'autoAnti') cfg.auto.contraCounter = b.checked;
+    else if (a === 'autoAbertura') cfg.auto.abertura = b.checked;
     else if (a === 'calcAtivos') return calcularContraAtivos(b.dataset.v);
     else if (a === 'autoFora') {
       const k = b.dataset.v;
