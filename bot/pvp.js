@@ -14,7 +14,7 @@
 //    servidor só puxa a próxima partida 20 s depois do fim, então dá tempo.
 (() => {
   'use strict';
-  const VERSAO_PVP = '1.10.1';
+  const VERSAO_PVP = '1.10.2';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -402,7 +402,8 @@
 
   /**
    * Quão boa uma formação deve ser contra um jogador: o placar real contra ele (com prior); sem
-   * jogo contra ele, a simulação guardada na aba Rivais (se for a mesma escalação); sem nada, a
+   * jogo contra ele, a simulação guardada (vale no máximo 0,6 — a simulação já errou feio contra o
+   * real, então nunca passa à frente de um placar real bom); sem nada, a
    * taxa geral da formação, um pouco descontada (não se sabe nada do confronto).
    */
   function notaVs(f, nick) {
@@ -410,11 +411,11 @@
     if (pv.n) return { nota: (pv.v + 1) / (pv.n + 2), fonte: `${pv.v}V ${pv.n - pv.v}D contra ele` };
     const salvo = melhores[String(nick).toLowerCase()];
     for (const o of [salvo?.ordem?.r, ...(salvo?.bolsa?.r ?? [])].filter(Boolean)) {
-      if (idsDe(o)?.join(',') === f.k) return { nota: 0.5 + 0.35 * (o.vitorias / Math.max(1, o.total)), fonte: `simulação: vence ${o.vitorias}/${o.total}` };
+      if (idsDe(o)?.join(',') === f.k) return { nota: 0.4 + 0.2 * (o.vitorias / Math.max(1, o.total)), fonte: `simulação: vence ${o.vitorias}/${o.total}` };
     }
     for (const o of melhores.__ativos__?.r ?? []) {
       const pr = o.porRival?.find((x) => mesmoNick(x.nick, nick));
-      if (pr && idsDe(o)?.join(',') === f.k) return { nota: 0.5 + 0.35 * (pr.vitorias / Math.max(1, pr.total)), fonte: `simulação: vence ${pr.vitorias}/${pr.total}` };
+      if (pr && idsDe(o)?.join(',') === f.k) return { nota: 0.4 + 0.2 * (pr.vitorias / Math.max(1, pr.total)), fonte: `simulação: vence ${pr.vitorias}/${pr.total}` };
     }
     return { nota: notaF(f) * 0.9, fonte: `geral ${f.v}V ${f.n - f.v}D` };
   }
@@ -537,22 +538,32 @@
     }
     const cand = candidatasPara(previstos);
     const atual = cand.find((f) => f.k === chaveAtual()) ?? minhasFormacoes().find((f) => f.k === chaveAtual());
-    const notas = cand.map((f) => ({ f, ...pontuar(f, previstos) })).sort((x, y) => y.nota - x.nota);
+    // Perdeu (e "trocar após derrota" ligado): a formação que acabou de perder SAI — entra a melhor
+    // das outras, mesmo que no papel a atual ainda pontue mais contra o grupo.
+    const forcar = !reg.venci && cfg.auto.naDerrota;
+    const notas = cand.filter((f) => !forcar || f.k !== chaveAtual())
+      .map((f) => ({ f, ...pontuar(f, previstos) })).sort((x, y) => y.nota - x.nota);
     const melhor = notas[0];
     const notaAtual = atual ? pontuar(atual, previstos).nota : 0;
     const quem = previstos.slice(0, 2).map((x) => `${x.nick} (${Math.round(x.p * 100)}%)`).join(', ');
-    if (!melhor || melhor.f.k === chaveAtual() || melhor.nota < notaAtual + 0.02) {
+    if (forcar && !melhor) {
+      registrar(`auto-switch: perdeu para ${reg.nick}, mas não há outra formação na rotação para entrar`);
+      anotarTroca(reg, { acao: 'sem opção', previstos, de: atual?.nome, motivo: 'derrota, mas sem outra formação' });
+      return;
+    }
+    if (!forcar && (!melhor || melhor.f.k === chaveAtual() || melhor.nota < notaAtual + 0.02)) {
       registrar(`auto-switch: próximo provável ${quem} — a equipe atual já é a melhor para ele${atual ? ` (${pontuar(atual, previstos).det[0] ?? ''})` : ''}`);
       anotarTroca(reg, { acao: 'manteve', previstos, de: atual?.nome, para: atual?.nome, motivo: 'a atual já é a melhor contra eles' });
       return;
     }
-    if (aplicarEquipe(melhor.f.ids, `próximo provável: ${previstos[0].nick}`)) {
+    if (aplicarEquipe(melhor.f.ids, forcar ? `derrota para ${reg.nick}` : `próximo provável: ${previstos[0].nick}`)) {
       cfg.auto.usoEm[melhor.f.k] = Date.now();
       reg.trocouDepois = true;
       salvarHist();
       salvarCfg();
-      registrar(`🔮 auto-switch: próximo provável ${quem} → "${melhor.f.nome}" (${melhor.det.join(' · ')})`);
-      anotarTroca(reg, { acao: 'trocou', previstos, de: atual?.nome, para: melhor.f.nome, paraK: melhor.f.k, motivo: melhor.det.join(' · ') });
+      const porque = `${forcar ? `perdeu para ${reg.nick} — a formação que perdeu saiu · ` : ''}${melhor.det.join(' · ')}`;
+      registrar(`🔮 auto-switch: próximo provável ${quem} → "${melhor.f.nome}" (${porque})`);
+      anotarTroca(reg, { acao: 'trocou', previstos, de: atual?.nome, para: melhor.f.nome, paraK: melhor.f.k, motivo: porque });
       avisar(`🔮 Próximo deve ser ${previstos[0].nick}: troquei para "${melhor.f.nome}"`);
     }
   }
@@ -716,10 +727,9 @@
           <button class="ppvp-bt ${a.modo !== 'prever' ? 'ppvp-on' : ''}" data-a="autoModo" data-v="rotacao">🔁 rotação simples</button>
         </div>
         ${a.modo === 'prever' ? htmlPrevisao(todas) : ''}
-        <div class="ppvp-linha" ${a.modo === 'prever' ? 'style="display:none"' : ''}>
-          trocar depois de <input type="number" class="ppvp-in" data-c="autoVitorias" min="1" max="10" value="${esc(a.vitorias)}"> vitória(s) seguida(s)
-          <span style="width:10px"></span>
-          <label><input type="checkbox" data-a="autoNaDerrota" ${a.naDerrota ? 'checked' : ''}> trocar logo após uma derrota</label>
+        <div class="ppvp-linha">
+          <span ${a.modo === 'prever' ? 'style="display:none"' : ''}>trocar depois de <input type="number" class="ppvp-in" data-c="autoVitorias" min="1" max="10" value="${esc(a.vitorias)}"> vitória(s) seguida(s)</span>
+          <label><input type="checkbox" data-a="autoNaDerrota" ${a.naDerrota ? 'checked' : ''}> sempre trocar depois de uma derrota${a.modo === 'prever' ? ' (a formação que perdeu sai, mesmo que pontue bem contra o grupo)' : ''}</label>
         </div>
         <div class="ppvp-linha">formação conta depois de <input type="number" class="ppvp-in" data-c="autoMinUso" min="1" max="20" value="${esc(a.minUso)}"> duelo(s)</div>
         <p style="margin:4px 0 0">Em uso: <b>${atual ? `${esc(atual.nome)} (${atual.v}V ${atual.n - atual.v}D)` : 'uma equipe ainda sem duelos registrados'}</b>
