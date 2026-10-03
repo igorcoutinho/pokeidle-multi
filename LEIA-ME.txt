@@ -71,6 +71,11 @@ PvP — botão ⚔ PvP
     também entram). Ligado, depois de cada partida: N vitórias seguidas (1 por padrão) → troca,
     porque o rival vai counterar; derrota → troca (opcional). Entra a de melhor taxa, sem repetir
     a atual, aplicada direto na equipe de PvP. Dá para tirar formações da rotação.
+  - Modo 🔮 prever o próximo adversário (padrão do auto-switch): o pareamento alterna entre
+    poucos jogadores, então o app aprende, no histórico, quem costuma vir depois de quem (A → B).
+    Depois de cada partida, prevê o próximo e põe a formação que mais ganha DELE (placar real
+    contra ele; sem isso, a simulação guardada em Rivais; sem nada, a taxa geral).
+    O modo 🔁 rotação simples (trocar após N vitórias) continua disponível.
   - Aba Estatísticas: destaque 🏆 da sua comp mais efetiva no geral, suas composições (duelos, V-D, %, pontos, contra qual comp rival vai
     melhor e pior), as comps rivais (seu resultado e qual comp sua mais vence cada uma) e os
     pokémon (seus com maior % de vitória e os rivais que mais te derrotam). Por período.

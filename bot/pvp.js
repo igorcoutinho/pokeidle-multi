@@ -14,7 +14,7 @@
 //    servidor só puxa a próxima partida 20 s depois do fim, então dá tempo.
 (() => {
   'use strict';
-  const VERSAO_PVP = '1.6.0';
+  const VERSAO_PVP = '1.7.0';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -44,7 +44,7 @@
     // formação (o rival vai counterar) e, se `naDerrota`, logo após perder. `fora` = slots do
     // armário que não entram na rotação; `usoEm` = quando cada slot foi usado por último.
     const padrao = { trava: true, derrotas: 2, seguidas: 0, log: [],
-      auto: { ativo: false, vitorias: 1, naDerrota: true, minUso: 2, foraKeys: [], seguidas: 0, usoEm: {} } };
+      auto: { ativo: false, modo: 'prever', vitorias: 1, naDerrota: true, minUso: 2, foraKeys: [], seguidas: 0, usoEm: {} } };
     try {
       const s = JSON.parse(localStorage.getItem(CHAVE_CFG)) ?? {};
       return { ...padrao, ...s, auto: { ...padrao.auto, ...(s.auto ?? {}) } };
@@ -324,9 +324,99 @@
    * venceu N seguidas com a mesma formação → troca (o rival vai counterar essa); perdeu → troca
    * (se ligado). Entra a melhor das suas formações, sem ser a atual, aplicada direto na equipe.
    */
+  // ---------------------------------------------------------------- prever o próximo adversário
+  const mesmoNick = (a, b) => String(a ?? '').toLowerCase() === String(b ?? '').toLowerCase();
+
+  /**
+   * Quem deve ser o próximo adversário. O pareamento alterna entre poucos jogadores, então conta,
+   * no histórico, quem veio logo DEPOIS de cada adversário (A → B). Sem dados para o último,
+   * usa os adversários recentes mais frequentes (fora quem acabou de lutar), com peso para os
+   * mais recentes. Devolve [{ nick, p }] do mais provável para o menos.
+   */
+  function preverProximo(ultimoNick) {
+    const seq = [...hist].sort((x, y) => x.em - y.em);
+    const trans = new Map();
+    for (let i = 0; i + 1 < seq.length; i++) {
+      if (seq[i + 1].em - seq[i].em > 2 * 3600 * 1000) continue; // sessões diferentes não contam
+      const de = String(seq[i].nick).toLowerCase();
+      const m = trans.get(de) ?? new Map();
+      m.set(seq[i + 1].nick, (m.get(seq[i + 1].nick) ?? 0) + 1);
+      trans.set(de, m);
+    }
+    const daqui = trans.get(String(ultimoNick).toLowerCase());
+    const total = daqui ? [...daqui.values()].reduce((a, b) => a + b, 0) : 0;
+    if (total >= 2) {
+      return [...daqui.entries()].map(([nick, c]) => ({ nick, p: c / total, base: 'sequência' })).sort((a, b) => b.p - a.p);
+    }
+    const recentes = seq.slice(-12).filter((h) => !mesmoNick(h.nick, ultimoNick));
+    const peso = new Map();
+    recentes.forEach((h, i) => peso.set(h.nick, (peso.get(h.nick) ?? 0) + 1 + i / recentes.length));
+    const soma = [...peso.values()].reduce((a, b) => a + b, 0);
+    return [...peso.entries()].map(([nick, w]) => ({ nick, p: w / soma, base: 'recentes' })).sort((a, b) => b.p - a.p);
+  }
+
+  /** O placar de uma formação contra um jogador, no seu histórico. */
+  function placarVs(k, nick) {
+    let n = 0, v = 0;
+    for (const h of hist) {
+      if (!mesmoNick(h.nick, nick)) continue;
+      const ids = idsDoDuelo(h);
+      if (ids?.join(',') !== k) continue;
+      n++; if (h.venci) v++;
+    }
+    return { n, v };
+  }
+
+  /**
+   * Quão boa uma formação deve ser contra um jogador: o placar real contra ele (com prior); sem
+   * jogo contra ele, a simulação guardada na aba Rivais (se for a mesma escalação); sem nada, a
+   * taxa geral da formação, um pouco descontada (não se sabe nada do confronto).
+   */
+  function notaVs(f, nick) {
+    const pv = placarVs(f.k, nick);
+    if (pv.n) return { nota: (pv.v + 1) / (pv.n + 2), fonte: `${pv.v}V ${pv.n - pv.v}D contra ele` };
+    const salvo = melhores[String(nick).toLowerCase()];
+    for (const o of [salvo?.ordem?.r, ...(salvo?.bolsa?.r ?? [])].filter(Boolean)) {
+      if (idsDe(o)?.join(',') === f.k) return { nota: 0.5 + 0.35 * (o.vitorias / Math.max(1, o.total)), fonte: `simulação: vence ${o.vitorias}/${o.total}` };
+    }
+    return { nota: notaF(f) * 0.9, fonte: `geral ${f.v}V ${f.n - f.v}D` };
+  }
+
+  /** As candidatas: suas formações na rotação + a melhor comp simulada contra o próximo provável. */
+  function candidatasPara(previstos) {
+    const todas = minhasFormacoes();
+    const lista = todas.filter((f) => naRotacao(f));
+    const naBolsa = new Set((core.eu?.pokemons ?? []).map((p) => p.id));
+    for (const { nick } of previstos.slice(0, 2)) {
+      const salvo = melhores[String(nick).toLowerCase()];
+      for (const o of [salvo?.ordem?.r, ...(salvo?.bolsa?.r ?? []).slice(0, 1)].filter(Boolean)) {
+        const ids = idsDe(o);
+        if (!ids || !ids.every((id) => naBolsa.has(id))) continue;
+        const k = ids.join(',');
+        if (lista.some((f) => f.k === k)) continue;
+        const ja = todas.find((f) => f.k === k);
+        lista.push(ja ?? { k, ids, n: 0, v: 0, ultimo: 0, armario: null, simulada: true, nome: `Anti ${nick}` });
+      }
+    }
+    return lista;
+  }
+
+  /** Nota de cada candidata contra a distribuição dos próximos prováveis. */
+  function pontuar(f, previstos) {
+    let soma = 0, peso = 0;
+    const det = [];
+    for (const { nick, p } of previstos.slice(0, 3)) {
+      const r = notaVs(f, nick);
+      soma += p * r.nota; peso += p;
+      det.push(`${nick}: ${r.fonte}`);
+    }
+    return { nota: peso ? soma / peso : notaF(f), det };
+  }
+
   function autoSwitch(reg) {
     const a = cfg.auto;
     if (!a.ativo) return;
+    if (a.modo === 'prever') return autoSwitchPrevendo(reg);
     const todas = minhasFormacoes();
     const atual = todas.find((f) => f.k === chaveAtual());
     const nomeAtual = atual ? `"${atual.nome}" (${atual.v}V ${atual.n - atual.v}D)` : 'a equipe atual';
@@ -358,6 +448,36 @@
     salvarCfg();
   }
 
+  /**
+   * Modo "prever": depois de CADA partida, olha quem deve vir agora (pela sequência de adversários)
+   * e põe a formação que mais ganha dele. Só troca se a escolhida for melhor que a atual contra ele.
+   */
+  function autoSwitchPrevendo(reg) {
+    const previstos = preverProximo(reg.nick);
+    if (!previstos.length) {
+      registrar('auto-switch: ainda não há adversários suficientes no histórico para prever o próximo');
+      return;
+    }
+    const cand = candidatasPara(previstos);
+    const atual = cand.find((f) => f.k === chaveAtual()) ?? minhasFormacoes().find((f) => f.k === chaveAtual());
+    const notas = cand.map((f) => ({ f, ...pontuar(f, previstos) })).sort((x, y) => y.nota - x.nota);
+    const melhor = notas[0];
+    const notaAtual = atual ? pontuar(atual, previstos).nota : 0;
+    const quem = previstos.slice(0, 2).map((x) => `${x.nick} (${Math.round(x.p * 100)}%)`).join(', ');
+    if (!melhor || melhor.f.k === chaveAtual() || melhor.nota < notaAtual + 0.02) {
+      registrar(`auto-switch: próximo provável ${quem} — a equipe atual já é a melhor para ele${atual ? ` (${pontuar(atual, previstos).det[0] ?? ''})` : ''}`);
+      return;
+    }
+    if (aplicarEquipe(melhor.f.ids, `próximo provável: ${previstos[0].nick}`)) {
+      cfg.auto.usoEm[melhor.f.k] = Date.now();
+      reg.trocouDepois = true;
+      salvarHist();
+      salvarCfg();
+      registrar(`🔮 auto-switch: próximo provável ${quem} → "${melhor.f.nome}" (${melhor.det.join(' · ')})`);
+      avisar(`🔮 Próximo deve ser ${previstos[0].nick}: troquei para "${melhor.f.nome}"`);
+    }
+  }
+
   const idsDe = (o) => (o?.ordem?.length && o.ordem.every((p) => p.id != null) ? o.ordem.map((p) => p.id) : null);
   /** Os botões "aplicar agora" e "salvar no armário" de uma ordem sugerida. */
   function botoesAplicar(o, nome) {
@@ -365,6 +485,26 @@
     if (!ids) return '<small class="ppvp-aviso">(tem pokémon estimado — não dá para aplicar)</small>';
     const v = esc(JSON.stringify({ ids, nome }));
     return `<button class="ppvp-bt ppvp-mini" data-a="aplicar" data-v="${v}">✅ aplicar agora</button><button class="ppvp-bt ppvp-mini" data-a="armario" data-v="${v}">💾 salvar no armário</button>`;
+  }
+
+  /** O quadro do modo "prever": quem deve vir, e qual formação vai melhor contra cada um. */
+  function htmlPrevisao(todas) {
+    const ultimo = [...hist].sort((x, y) => y.em - x.em)[0];
+    if (!ultimo) return '<p class="ppvp-aviso">Jogue alguns duelos para o app conhecer a sequência de adversários.</p>';
+    const previstos = preverProximo(ultimo.nick).slice(0, 3);
+    if (!previstos.length) return `<p class="ppvp-aviso">Último adversário: <b>${esc(ultimo.nick)}</b> — ainda não há outros adversários recentes para prever o próximo.</p>`;
+    const cand = candidatasPara(previstos);
+    const melhorPara = (nick) => cand.map((f) => ({ f, r: notaVs(f, nick) })).sort((x, y) => y.r.nota - x.r.nota)[0];
+    const geral = cand.map((f) => ({ f, ...pontuar(f, previstos) })).sort((x, y) => y.nota - x.nota)[0];
+    return `<div class="ppvp-destaque" style="background:#2a2a4a;border-color:#8a8aff">
+        🔮 Último adversário: <b>${esc(ultimo.nick)}</b> (${ultimo.venci ? '<span class="ppvp-v">venceu</span>' : '<span class="ppvp-d">perdeu</span>'}) · próximo provável:
+        ${previstos.map((x) => `<b>${esc(x.nick)}</b> ${Math.round(x.p * 100)}%`).join(' · ')}
+        <small class="ppvp-aviso">(${previstos[0].base === 'sequência' ? 'pela sequência de adversários' : 'pelos adversários recentes'})</small>
+        <table class="ppvp-tab" style="margin-top:4px"><tr><th>Contra</th><th>Melhor formação</th><th>Por quê</th></tr>
+        ${previstos.map((x) => { const m = melhorPara(x.nick); return `<tr><td><b>${esc(x.nick)}</b></td><td>${m ? esc(m.f.nome) + (m.f.simulada ? ' <small class="ppvp-aviso">(simulada)</small>' : '') : '—'}</td><td>${m ? esc(m.r.fonte) : '—'}</td></tr>`; }).join('')}
+        </table>
+        ${geral ? `<div>Se trocar agora, entra: <b>${esc(geral.f.nome)}</b>${geral.f.k === chaveAtual() ? ' <small class="ppvp-v">(já em uso)</small>' : ''}</div>` : ''}
+      </div>`;
   }
 
   function htmlFormacoes() {
@@ -377,7 +517,7 @@
       const elegivel = f.n >= Math.max(1, Number(a.minUso) || 1) || f.armario;
       return `<tr class="${f === atual ? 'ppvp-em-uso' : ''}">
         <td><input type="checkbox" data-a="autoFora" data-v="${esc(f.k)}" ${a.foraKeys.includes(f.k) ? '' : 'checked'} ${elegivel ? '' : 'disabled'} title="entra na rotação do auto-switch"></td>
-        <td><b>${esc(f.nome)}</b>${f === atual ? ' <small class="ppvp-v">● em uso</small>' : ''}${f === prox && a.ativo ? ' <small class="ppvp-top">próxima</small>' : ''}
+        <td><b>${esc(f.nome)}</b>${f === atual ? ' <small class="ppvp-v">● em uso</small>' : ''}${f === prox && a.ativo && a.modo !== 'prever' ? ' <small class="ppvp-top">próxima</small>' : ''}
           <br><small class="ppvp-aviso">${f.armario ? `armário (vaga ${f.armario.slot})` : 'do seu histórico'}${elegivel ? '' : ` · poucos jogos (mín. ${a.minUso})`}</small></td>
         <td style="white-space:normal">${nomesDosIds(f.ids).map((x, i) => `<b style="color:#f3c77a">${i + 1}</b> ${esc(x)}`).join(' → ')}</td>
         <td>${f.n ? `<span class="ppvp-v">${f.v}</span>-<span class="ppvp-d">${f.n - f.v}</span> · ${pctHtml(f.v, f.n)}` : '<span class="ppvp-aviso">sem jogos</span>'}</td>
@@ -392,14 +532,19 @@
           <span class="ppvp-aviso">troca a equipe de PvP sozinho entre as formações que você costuma usar, para antecipar o counter do rival</span>
         </div>
         <div class="ppvp-linha">
+          <b style="color:#f3c77a;font-size:11px;text-transform:uppercase">Modo</b>
+          <button class="ppvp-bt ${a.modo === 'prever' ? 'ppvp-on' : ''}" data-a="autoModo" data-v="prever">🔮 prever o próximo adversário</button>
+          <button class="ppvp-bt ${a.modo !== 'prever' ? 'ppvp-on' : ''}" data-a="autoModo" data-v="rotacao">🔁 rotação simples</button>
+        </div>
+        ${a.modo === 'prever' ? htmlPrevisao(todas) : ''}
+        <div class="ppvp-linha" ${a.modo === 'prever' ? 'style="display:none"' : ''}>
           trocar depois de <input type="number" class="ppvp-in" data-c="autoVitorias" min="1" max="10" value="${esc(a.vitorias)}"> vitória(s) seguida(s)
           <span style="width:10px"></span>
           <label><input type="checkbox" data-a="autoNaDerrota" ${a.naDerrota ? 'checked' : ''}> trocar logo após uma derrota</label>
-          <span style="width:10px"></span>
-          formação conta depois de <input type="number" class="ppvp-in" data-c="autoMinUso" min="1" max="20" value="${esc(a.minUso)}"> duelo(s)
         </div>
+        <div class="ppvp-linha">formação conta depois de <input type="number" class="ppvp-in" data-c="autoMinUso" min="1" max="20" value="${esc(a.minUso)}"> duelo(s)</div>
         <p style="margin:4px 0 0">Em uso: <b>${atual ? `${esc(atual.nome)} (${atual.v}V ${atual.n - atual.v}D)` : 'uma equipe ainda sem duelos registrados'}</b>
-          · vitórias seguidas: <b>${a.seguidas ?? 0}</b>${prox ? ` · próxima troca: <b>${esc(prox.nome)}</b>` : ''}</p>
+          ${a.modo === 'prever' ? '' : `· vitórias seguidas: <b>${a.seguidas ?? 0}</b>${prox ? ` · próxima troca: <b>${esc(prox.nome)}</b>` : ''}`}</p>
         <p class="ppvp-aviso" style="margin:4px 0 0">As formações saem sozinhas do seu histórico de duelos: cada escalação exata (mesmos pokémon, mesma ordem) que você usou, com o V-D recontado a cada partida.
           A próxima é a de melhor taxa (com peso para quem tem poucos jogos), sem repetir a atual; empate = a que está há mais tempo sem uso.
           O jogo puxa a próxima partida 20 s depois do fim, então a troca entra antes dela.</p>
@@ -929,6 +1074,7 @@
     }
     else if (a === 'autoAtivo') { cfg.auto.ativo = !cfg.auto.ativo; cfg.auto.seguidas = 0; registrar(cfg.auto.ativo ? '🔁 auto-switch LIGADO' : 'auto-switch desligado'); }
     else if (a === 'autoNaDerrota') cfg.auto.naDerrota = b.checked;
+    else if (a === 'autoModo') cfg.auto.modo = b.dataset.v;
     else if (a === 'autoFora') {
       const k = b.dataset.v;
       cfg.auto.foraKeys = b.checked ? cfg.auto.foraKeys.filter((x) => x !== k) : [...new Set([...cfg.auto.foraKeys, k])];
