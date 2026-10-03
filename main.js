@@ -41,7 +41,7 @@ function semearPastaDoBot() {
   }
 }
 // core.js entra antes do jogo; o resto é a parte trocada a quente, injetada como um bloco só.
-const ARQUIVOS_BOT = ['core.js', 'logica.js', 'analise.js', 'pvp.js', 'shiny.js'];
+const ARQUIVOS_BOT = ['core.js', 'logica.js', 'analise.js', 'pvp.js', 'shiny.js', 'vendas.js', 'itens.js'];
 const lerLogica = () => ARQUIVOS_BOT.slice(1).map(lerBot).join('\n;\n');
 const lerBot = (f) => {
   try { return fs.readFileSync(path.join(PASTA_BOT, f), 'utf8'); }

@@ -105,6 +105,8 @@
         <input class="nome" value="${c.nome.replace(/"/g, '&quot;')}" spellcheck="false" title="Clique para renomear">
         <span class="esp"></span>
         <button data-a="shiny" class="eco" title="Caçador de shiny: registra os bichos do mapa e arremessa Great Ball quando um shiny cai">✨ Shiny</button>
+        <button data-a="itens" title="Itens principais (Boss Token, peças de TM, fragmentos) e histórico de drops por boss">📦 Itens</button>
+        <button data-a="vendas" title="Relatório de compras e vendas no Mercado: preço médio, taxa, lucro e preço de venda">💰 Vendas</button>
         <button data-a="pvp" class="eco" title="PvP: ordem que cada rival usou e trava da fila automática">⚔ PvP</button>
         <button data-a="time" title="Análise do time para PvP: quem colocar no lugar de quem">📊 Time</button>
         <button data-a="eco" class="eco" title="Ligar/desligar o Modo Economia do jogo nesta conta">🍃 Eco</button>
@@ -170,6 +172,10 @@
         wv.setZoomFactor(c.zoom); pintar(); salvar();
       } else if (a === 'shiny') {
         wv.executeJavaScript('window.__pokeShiny?.abrir()').catch(() => aviso('Shiny: a conta ainda está carregando.'));
+      } else if (a === 'itens') {
+        wv.executeJavaScript('window.__pokeItens?.abrir()').catch(() => aviso('Itens: a conta ainda está carregando.'));
+      } else if (a === 'vendas') {
+        wv.executeJavaScript('window.__pokeVendas?.abrir()').catch(() => aviso('Vendas: a conta ainda está carregando.'));
       } else if (a === 'pvp') {
         wv.executeJavaScript('window.__pokePvp?.abrir()').catch(() => aviso('PvP: a conta ainda está carregando.'));
       } else if (a === 'time') {
