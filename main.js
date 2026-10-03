@@ -237,6 +237,21 @@ ipcMain.on('pb:core', (ev) => { ev.returnValue = lerBot('core.js'); });
 ipcMain.handle('pb:logica', () => lerLogica());
 ipcMain.handle('multi:cfg', () => ({ ...lerCfg(), nContas: N_CONTAS, urlJogo: URL_JOGO, pastaBot: PASTA_BOT, rotom }));
 ipcMain.handle('multi:abrirCockpit', (_e, n) => abrirCockpit(n));
+
+// Limite de capturas do caçador de shiny, POR INSTALAÇÃO (não por conta): mora no multi.json
+// deste app, longe das sessões do jogo — "Sair" de uma conta não zera. `limiteShiny` ausente =
+// 3 (o padrão de quem recebe o .exe); 0 = sem limite.
+const LIMITE_SHINY_PADRAO = 3;
+const infoShiny = () => {
+  const c = lerCfg();
+  return { limite: Number(c.limiteShiny ?? LIMITE_SHINY_PADRAO) || 0, capturados: Number(c.shinyCapturados) || 0 };
+};
+ipcMain.on('multi:shinyInfo', (ev) => { ev.returnValue = infoShiny(); });
+ipcMain.on('multi:shinySomar', (ev) => {
+  const c = lerCfg();
+  salvarCfg({ ...c, shinyCapturados: (Number(c.shinyCapturados) || 0) + 1 });
+  ev.returnValue = infoShiny();
+});
 ipcMain.handle('multi:salvar', (_e, parcial) => { salvarCfg({ ...lerCfg(), ...parcial }); return true; });
 ipcMain.handle('multi:abrirPastaBot', () => shell.openPath(PASTA_BOT));
 ipcMain.handle('multi:sairDaConta', async (_e, n) => {
