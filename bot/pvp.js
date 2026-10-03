@@ -14,7 +14,7 @@
 //    servidor só puxa a próxima partida 20 s depois do fim, então dá tempo.
 (() => {
   'use strict';
-  const VERSAO_PVP = '1.8.1';
+  const VERSAO_PVP = '1.8.2';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -532,6 +532,26 @@
   }
 
   let calcAtivos = null; // 'ordem' | 'bolsa' | { erro } enquanto calcula
+  let formAberta = null;  // formação com o "contra quem" aberto
+
+  /** O placar de uma formação por jogador: contra quem ela foi mais útil (e contra quem falhou). */
+  function htmlContraQuem(f) {
+    const porNick = new Map();
+    for (const h of hist) {
+      if (idsDoDuelo(h)?.join(',') !== f.k) continue;
+      const k = String(h.nick).toLowerCase();
+      const r = porNick.get(k) ?? { nick: h.nick, n: 0, v: 0, delta: 0, ultimo: 0 };
+      r.n++; if (h.venci) r.v++; r.delta += h.delta || 0; r.ultimo = Math.max(r.ultimo, h.em);
+      porNick.set(k, r);
+    }
+    const lista = [...porNick.values()].sort((a, b) => b.v - a.v || pct(b.v, b.n) - pct(a.v, a.n) || a.n - b.n);
+    if (!lista.length) return '<div class="ppvp-sug ppvp-aviso">Sem duelos registrados com esta formação no histórico (o placar dela vem do armário do jogo).</div>';
+    return `<div class="ppvp-sug"><b>👥 Contra quem "${esc(f.nome)}" foi mais útil</b>
+      <table class="ppvp-tab" style="margin-top:4px"><tr><th>Jogador</th><th>Duelos</th><th>V-D</th><th>%</th><th>Pontos</th><th>Última vez</th></tr>
+      ${lista.map((r) => `<tr><td><b>${esc(r.nick)}</b></td><td>${r.n}</td><td><span class="ppvp-v">${r.v}</span>-<span class="ppvp-d">${r.n - r.v}</span></td>
+        <td>${pctHtml(r.v, r.n)}</td><td class="${r.delta >= 0 ? 'ppvp-v' : 'ppvp-d'}">${r.delta >= 0 ? '+' : ''}${r.delta}</td><td>${dataCurta(r.ultimo)}</td></tr>`).join('')}
+      </table></div>`;
+  }
   /** Simula as ordens (da equipe atual, ou da bolsa) contra TODOS os ativos de uma vez, com os pesos. */
   async function calcularContraAtivos(tipo) {
     if (!window.__pokeAnalise?.sugerirContraVarios) { calcAtivos = { erro: 'o módulo 📊 Time não está carregado nesta conta' }; return pintar(); }
@@ -609,7 +629,9 @@
         <td style="white-space:normal">${nomesDosIds(f.ids).map((x, i) => `<b style="color:#f3c77a">${i + 1}</b> ${esc(x)}`).join(' → ')}</td>
         <td>${f.n ? `<span class="ppvp-v">${f.v}</span>-<span class="ppvp-d">${f.n - f.v}</span> · ${pctHtml(f.v, f.n)}` : '<span class="ppvp-aviso">sem jogos</span>'}</td>
         <td>${f.ultimo || a.usoEm[f.k] ? dataCurta(Math.max(f.ultimo, a.usoEm[f.k] ?? 0)) : '—'}</td>
-        <td><button class="ppvp-bt ppvp-mini" data-a="usarForm" data-v="${esc(f.k)}" ${f === atual ? 'disabled' : ''}>usar agora</button></td></tr>`;
+        <td><button class="ppvp-bt ppvp-mini" data-a="usarForm" data-v="${esc(f.k)}" ${f === atual ? 'disabled' : ''}>usar agora</button>
+          <button class="ppvp-bt ppvp-mini" data-a="contraQuem" data-v="${esc(f.k)}">👥 ${formAberta === f.k ? 'fechar' : 'contra quem'}</button></td></tr>
+        ${formAberta === f.k ? `<tr><td colspan="6">${htmlContraQuem(f)}</td></tr>` : ''}`;
     }).join('');
     return `
       <section>
@@ -1158,6 +1180,7 @@
       else salvarNoArmario(d.ids, d.nome);
       setTimeout(() => core.send({ t: 'pvp.info' }), 800); // traz o armário/equipe atualizados
     }
+    else if (a === 'contraQuem') formAberta = formAberta === b.dataset.v ? null : b.dataset.v;
     else if (a === 'usarForm') {
       const f = minhasFormacoes().find((x) => x.k === b.dataset.v);
       if (f && aplicarEquipe(f.ids, `formação "${f.nome}" (manual)`)) { cfg.auto.usoEm[f.k] = Date.now(); cfg.auto.seguidas = 0; }
