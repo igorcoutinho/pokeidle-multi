@@ -65,10 +65,12 @@ PvP — botão ⚔ PvP
     ele: 💡 melhor ordem da sua equipe atual ou 🔍 melhor comp da bolsa (5 dos seus 8 mais fortes).
   - Aplicar: nas sugestões (Rivais, 💡 das derrotas, comps das Estatísticas) há "✅ aplicar agora"
     (troca a equipe de PvP) e "💾 salvar no armário" (guarda como formação do jogo).
-  - Aba Formações (auto-switch): mostra o armário do jogo (5 formações, com o placar de cada
-    uma). Ligado, depois de cada partida: N vitórias seguidas com a mesma formação (1 por padrão)
-    → troca, porque o rival vai counterar; derrota → troca (opcional). Entra primeiro uma
-    formação nova (para ser testada), senão a de melhor taxa; dá para tirar formações da rotação.
+  - Aba Formações (auto-switch): as formações saem SOZINHAS do seu histórico — cada escalação
+    exata (mesmos pokémon, mesma ordem) que você usou pelo menos 2 vezes (ajustável), com a
+    efetividade (V-D, %) recontada a cada partida. Não precisa salvar nada (as do armário do jogo
+    também entram). Ligado, depois de cada partida: N vitórias seguidas (1 por padrão) → troca,
+    porque o rival vai counterar; derrota → troca (opcional). Entra a de melhor taxa, sem repetir
+    a atual, aplicada direto na equipe de PvP. Dá para tirar formações da rotação.
   - Aba Estatísticas: destaque 🏆 da sua comp mais efetiva no geral, suas composições (duelos, V-D, %, pontos, contra qual comp rival vai
     melhor e pior), as comps rivais (seu resultado e qual comp sua mais vence cada uma) e os
     pokémon (seus com maior % de vitória e os rivais que mais te derrotam). Por período.
