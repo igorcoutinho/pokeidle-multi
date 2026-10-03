@@ -3,10 +3,10 @@
 // Grava os selvagens que aparecem no mapa (pelas mensagens `campo`: cada bicho vem com nome,
 // nível e `sh` = shiny). O jogo só aceita UMA bola por pokémon caído, então a bola certa tem de
 // estar escolhida antes de ele cair:
-//   · com o arremesso automático (VIP) ligado, assim que o shiny APARECE o app deixa só a Great
-//     Ball ativa nos chips de bola das Automações (`auto.set` com `ballIds`) — o automático
-//     joga a Great quando ele cai — e devolve as bolas de antes depois do arremesso;
-//   · com o automático desligado, o app arremessa uma Great Ball no corpo (`ball.throw`).
+//   · com o arremesso automático (VIP) ligado, assim que o shiny APARECE o app deixa só a bola
+//     escolhida (Beast Ball por padrão) ativa nos chips de bola das Automações (`auto.set` com
+//     `ballIds`) — o automático a joga quando ele cai — e devolve as bolas de antes depois;
+//   · com o automático desligado, o app arremessa a bola escolhida (Beast Ball) no corpo (`ball.throw`).
 // O contador "shinies vistos" da sessão do jogo sobe no evento `bola` com `shiny`; se ele
 // marcar um shiny que o app não viu, fica no histórico como detecção perdida.
 //
@@ -14,7 +14,7 @@
 // shiny antes da bola.
 (() => {
   'use strict';
-  const VERSAO_SHINY = '1.5.0';
+  const VERSAO_SHINY = '1.6.0';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -41,20 +41,25 @@
   const DEVOLVER_MS = 5000;        // garantia: tantos ms depois de cair, a bola ativa volta de qualquer jeito
   const VIVO_MAX_MS = 60_000;      // "shiny" vivo há mais que isso não é selvagem de onda: desiste e devolve as bolas
   const HIST_MAX = 200;
-  // Bolas caras: com o arremesso automático, a bola ativa vai em TODO bicho que cair enquanto o
-  // shiny não cai — escolher uma destas exige confirmação, e a configuração antiga é desfeita.
-  const BOLA_CARA = /beast|master/i;
+  // A bola padrão é a Beast Ball (a de melhor captura). A Master pede confirmação: com o
+  // arremesso automático, a bola ativa vai em TODO bicho que cair enquanto o shiny não cai.
+  const BOLA_CARA = /master/i;
+  const BOLA_PADRAO = 'Beast Ball';
+  const VERSAO_CFG = 2;
 
   function lerCfg() {
-    const padrao = { ativo: false, bola: 'Great Ball', reserva: 'Ultra Ball', aviso: true };
-    try { return { ...padrao, ...JSON.parse(localStorage.getItem(CHAVE_CFG)) }; } catch { return padrao; }
+    const padrao = { v: VERSAO_CFG, ativo: false, bola: BOLA_PADRAO, reserva: 'Ultra Ball', aviso: true };
+    try {
+      const salvo = JSON.parse(localStorage.getItem(CHAVE_CFG));
+      if (!salvo) return padrao;
+      // Quem ainda estava no padrão antigo (Great Ball) passa para o novo, uma vez.
+      if (salvo.v !== VERSAO_CFG && salvo.bola === 'Great Ball') salvo.bola = BOLA_PADRAO;
+      return { ...padrao, ...salvo, v: VERSAO_CFG };
+    } catch { return padrao; }
   }
   const cfg = lerCfg();
-  const trocouBolaCara = BOLA_CARA.test(cfg.bola) || BOLA_CARA.test(cfg.reserva ?? '');
-  if (BOLA_CARA.test(cfg.bola)) cfg.bola = 'Great Ball';
-  if (BOLA_CARA.test(cfg.reserva ?? '')) cfg.reserva = 'Ultra Ball';
   delete cfg.maxBolas; // sobra da versão 1.0
-  if (trocouBolaCara) { try { localStorage.setItem(CHAVE_CFG, JSON.stringify(cfg)); } catch {} }
+  try { localStorage.setItem(CHAVE_CFG, JSON.stringify(cfg)); } catch {}
   const salvarCfg = () => { try { localStorage.setItem(CHAVE_CFG, JSON.stringify(cfg)); } catch {} };
   let hist = (() => { try { return JSON.parse(localStorage.getItem(CHAVE_HIST)) ?? []; } catch { return []; } })();
   const salvarHist = () => { try { localStorage.setItem(CHAVE_HIST, JSON.stringify(hist.slice(0, HIST_MAX))); } catch {} };
@@ -213,7 +218,7 @@
     a.caido = true;
     marcar(a.registro, autoBallLigado() ? 'caiu — esperando o arremesso automático do jogo' : 'caiu');
     if (autoBallLigado()) {
-      // O automático joga a bola ativa (a Great). Se em 2,5 s nada acontecer, o app joga.
+      // O automático joga a bola ativa (a escolhida). Se em 2,5 s nada acontecer, o app joga.
       a.timer = setTimeout(() => arremessarUmaVez(slot), ESPERA_AUTO_MS);
     } else arremessarUmaVez(slot);
     // Garantia: com 1 bola por shiny, depois de alguns segundos não há mais o que esperar —
@@ -421,7 +426,6 @@
           <b>${cfg.ativo ? 'Ligado: prepara a bola quando um shiny aparece' : 'Desligado (só registra)'}</b>
         </div>
         <div class="pbsh-linha">
-          ${trocouBolaCara ? '<div class="pbsh-ruim" style="flex-basis:100%">⚠ Esta conta estava com Beast/Master Ball no caçador — voltou para Great Ball. Confira os chips de bola das Automações do jogo.</div>' : ''}
           Bola para shiny: <select class="pbsh-in" data-c="bola">${opcoesBola(cfg.bola, false)}</select>
           se acabar, usar: <select class="pbsh-in" data-c="reserva">${opcoesBola(cfg.reserva, true)}</select>
           <small>(o jogo só aceita 1 bola por shiny)</small>
@@ -480,6 +484,5 @@
   function fechar() { document.getElementById('pbsh-fundo')?.classList.remove('aberto'); }
 
   montarUI();
-  if (trocouBolaCara) avisar("⚠ Caçador de shiny: estava com Beast/Master Ball — voltou para Great Ball. Confira as bolas ativas nas Automações.");
   if (estavaAberto) abrir();
 })();

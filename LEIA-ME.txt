@@ -24,10 +24,10 @@ CAÇADOR DE SHINY — botão ✨ Shiny (fica verde quando ligado)
   - Registra os bichos que aparecem no mapa e avisa na tela quando surge um shiny.
   - O jogo só aceita 1 bola por shiny, então a bola certa é preparada ANTES de ele cair:
       * Com o arremesso automático (VIP) ligado: assim que o shiny aparece, o app deixa só a
-        Great Ball ativa nas Automações; o automático joga a Great quando ele cai; depois o
+        bola escolhida (Beast Ball por padrão) ativa nas Automações; o automático a joga quando ele cai; depois o
         app devolve as bolas que estavam ativas. Se o automático não jogar em 2,5 s, o app joga.
-      * Com o automático desligado: o app joga 1 Great Ball quando o shiny cai.
-  - Se a Great acabar, usa a reserva (Ultra Ball por padrão).
+      * Com o automático desligado: o app joga 1 bola (Beast Ball por padrão) quando o shiny cai.
+  - Se a bola escolhida acabar, usa a reserva (Ultra Ball por padrão). A Master Ball pede confirmação.
   - Histórico de shinies: quando, mapa, bola e resultado. Se o contador "shinies vistos" do
     jogo marcar um shiny que o app não viu, aparece como "detecção perdida".
   - Precisa da cena ligada: no Modo Economia o jogo não informa os bichos do mapa.
