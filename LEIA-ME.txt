@@ -60,7 +60,10 @@ PvP — botão ⚔ PvP
   - Histórico com data, rival, vitória/derrota, pontos e as duas ordens. Filtro por nick.
   - Derrota: o botão 💡 Melhor ordem simula as 120 ordens do seu time contra a ordem do rival
     (stats atuais dele, pelo perfil) e mostra as melhores, com o passo a passo da luta.
-  - Aba Estatísticas: suas composições (duelos, V-D, %, pontos, contra qual comp rival vai
+  - Aba Rivais: os jogadores do Top 10 do PvP (botão 🏅) e os que você já enfrentou. Para cada um:
+    seu V-D, o último time dele, as ordens suas que já venceram dele e, guardado, o melhor contra
+    ele: 💡 melhor ordem da sua equipe atual ou 🔍 melhor comp da bolsa (5 dos seus 8 mais fortes).
+  - Aba Estatísticas: destaque 🏆 da sua comp mais efetiva no geral, suas composições (duelos, V-D, %, pontos, contra qual comp rival vai
     melhor e pior), as comps rivais (seu resultado e qual comp sua mais vence cada uma) e os
     pokémon (seus com maior % de vitória e os rivais que mais te derrotam). Por período.
   - Trava da fila: se a fila automática estiver ligada e você perder 2 seguidas (ajustável),

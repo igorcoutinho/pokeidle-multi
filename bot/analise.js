@@ -334,7 +334,14 @@
    * Os stats do rival vêm do perfil dele agora (`ranking.perfil`); quem não estiver mais na equipe
    * dele entra como estimativa (espécie no nível do duelo, IV médio).
    */
-  async function sugerirOrdem({ meus, rivalNick, ordemRival = [], restoRival = [] }) {
+  function combinacoes(lista, k) {
+    if (k === 0) return [[]];
+    if (lista.length < k) return [];
+    const [x, ...resto] = lista;
+    return [...combinacoes(resto, k - 1).map((c) => [x, ...c]), ...combinacoes(resto, k)];
+  }
+
+  async function sugerirOrdem({ meus = [], rivalNick, ordemRival = [], restoRival = [], buscarNaBolsa = false }) {
     await carregarModulos();
     await carregarCatalogo();
     const avisos = [];
@@ -351,7 +358,7 @@
       avisos.push(`${meus[i].nome} não está mais na sua bolsa — usei uma estimativa`);
       return hipotetico(esp, meus[i].nivel || 150);
     })()).filter(Boolean);
-    if (meusPk.length < 2) throw new Error('não achei os seus pokémon desse duelo na bolsa');
+    if (meusPk.length < 2 && !buscarNaBolsa) throw new Error('não achei os seus pokémon desse duelo na bolsa');
 
     let timeRival = [];
     try { timeRival = (await carregarOponente(rivalNick)).time; }
@@ -380,9 +387,40 @@
       }
       return { vitorias: vit, total: ordensRival.length, media: soma / ordensRival.length, pior };
     };
-    const ranking = permutacoes(meusPk).map((ordem) => ({ ordem, ...avaliarOrdem(ordem) }))
-      .sort((a, b) => b.vitorias - a.vitorias || b.pior - a.pior || b.media - a.media);
+    const melhorPrimeiro = (a, b) => b.vitorias - a.vitorias || b.pior - a.pior || b.media - a.media;
+    if (!ordensRival.length || !ordensRival[0].length) throw new Error(`não achei o time de PvP de ${rivalNick}`);
+    const ranking = meusPk.length >= 2 ? permutacoes(meusPk).map((ordem) => ({ ordem, ...avaliarOrdem(ordem) })).sort(melhorPrimeiro) : [];
     const nomeDe = (p) => p._esp.name;
+
+    // Melhor comp da BOLSA: combinações de 5 entre os seus mais fortes (mais quem já está no time),
+    // cada uma na melhor ordem. Para caber no tempo, a triagem usa uma amostra dos cenários do
+    // rival; as finalistas são conferidas contra todos.
+    let comps = [];
+    if (buscarNaBolsa) {
+      const fortes = bolsa.map((p) => [p, forca(p)]).sort((a, b) => b[1] - a[1]).map(([p]) => p);
+      const pool = [...new Set([...meusPk, ...fortes])].slice(0, Math.max(8, meusPk.length));
+      const passo = Math.max(1, Math.floor(ordensRival.length / 24));
+      const amostra = ordensRival.filter((_, i) => i % passo === 0).slice(0, 24);
+      const avaliarEm = (ordem, cenarios) => {
+        let vit = 0, soma = 0, pior = Infinity;
+        for (const O of cenarios) { const x = lutar(ordem, O); if (x.venceu) vit++; soma += x.margem; pior = Math.min(pior, x.margem); }
+        return { vitorias: vit, total: cenarios.length, media: soma / cenarios.length, pior };
+      };
+      const triagem = [];
+      let n = 0;
+      for (const combo of combinacoes(pool, Math.min(5, pool.length))) {
+        if (new Set(combo.map((p) => p.speciesId)).size < combo.length) continue; // sem espécie repetida
+        let melhor = null;
+        for (const ordem of permutacoes(combo)) {
+          const r = { ordem, ...avaliarEm(ordem, amostra) };
+          if (!melhor || melhorPrimeiro(r, melhor) < 0) melhor = r;
+        }
+        triagem.push(melhor);
+        if (++n % 4 === 0) await dormir(0);
+      }
+      comps = triagem.sort(melhorPrimeiro).slice(0, 6)
+        .map((r) => ({ ordem: r.ordem, ...avaliarOrdem(r.ordem) })).sort(melhorPrimeiro).slice(0, 3);
+    }
     const resumo = (r) => {
       const log = [];
       lutar(r.ordem, ordensRival[0], log);
@@ -392,10 +430,11 @@
         passos: log.map((s) => ({ eu: nomeDe(s.eu), ele: nomeDe(s.ele), venceu: s.venceu, sobra: s.sobra, golpe: s.golpe?.name ?? '', ef: s.ef })),
       };
     };
-    const usada = { ordem: meusPk, ...avaliarOrdem(meusPk) };
+    const usada = meusPk.length >= 2 ? { ordem: meusPk, ...avaliarOrdem(meusPk) } : null;
     return {
-      usada: resumo(usada),
+      usada: usada ? resumo(usada) : null,
       melhores: ranking.slice(0, 3).map(resumo),
+      comps: comps.map(resumo),
       rival: ordensRival[0].map((p) => ({ nome: nomeDe(p), nivel: p.level })),
       fixos: fixos.length,
       cenarios: ordensRival.length,

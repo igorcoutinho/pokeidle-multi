@@ -14,7 +14,7 @@
 //    servidor só puxa a próxima partida 20 s depois do fim, então dá tempo.
 (() => {
   'use strict';
-  const VERSAO_PVP = '1.3.0';
+  const VERSAO_PVP = '1.4.0';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -47,6 +47,12 @@
   const salvarCfg = () => { try { localStorage.setItem(CHAVE_CFG, JSON.stringify(cfg)); } catch {} };
   let hist = (() => { try { return JSON.parse(localStorage.getItem(CHAVE_HIST)) ?? []; } catch { return []; } })();
   const salvarHist = () => { try { localStorage.setItem(CHAVE_HIST, JSON.stringify(hist.slice(0, HIST_MAX))); } catch {} };
+  // As melhores comps guardadas por jogador: { nick(minúsculo): { nick, ordem: {em, r}, bolsa: {em, r} } }
+  const CHAVE_MELHORES = 'pokepvp.melhores.v1';
+  let melhores = (() => { try { return JSON.parse(localStorage.getItem(CHAVE_MELHORES)) ?? {}; } catch { return {}; } })();
+  const salvarMelhores = () => { try { localStorage.setItem(CHAVE_MELHORES, JSON.stringify(melhores)); } catch {} };
+  let ladder = [];             // o top do PvP (pvp.info → ladder)
+  const calcRival = new Map(); // nick -> 'ordem' | 'bolsa' | { erro } enquanto calcula
   let busca = '';
   let pagina = 0;
   let aba = 'historico';      // 'historico' | 'stats'
@@ -214,12 +220,13 @@
   // ---------------------------------------------------------------- escuta do jogo
   function aoMensagem(ev) {
     if (typeof ev.data !== 'string' || !ev.data.includes('"t":"pvp"')) return;
-    if (!/"(partida|naoVistas|ficha|time|timeSalvo)"/.test(ev.data)) return;
+    if (!/"(partida|naoVistas|ficha|time|timeSalvo|ladder)"/.test(ev.data)) return;
     let m;
     try { m = JSON.parse(ev.data); } catch { return; }
     if (m.t !== 'pvp') return;
     const ids = (x) => (x ?? []).map((v) => (typeof v === 'object' ? v?.id : v)).filter((v) => v != null);
     if (m.time !== undefined) meuTimeIds = ids(m.time);
+    if (Array.isArray(m.ladder)) { ladder = m.ladder; if (aba === 'rivais') pintar(); }
     if (m.timeSalvo !== undefined) meuTimeIds = ids(m.timeSalvo);
     // A sua ordem pode chegar depois da partida (o jogo pede `pvp.info` logo após): completa a última.
     if (meuTimeIds?.length && hist[0] && !hist[0].meuCompleto && Date.now() - hist[0].em < 60_000) {
@@ -283,6 +290,9 @@
   .ppvp-ordem .ppvp-fora{opacity:.6;font-style:italic}
   .ppvp-pags{display:flex;gap:8px;align-items:center;justify-content:center;margin-top:8px}
   .ppvp-sug-bt{display:block;margin-top:4px;font-size:11px;padding:2px 8px}
+  .ppvp-mini{font-size:11px;padding:2px 7px;margin:2px 4px 0 0}
+  .ppvp-top{background:#b04ad0;color:#fff;border-radius:5px;padding:0 5px;font-weight:700}
+  .ppvp-destaque{background:#2f4a2a;border:1px solid #7fdc8f;border-radius:8px;padding:6px 10px;margin-top:6px}
   .ppvp-sug{background:#2a1515;border:1px solid #6a4040;border-radius:10px;padding:8px 10px;white-space:normal}
   .ppvp-sug h5{margin:6px 0 4px;color:#f3c77a;font-size:12px}
   .ppvp-sug ol{margin:2px 0 2px 18px;padding:0;font-size:12px}
@@ -302,7 +312,13 @@
     document.body.appendChild(fundo);
     fundo.addEventListener('click', aoClicar);
     fundo.addEventListener('input', (e) => {
-      if (e.target.dataset.c === 'busca') { busca = e.target.value; pagina = 0; pintarTabela(); }
+      if (e.target.dataset.c === 'busca') {
+        busca = e.target.value; pagina = 0;
+        if (aba !== 'rivais') return pintarTabela();
+        pintar(); // a aba Rivais é redesenhada inteira: devolve o foco ao campo
+        const c = document.querySelector('#ppvp-modal [data-c="busca"]');
+        if (c) { c.focus(); c.setSelectionRange(c.value.length, c.value.length); }
+      }
     });
     fundo.addEventListener('change', (e) => {
       if (e.target.dataset.c === 'derrotas') { cfg.derrotas = Math.max(1, Math.min(10, Number(e.target.value) || 2)); salvarCfg(); pintar(); }
@@ -413,6 +429,14 @@
           mínimo de duelos: <input type="number" class="ppvp-in" data-c="stMinimo" min="1" max="50" value="${st.minimo}">
         </div>
         <div class="ppvp-linha"><b>${s.duelos.length}</b> duelos no período · <span class="ppvp-v">${v}V</span> <span class="ppvp-d">${s.duelos.length - v}D</span> · ${pctHtml(v, s.duelos.length)} de vitória</div>
+        ${(() => {
+          // A comp mais efetiva: maior % de vitória com pelo menos 3 duelos (ou o mínimo escolhido, se maior).
+          const min = Math.max(3, st.minimo);
+          const cand = [...s.minhas.values()].filter((r) => r.n >= min).sort((a, b) => pct(b.v, b.n) - pct(a.v, a.n) || b.n - a.n);
+          return cand.length
+            ? `<div class="ppvp-destaque">🏆 <b>Sua comp mais efetiva:</b> ${esc(cand[0].rotulo)} — ${pctHtml(cand[0].v, cand[0].n)} de vitória em ${cand[0].n} duelos (${cand[0].delta >= 0 ? '+' : ''}${cand[0].delta} pontos)</div>`
+            : `<div class="ppvp-aviso">🏆 A comp mais efetiva aparece quando alguma tiver pelo menos ${min} duelos no período.</div>`;
+        })()}
       </section>
       <section>
         <h4>Suas composições</h4>
@@ -436,7 +460,12 @@
     const abas = `<span class="ppvp-linha" style="margin:0">
         <button class="ppvp-bt ${aba === 'historico' ? 'ppvp-on' : ''}" data-a="aba" data-v="historico">Histórico</button>
         <button class="ppvp-bt ${aba === 'stats' ? 'ppvp-on' : ''}" data-a="aba" data-v="stats">Estatísticas</button>
+        <button class="ppvp-bt ${aba === 'rivais' ? 'ppvp-on' : ''}" data-a="aba" data-v="rivais">Rivais</button>
         <button class="ppvp-x" data-a="fechar" title="Fechar">×</button></span>`;
+    if (aba === 'rivais') {
+      modal.innerHTML = `<header><span>⚔ PvP — rivais<small>v${VERSAO_PVP}</small></span>${abas}</header>${htmlRivais()}`;
+      return;
+    }
     if (aba === 'stats') {
       modal.innerHTML = `<header><span>⚔ PvP — estatísticas<small>v${VERSAO_PVP}</small></span>${abas}</header>${htmlStats()}`;
       return;
@@ -470,6 +499,110 @@
     pintarStatus();
   }
 
+  // ---------------------------------------------------------------- rivais e melhores comps guardadas
+  /** Guarda a melhor ordem/comp calculada contra um jogador (o que a aba Rivais mostra). */
+  function guardarMelhor(nick, tipo, r) {
+    if (!nick || !r) return;
+    const k = String(nick).toLowerCase();
+    const enxuto = (o) => ({ ordem: o.ordem, vitorias: o.vitorias, total: o.total, pior: o.pior, media: o.media });
+    melhores[k] = { ...(melhores[k] ?? {}), nick, [tipo]: { em: Date.now(), r: Array.isArray(r) ? r.map(enxuto) : enxuto(r) } };
+    salvarMelhores();
+  }
+
+  const nickDaLadder = (l) => l?.nick ?? l?.nome ?? null;
+  const ultimoDuelo = (nick) => hist.find((h) => String(h.nick).toLowerCase() === String(nick).toLowerCase());
+
+  /** Calcula contra um jogador: 'ordem' = a melhor ordem da sua equipe de PvP atual; 'bolsa' = a melhor comp da bolsa. */
+  async function calcularRival(nick, tipo) {
+    if (!window.__pokeAnalise?.sugerirOrdem) { calcRival.set(nick, { erro: 'o módulo 📊 Time não está carregado nesta conta' }); return pintar(); }
+    calcRival.set(nick, tipo);
+    pintar();
+    const ult = ultimoDuelo(nick);
+    const meus = minhaOrdemSalva().length ? minhaOrdemSalva() : (ult?.meu ?? []);
+    try {
+      const r = await window.__pokeAnalise.sugerirOrdem({
+        meus: meus.map((x) => ({ id: x.id, nome: x.nome, nivel: x.nivel })),
+        rivalNick: nick,
+        // A ordem conhecida do último duelo com ele; sem duelo, todas as ordens dele são testadas.
+        ordemRival: ult && !ult.deleSemOrdem ? (ult.dele ?? []) : [],
+        restoRival: ult ? [...(ult.deleSemOrdem ? ult.dele ?? [] : []), ...(ult.naoEntrou ?? [])] : [],
+        buscarNaBolsa: tipo === 'bolsa',
+      });
+      if (tipo === 'bolsa') guardarMelhor(nick, 'bolsa', r.comps);
+      else if (r.melhores?.[0]) guardarMelhor(nick, 'ordem', r.melhores[0]);
+      calcRival.delete(nick);
+    } catch (e) {
+      calcRival.set(nick, { erro: e.message });
+    }
+    pintar();
+  }
+
+  const ordemCurta = (o) => o.ordem.map((p, i) => `<b style="color:#f3c77a">${i + 1}</b> ${esc(p.nome)}`).join(' → ');
+  const resultadoCurto = (o) => (o.vitorias === o.total
+    ? `<span class="ppvp-v">vence${o.total > 1 ? ` em todas as ${o.total} ordens dele` : ''}</span>`
+    : o.vitorias ? `<span>vence ${o.vitorias} de ${o.total} ordens dele</span>` : '<span class="ppvp-d">perde</span>') + ` · margem ${margemTxt(o.pior)}`;
+  const dataCurta = (ms) => new Date(ms).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+
+  function htmlRivais() {
+    const top = ladder.slice(0, 10).map(nickDaLadder).filter(Boolean)
+      .filter((n) => n.toLowerCase() !== String(core.eu?.nick ?? '').toLowerCase());
+    const posTop = new Map(ladder.slice(0, 10).map((l, i) => [String(nickDaLadder(l)).toLowerCase(), i + 1]));
+    const nicks = new Map();
+    for (const n of top) nicks.set(n.toLowerCase(), n);
+    for (const h of hist) if (!nicks.has(String(h.nick).toLowerCase())) nicks.set(String(h.nick).toLowerCase(), h.nick);
+    for (const m of Object.values(melhores)) if (!nicks.has(m.nick.toLowerCase())) nicks.set(m.nick.toLowerCase(), m.nick);
+    const q = busca.trim().toLowerCase();
+    const lista = [...nicks.values()]
+      .filter((n) => !q || n.toLowerCase().includes(q))
+      .filter((n) => !st.soTop || posTop.has(n.toLowerCase()))
+      .sort((a, b) => (posTop.get(a.toLowerCase()) ?? 99) - (posTop.get(b.toLowerCase()) ?? 99)
+        || (ultimoDuelo(b)?.em ?? 0) - (ultimoDuelo(a)?.em ?? 0));
+    const linhas = lista.map((nick) => {
+      const k = nick.toLowerCase();
+      const duelos = hist.filter((h) => String(h.nick).toLowerCase() === k);
+      const v = duelos.filter((h) => h.venci).length;
+      const ult = duelos[0];
+      // Venceu com (real): as suas ordens que ganharam dele, agrupadas.
+      const ganhou = new Map();
+      for (const h of duelos.filter((x) => x.venci && x.meu?.length)) {
+        const chave = h.meu.map((x) => x.nome).join(' → ');
+        ganhou.set(chave, (ganhou.get(chave) ?? 0) + 1);
+      }
+      const real = [...ganhou.entries()].sort((a, b) => b[1] - a[1]).slice(0, 2)
+        .map(([c, n]) => `<div>${esc(c)} <small class="ppvp-v">(${n} vitória${n > 1 ? 's' : ''})</small></div>`).join('') || '<span class="ppvp-aviso">—</span>';
+      const salvo = melhores[k] ?? {};
+      const calc = calcRival.get(nick);
+      const simOrdem = salvo.ordem ? `<div><small class="ppvp-aviso">sua equipe atual · ${dataCurta(salvo.ordem.em)}</small><br>${ordemCurta(salvo.ordem.r)}<br><small>${resultadoCurto(salvo.ordem.r)}</small></div>` : '';
+      const simBolsa = salvo.bolsa?.r?.length ? `<div style="margin-top:4px"><small class="ppvp-aviso">melhor comp da bolsa · ${dataCurta(salvo.bolsa.em)}</small>
+          ${salvo.bolsa.r.map((o, i) => `<div>${i === 0 ? '🥇' : i === 1 ? '🥈' : '🥉'} ${ordemCurta(o)} <small>${resultadoCurto(o)}</small></div>`).join('')}</div>` : '';
+      return `<tr>
+        <td><b>${esc(nick)}</b>${posTop.has(k) ? ` <small class="ppvp-top">#${posTop.get(k)} PvP</small>` : ''}</td>
+        <td>${duelos.length ? `<span class="ppvp-v">${v}</span>-<span class="ppvp-d">${duelos.length - v}</span>` : '<span class="ppvp-aviso">nunca</span>'}</td>
+        <td>${ult ? ordemHtml(ult.dele, ult.naoEntrou, ult.deleSemOrdem) : '<span class="ppvp-aviso">—</span>'}</td>
+        <td style="white-space:normal">${real}</td>
+        <td style="white-space:normal">${simOrdem}${simBolsa}${!simOrdem && !simBolsa ? '<span class="ppvp-aviso">ainda não calculado</span>' : ''}
+          ${calc?.erro ? `<div class="ppvp-d">${esc(calc.erro)}</div>` : ''}
+          <div style="margin-top:4px">
+            <button class="ppvp-bt ppvp-mini" data-a="calcOrdem" data-v="${esc(nick)}" ${calc && !calc.erro ? 'disabled' : ''}>${calc === 'ordem' ? 'calculando…' : '💡 melhor ordem'}</button>
+            <button class="ppvp-bt ppvp-mini" data-a="calcBolsa" data-v="${esc(nick)}" ${calc && !calc.erro ? 'disabled' : ''}>${calc === 'bolsa' ? 'procurando…' : '🔍 melhor comp da bolsa'}</button>
+          </div></td></tr>`;
+    }).join('');
+    return `
+      <section>
+        <div class="ppvp-linha">
+          <button class="ppvp-bt" data-a="top10">🏅 Top 10 do PvP</button>
+          <label><input type="checkbox" data-a="soTop" ${st.soTop ? 'checked' : ''}> mostrar só o top 10</label>
+          <input class="ppvp-in" data-c="busca" placeholder="filtrar por nick…" value="${esc(busca)}" spellcheck="false" style="width:200px">
+        </div>
+        <p class="ppvp-aviso" style="margin:0">💡 = melhor ordem da sua equipe de PvP atual contra o time dele. 🔍 = procura entre os seus 8 pokémon mais fortes os 5 (e a ordem) que melhor vencem ele.
+          Os stats dele vêm do perfil (time atual). Sem duelo com ele, a ordem dele é desconhecida: testa todas e escolhe a sua ordem que vence na maioria. Tudo fica guardado aqui.</p>
+      </section>
+      <section>
+        ${linhas ? `<table class="ppvp-tab"><tr><th>Jogador</th><th>Você</th><th>Último time dele</th><th>Você venceu com (real)</th><th>Melhor contra ele (simulado, guardado)</th></tr>${linhas}</table>`
+          : '<span class="ppvp-aviso">Nenhum rival ainda — clique em "Top 10 do PvP" ou jogue alguns duelos.</span>'}
+      </section>`;
+  }
+
   // ---------------------------------------------------------------- melhor ordem (derrotas)
   async function calcularSugestao(h) {
     if (!window.__pokeAnalise?.sugerirOrdem) {
@@ -486,6 +619,7 @@
         restoRival: [...(h.deleSemOrdem ? h.dele ?? [] : []), ...(h.naoEntrou ?? [])],
       });
       sugestoes.set(h.id, { r });
+      if (r.melhores?.[0]) guardarMelhor(h.nick, 'ordem', r.melhores[0]);
     } catch (e) {
       sugestoes.set(h.id, { erro: e.message });
     }
@@ -569,7 +703,11 @@
     if (a === 'trava') { cfg.trava = !cfg.trava; registrar(cfg.trava ? 'trava da fila ligada' : 'trava da fila desligada'); }
     else if (a === 'limpar') { hist = []; salvarHist(); }
     else if (a === 'pag') { pagina = Math.max(0, pagina + Number(b.dataset.v)); return pintarTabela(); }
-    else if (a === 'aba') aba = b.dataset.v;
+    else if (a === 'aba') { aba = b.dataset.v; if (aba === 'rivais' && !ladder.length) core.send({ t: 'pvp.info' }); }
+    else if (a === 'top10') { st.soTop = true; core.send({ t: 'pvp.info' }); }
+    else if (a === 'soTop') st.soTop = b.checked;
+    else if (a === 'calcOrdem') return calcularRival(b.dataset.v, 'ordem');
+    else if (a === 'calcBolsa') return calcularRival(b.dataset.v, 'bolsa');
     else if (a === 'sugerir') {
       const h = hist.find((x) => String(x.id) === b.dataset.v);
       abertaSug = abertaSug === h?.id ? null : h?.id ?? null;
