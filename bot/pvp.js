@@ -14,7 +14,7 @@
 //    servidor só puxa a próxima partida 20 s depois do fim, então dá tempo.
 (() => {
   'use strict';
-  const VERSAO_PVP = '1.7.2';
+  const VERSAO_PVP = '1.8.0';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -59,6 +59,7 @@
   let melhores = (() => { try { return JSON.parse(localStorage.getItem(CHAVE_MELHORES)) ?? {}; } catch { return {}; } })();
   const salvarMelhores = () => { try { localStorage.setItem(CHAVE_MELHORES, JSON.stringify(melhores)); } catch {} };
   let ladder = [];             // o top do PvP (pvp.info → ladder)
+  let filaInfo = null;         // { n, em }: quantos estão procurando partida (o jogo informa), você incluído
   let formacoes = null;        // o armário do jogo: [{ slot, nome, ids, v, d, cv, cd }] (pvp.info / respostas do armário)
   const calcRival = new Map(); // nick -> 'ordem' | 'bolsa' | { erro } enquanto calcula
   let busca = '';
@@ -327,32 +328,53 @@
   // ---------------------------------------------------------------- prever o próximo adversário
   const mesmoNick = (a, b) => String(a ?? '').toLowerCase() === String(b ?? '').toLowerCase();
 
+  const JANELA_ATIVOS_MS = 60 * 60 * 1000; // enfrentou na última hora = está ativo na fila
+  const PESO_REPETIR = 0.2;                 // quem você ACABOU de enfrentar: 20% de chance de vir de novo (os outros ativos, 80%)
+
   /**
-   * Quem deve ser o próximo adversário. O pareamento alterna entre poucos jogadores, então conta,
-   * no histórico, quem veio logo DEPOIS de cada adversário (A → B). Sem dados para o último,
-   * usa os adversários recentes mais frequentes (fora quem acabou de lutar), com peso para os
-   * mais recentes. Devolve [{ nick, p }] do mais provável para o menos.
+   * Quem está na fila e com que chance vem agora. O jogo só diz QUANTOS estão procurando
+   * (`fila.tamanho`), não quem — mas quem você enfrentou na última hora está ativo. Os candidatos
+   * são esses (cortados pelo tamanho da fila, se o jogo informou). Pesos: quem acabou de lutar
+   * com você pesa menos; os outros ganham peso pela sequência do histórico (depois de A costuma
+   * vir B). Devolve [{ nick, p, base }] do mais provável para o menos.
    */
   function preverProximo(ultimoNick) {
+    const agora = Date.now();
+    const recentes = [...hist].sort((x, y) => y.em - x.em);
+    const ativos = [];
+    const vistos = new Set();
+    for (const h of recentes) {
+      if (agora - h.em > JANELA_ATIVOS_MS && ativos.length) break;
+      const k = String(h.nick).toLowerCase();
+      if (vistos.has(k)) continue;
+      vistos.add(k);
+      ativos.push(h.nick);
+      if (agora - h.em > JANELA_ATIVOS_MS) break; // sem ninguém na última hora: fica só com o mais recente
+    }
+    let pool = ativos;
+    const fila = filaInfo && agora - filaInfo.em < 10 * 60 * 1000 ? filaInfo.n : null; // inclui você
+    if (fila && fila >= 2) pool = pool.slice(0, Math.max(1, fila - 1));
+    if (!pool.length) return [];
+    // Sequência: quantas vezes, na mesma sessão, cada um veio logo depois do último adversário.
     const seq = [...hist].sort((x, y) => x.em - y.em);
-    const trans = new Map();
+    const depois = new Map();
     for (let i = 0; i + 1 < seq.length; i++) {
-      if (seq[i + 1].em - seq[i].em > 2 * 3600 * 1000) continue; // sessões diferentes não contam
-      const de = String(seq[i].nick).toLowerCase();
-      const m = trans.get(de) ?? new Map();
-      m.set(seq[i + 1].nick, (m.get(seq[i + 1].nick) ?? 0) + 1);
-      trans.set(de, m);
+      if (seq[i + 1].em - seq[i].em > 2 * 3600 * 1000 || !mesmoNick(seq[i].nick, ultimoNick)) continue;
+      const k = String(seq[i + 1].nick).toLowerCase();
+      depois.set(k, (depois.get(k) ?? 0) + 1);
     }
-    const daqui = trans.get(String(ultimoNick).toLowerCase());
-    const total = daqui ? [...daqui.values()].reduce((a, b) => a + b, 0) : 0;
-    if (total >= 2) {
-      return [...daqui.entries()].map(([nick, c]) => ({ nick, p: c / total, base: 'sequência' })).sort((a, b) => b.p - a.p);
-    }
-    const recentes = seq.slice(-12).filter((h) => !mesmoNick(h.nick, ultimoNick));
-    const peso = new Map();
-    recentes.forEach((h, i) => peso.set(h.nick, (peso.get(h.nick) ?? 0) + 1 + i / recentes.length));
-    const soma = [...peso.values()].reduce((a, b) => a + b, 0);
-    return [...peso.entries()].map(([nick, w]) => ({ nick, p: w / soma, base: 'recentes' })).sort((a, b) => b.p - a.p);
+    const base = fila ? `fila com ${fila}` : 'ativos na última hora';
+    if (pool.length === 1) return [{ nick: pool[0], p: 1, base }];
+    // Quem você acabou de enfrentar fica com uma fatia fixa (pode voltar, mas é o menos provável);
+    // os outros dividem o resto, com peso pela sequência (até 3× para quem sempre vem depois dele).
+    const repete = pool.some((n) => mesmoNick(n, ultimoNick));
+    const outros = pool.filter((n) => !mesmoNick(n, ultimoNick));
+    const fatiaOutros = repete ? 1 - PESO_REPETIR : 1;
+    const pesos = outros.map((nick) => [nick, 1 + Math.min(2, depois.get(String(nick).toLowerCase()) ?? 0)]);
+    const soma = pesos.reduce((t, [, w]) => t + w, 0);
+    const lista = pesos.map(([nick, w]) => ({ nick, p: fatiaOutros * (w / soma), base }));
+    if (repete) lista.push({ nick: pool.find((n) => mesmoNick(n, ultimoNick)), p: PESO_REPETIR, base });
+    return lista.sort((a, b) => b.p - a.p);
   }
 
   /** O placar de uma formação contra um jogador, no seu histórico. */
@@ -379,6 +401,10 @@
     for (const o of [salvo?.ordem?.r, ...(salvo?.bolsa?.r ?? [])].filter(Boolean)) {
       if (idsDe(o)?.join(',') === f.k) return { nota: 0.5 + 0.35 * (o.vitorias / Math.max(1, o.total)), fonte: `simulação: vence ${o.vitorias}/${o.total}` };
     }
+    for (const o of melhores.__ativos__?.r ?? []) {
+      const pr = o.porRival?.find((x) => mesmoNick(x.nick, nick));
+      if (pr && idsDe(o)?.join(',') === f.k) return { nota: 0.5 + 0.35 * (pr.vitorias / Math.max(1, pr.total)), fonte: `simulação: vence ${pr.vitorias}/${pr.total}` };
+    }
     return { nota: notaF(f) * 0.9, fonte: `geral ${f.v}V ${f.n - f.v}D` };
   }
 
@@ -387,7 +413,14 @@
     const todas = minhasFormacoes();
     const lista = todas.filter((f) => naRotacao(f));
     const naBolsa = new Set((core.eu?.pokemons ?? []).map((p) => p.id));
-    for (const { nick } of previstos.slice(0, 2)) {
+    for (const o of melhores.__ativos__?.r ?? []) {
+      const ids = idsDe(o);
+      if (!ids || !ids.every((id) => naBolsa.has(id))) continue;
+      const k = ids.join(',');
+      if (lista.some((f) => f.k === k)) continue;
+      lista.push(todas.find((f) => f.k === k) ?? { k, ids, n: 0, v: 0, ultimo: 0, armario: null, simulada: true, nome: 'Contra os ativos' });
+    }
+    for (const { nick } of previstos.slice(0, 3)) {
       const salvo = melhores[String(nick).toLowerCase()];
       for (const o of [salvo?.ordem?.r, ...(salvo?.bolsa?.r ?? []).slice(0, 1)].filter(Boolean)) {
         const ids = idsDe(o);
@@ -405,7 +438,7 @@
   function pontuar(f, previstos) {
     let soma = 0, peso = 0;
     const det = [];
-    for (const { nick, p } of previstos.slice(0, 3)) {
+    for (const { nick, p } of previstos.slice(0, 4)) {
       const r = notaVs(f, nick);
       soma += p * r.nota; peso += p;
       det.push(`${nick}: ${r.fonte}`);
@@ -487,23 +520,66 @@
     return `<button class="ppvp-bt ppvp-mini" data-a="aplicar" data-v="${v}">✅ aplicar agora</button><button class="ppvp-bt ppvp-mini" data-a="armario" data-v="${v}">💾 salvar no armário</button>`;
   }
 
+  let calcAtivos = null; // 'ordem' | 'bolsa' | { erro } enquanto calcula
+  /** Simula as ordens (da equipe atual, ou da bolsa) contra TODOS os ativos de uma vez, com os pesos. */
+  async function calcularContraAtivos(tipo) {
+    if (!window.__pokeAnalise?.sugerirContraVarios) { calcAtivos = { erro: 'o módulo 📊 Time não está carregado nesta conta' }; return pintar(); }
+    const ultimo = [...hist].sort((x, y) => y.em - x.em)[0];
+    const previstos = ultimo ? preverProximo(ultimo.nick).slice(0, 4) : [];
+    if (!previstos.length) { calcAtivos = { erro: 'ainda não há adversários ativos no histórico' }; return pintar(); }
+    calcAtivos = tipo;
+    pintar();
+    const meus = minhaOrdemSalva().length ? minhaOrdemSalva() : (ultimo?.meu ?? []);
+    try {
+      const r = await window.__pokeAnalise.sugerirContraVarios({
+        meus: meus.map((x) => ({ id: x.id, nome: x.nome, nivel: x.nivel })),
+        rivais: previstos.map((x) => {
+          const u = ultimoDuelo(x.nick);
+          return { nick: x.nick, peso: x.p, ordemRival: u && !u.deleSemOrdem ? (u.dele ?? []) : [] };
+        }),
+        buscarNaBolsa: tipo === 'bolsa',
+      });
+      melhores.__ativos__ = { nick: '__ativos__', em: Date.now(), tipo, nicks: r.rivais, r: r.opcoes, avisos: r.avisos };
+      salvarMelhores();
+      calcAtivos = null;
+      registrar(`🔬 melhor comp contra os ativos (${r.rivais.map((x) => `${x.nick} ${Math.round(x.peso * 100)}%`).join(', ')}): ${r.opcoes[0]?.ordem.map((p) => p.nome).join(' → ') ?? '—'}`);
+    } catch (e) {
+      calcAtivos = { erro: e.message };
+    }
+    pintar();
+  }
+
+  function htmlAtivosCalculado() {
+    const s = melhores.__ativos__;
+    if (!s?.r?.length) return '';
+    return `<div style="margin-top:6px"><b>🔬 Melhor contra os ativos</b> <small class="ppvp-aviso">(${s.tipo === 'bolsa' ? 'da bolsa' : 'sua equipe'} · ${dataCurta(s.em)} · ${s.nicks.map((x) => `${esc(x.nick)} ${Math.round(x.peso * 100)}%`).join(', ')})</small>
+      ${s.r.map((o, i) => `<div>${i === 0 ? '🥇' : i === 1 ? '🥈' : '🥉'} ${ordemCurta(o)} — ${o.porRival.map((x) => `${esc(x.nick)}: <b class="${x.vitorias === x.total ? 'ppvp-v' : x.vitorias ? '' : 'ppvp-d'}">${x.vitorias}/${x.total}</b>`).join(' · ')}
+        <br>${botoesAplicar(o, `Contra ativos${i ? ` ${i + 1}` : ''}`)}</div>`).join('')}</div>`;
+  }
+
   /** O quadro do modo "prever": quem deve vir, e qual formação vai melhor contra cada um. */
   function htmlPrevisao(todas) {
     const ultimo = [...hist].sort((x, y) => y.em - x.em)[0];
     if (!ultimo) return '<p class="ppvp-aviso">Jogue alguns duelos para o app conhecer a sequência de adversários.</p>';
-    const previstos = preverProximo(ultimo.nick).slice(0, 3);
+    const previstos = preverProximo(ultimo.nick).slice(0, 4);
     if (!previstos.length) return `<p class="ppvp-aviso">Último adversário: <b>${esc(ultimo.nick)}</b> — ainda não há outros adversários recentes para prever o próximo.</p>`;
     const cand = candidatasPara(previstos);
     const melhorPara = (nick) => cand.map((f) => ({ f, r: notaVs(f, nick) })).sort((x, y) => y.r.nota - x.r.nota)[0];
     const geral = cand.map((f) => ({ f, ...pontuar(f, previstos) })).sort((x, y) => y.nota - x.nota)[0];
     return `<div class="ppvp-destaque" style="background:#2a2a4a;border-color:#8a8aff">
-        🔮 Último adversário: <b>${esc(ultimo.nick)}</b> (${ultimo.venci ? '<span class="ppvp-v">venceu</span>' : '<span class="ppvp-d">perdeu</span>'}) · próximo provável:
+        🔮 Último adversário: <b>${esc(ultimo.nick)}</b> (${ultimo.venci ? '<span class="ppvp-v">venceu</span>' : '<span class="ppvp-d">perdeu</span>'}) · ativos na fila e chance de vir agora:
         ${previstos.map((x) => `<b>${esc(x.nick)}</b> ${Math.round(x.p * 100)}%`).join(' · ')}
-        <small class="ppvp-aviso">(${previstos[0].base === 'sequência' ? 'pela sequência de adversários' : 'pelos adversários recentes'})</small>
+        <small class="ppvp-aviso">(${esc(previstos[0].base)}; quem acabou de lutar com você pesa menos)</small>
         <table class="ppvp-tab" style="margin-top:4px"><tr><th>Contra</th><th>Melhor formação</th><th>Por quê</th></tr>
         ${previstos.map((x) => { const m = melhorPara(x.nick); return `<tr><td><b>${esc(x.nick)}</b></td><td>${m ? esc(m.f.nome) + (m.f.simulada ? ' <small class="ppvp-aviso">(simulada)</small>' : '') : '—'}</td><td>${m ? esc(m.r.fonte) : '—'}</td></tr>`; }).join('')}
         </table>
-        ${geral ? `<div>Se trocar agora, entra: <b>${esc(geral.f.nome)}</b>${geral.f.k === chaveAtual() ? ' <small class="ppvp-v">(já em uso)</small>' : ''}</div>` : ''}
+        ${geral ? `<div>Melhor contra o grupo (ponderado): <b>${esc(geral.f.nome)}</b>${geral.f.k === chaveAtual() ? ' <small class="ppvp-v">(já em uso)</small>' : ''}</div>` : ''}
+        <div style="margin-top:4px">
+          <button class="ppvp-bt ppvp-mini" data-a="calcAtivos" data-v="ordem" ${calcAtivos && !calcAtivos.erro ? 'disabled' : ''}>${calcAtivos === 'ordem' ? 'calculando…' : '🔬 melhor ordem do meu time contra os ativos'}</button>
+          <button class="ppvp-bt ppvp-mini" data-a="calcAtivos" data-v="bolsa" ${calcAtivos && !calcAtivos.erro ? 'disabled' : ''}>${calcAtivos === 'bolsa' ? 'procurando…' : '🔬 melhor comp da bolsa contra os ativos'}</button>
+          ${calcAtivos?.erro ? `<span class="ppvp-d">${esc(calcAtivos.erro)}</span>` : ''}
+        </div>
+        ${htmlAtivosCalculado()}
       </div>`;
   }
 
@@ -560,7 +636,7 @@
   // ---------------------------------------------------------------- escuta do jogo
   function aoMensagem(ev) {
     if (typeof ev.data !== 'string' || !ev.data.includes('"t":"pvp"')) return;
-    if (!/"(partida|naoVistas|ficha|time|timeSalvo|ladder|formacoes|formacaoOk|formacaoRecusa|recusa)"/.test(ev.data)) return;
+    if (!/"(partida|naoVistas|ficha|time|timeSalvo|ladder|formacoes|formacaoOk|formacaoRecusa|recusa|fila)"/.test(ev.data)) return;
     let m;
     try { m = JSON.parse(ev.data); } catch { return; }
     if (m.t !== 'pvp') return;
@@ -568,6 +644,7 @@
     if (m.time !== undefined) meuTimeIds = ids(m.time);
     if (Array.isArray(m.ladder)) { ladder = m.ladder; if (aba === 'rivais') pintar(); }
     if (m.formacoes !== undefined) formacoes = m.formacoes ?? [];
+    if (m.fila?.tamanho != null) filaInfo = { n: Number(m.fila.tamanho) || 0, em: Date.now() };
     if (m.formacaoOk) registrar(`armário: ${m.formacaoOk.acao ?? 'ok'}${m.formacaoOk.slot ? ` (formação ${m.formacaoOk.slot})` : ''}`);
     if (m.formacaoRecusa) registrar(`⚠ o armário recusou: ${m.formacaoRecusa.msg ?? 'sem motivo'}`);
     if (m.recusa) registrar(`⚠ o jogo recusou a troca de equipe: ${m.recusa.msg ?? 'sem motivo'}`);
@@ -905,7 +982,7 @@
     const nicks = new Map();
     for (const n of top) nicks.set(n.toLowerCase(), n);
     for (const h of hist) if (!nicks.has(String(h.nick).toLowerCase())) nicks.set(String(h.nick).toLowerCase(), h.nick);
-    for (const m of Object.values(melhores)) if (!nicks.has(m.nick.toLowerCase())) nicks.set(m.nick.toLowerCase(), m.nick);
+    for (const m of Object.values(melhores)) if (m.nick !== '__ativos__' && !nicks.has(m.nick.toLowerCase())) nicks.set(m.nick.toLowerCase(), m.nick);
     const q = busca.trim().toLowerCase();
     const lista = [...nicks.values()]
       .filter((n) => !q || n.toLowerCase().includes(q))
@@ -1075,6 +1152,7 @@
     else if (a === 'autoAtivo') { cfg.auto.ativo = !cfg.auto.ativo; cfg.auto.seguidas = 0; registrar(cfg.auto.ativo ? '🔁 auto-switch LIGADO' : 'auto-switch desligado'); }
     else if (a === 'autoNaDerrota') cfg.auto.naDerrota = b.checked;
     else if (a === 'autoModo') cfg.auto.modo = b.dataset.v;
+    else if (a === 'calcAtivos') return calcularContraAtivos(b.dataset.v);
     else if (a === 'autoFora') {
       const k = b.dataset.v;
       cfg.auto.foraKeys = b.checked ? cfg.auto.foraKeys.filter((x) => x !== k) : [...new Set([...cfg.auto.foraKeys, k])];

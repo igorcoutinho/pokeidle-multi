@@ -445,6 +445,90 @@
   }
   A.sugerirOrdem = sugerirOrdem;
 
+  /**
+   * A melhor ordem (ou comp da bolsa) contra VÁRIOS rivais ao mesmo tempo — os que estão ativos
+   * na fila. `rivais`: [{ nick, peso, ordemRival?, restoRival? }]; o peso é a chance de cada um
+   * ser o próximo. Nota de uma ordem = Σ peso × (% dos cenários do rival que ela vence), com a
+   * margem média ponderada como desempate.
+   */
+  async function sugerirContraVarios({ meus = [], rivais = [], buscarNaBolsa = false }) {
+    await carregarModulos();
+    await carregarCatalogo();
+    const avisos = [];
+    const bolsa = meusPokemons();
+    const porId = new Map(bolsa.map((p) => [p.id, p]));
+    const meusPk = meus.map((m) => (m.id != null ? porId.get(m.id) : null)).filter(Boolean);
+    const estimar = (x) => {
+      const esp = especiePorNome(x.nome);
+      if (!esp) return null;
+      avisos.push(`${x.nome}: estimado`);
+      return hipotetico(esp, x.nivel || 150);
+    };
+    // Os cenários de cada rival: a ordem conhecida (se houver) e todas as combinações do resto.
+    const grupos = [];
+    for (const r of rivais) {
+      let time = [];
+      try { time = (await carregarOponente(r.nick)).time; }
+      catch (e) { avisos.push(`sem o perfil de ${r.nick} (${e.message})`); continue; }
+      if (!time.length) { avisos.push(`${r.nick} sem equipe de PvP`); continue; }
+      const fixos = casar(r.ordemRival ?? [], time, (p) => p._esp.name).map((p, i) => p ?? estimar(r.ordemRival[i])).filter(Boolean);
+      const resto = time.filter((p) => !fixos.includes(p)).slice(0, Math.max(0, 5 - fixos.length));
+      const cenarios = permutacoes(resto).map((x) => [...fixos, ...x]);
+      const passo = Math.max(1, Math.floor(cenarios.length / 24));
+      grupos.push({ nick: r.nick, peso: Math.max(0.01, Number(r.peso) || 1), cenarios, amostra: cenarios.filter((_, i) => i % passo === 0).slice(0, 24) });
+      await dormir(0);
+    }
+    if (!grupos.length) throw new Error('não consegui o time de nenhum dos rivais');
+    const somaPesos = grupos.reduce((s, g) => s + g.peso, 0);
+
+    const avaliar = (ordem, chave) => {
+      let nota = 0, margem = 0;
+      const porRival = [];
+      for (const g of grupos) {
+        let vit = 0, soma = 0;
+        for (const O of g[chave]) { const x = lutar(ordem, O); if (x.venceu) vit++; soma += x.margem; }
+        const n = g[chave].length;
+        nota += (g.peso / somaPesos) * (vit / n);
+        margem += (g.peso / somaPesos) * (soma / n);
+        porRival.push({ nick: g.nick, vitorias: vit, total: n });
+      }
+      return { nota, margem, porRival };
+    };
+    const melhorPrimeiro = (a, b) => b.nota - a.nota || b.margem - a.margem;
+
+    const conjuntos = [];
+    if (meusPk.length >= 2) conjuntos.push(meusPk);
+    if (buscarNaBolsa) {
+      const fortes = bolsa.map((p) => [p, forca(p)]).sort((a, b) => b[1] - a[1]).map(([p]) => p);
+      const pool = [...new Set([...meusPk, ...fortes])].slice(0, Math.max(8, meusPk.length));
+      for (const c of combinacoes(pool, Math.min(5, pool.length))) {
+        if (new Set(c.map((p) => p.speciesId)).size === c.length) conjuntos.push(c);
+      }
+    }
+    const triagem = [];
+    let n = 0;
+    for (const conj of conjuntos) {
+      let melhor = null;
+      for (const ordem of permutacoes(conj)) {
+        const r = { ordem, ...avaliar(ordem, 'amostra') };
+        if (!melhor || melhorPrimeiro(r, melhor) < 0) melhor = r;
+      }
+      triagem.push(melhor);
+      if (++n % 3 === 0) await dormir(0);
+    }
+    const finais = triagem.sort(melhorPrimeiro).slice(0, 6).map((r) => ({ ordem: r.ordem, ...avaliar(r.ordem, 'cenarios') })).sort(melhorPrimeiro).slice(0, 3);
+    return {
+      opcoes: finais.map((r) => ({
+        ordem: r.ordem.map((p) => ({ id: p._origem === 'bolsa' ? p.id : null, nome: p._esp.name, nivel: p.level })),
+        nota: r.nota, margem: r.margem, porRival: r.porRival,
+      })),
+      rivais: grupos.map((g) => ({ nick: g.nick, peso: g.peso / somaPesos, cenarios: g.cenarios.length })),
+      avisos,
+      tabelaOficial: tabelaOficial(),
+    };
+  }
+  A.sugerirContraVarios = sugerirContraVarios;
+
   function hipotetico(esp, nivel) {
     return normalizar({ speciesId: esp.pokeId, level: nivel, ivs: ivsIguais(IV_PADRAO), quality: 1, potencia: 1, shiny: false }, 'espécie');
   }
