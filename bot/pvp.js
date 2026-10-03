@@ -14,7 +14,7 @@
 //    servidor só puxa a próxima partida 20 s depois do fim, então dá tempo.
 (() => {
   'use strict';
-  const VERSAO_PVP = '1.1.0';
+  const VERSAO_PVP = '1.2.0';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -49,6 +49,8 @@
   const salvarHist = () => { try { localStorage.setItem(CHAVE_HIST, JSON.stringify(hist.slice(0, HIST_MAX))); } catch {} };
   let busca = '';
   let pagina = 0;
+  let aba = 'historico';      // 'historico' | 'stats'
+  const st = { porOrdem: false, minimo: 1, periodo: 'tudo' }; // filtros da aba Estatísticas
   let meuTimeIds = null; // a ordem salva da sua equipe de PvP (ids), do último `pvp` com `time`
 
   const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -156,7 +158,7 @@
     if (!meuTimeIds?.length) return [];
     const porId = new Map((core.eu?.pokemons ?? []).map((p) => [p.id, p]));
     return meuTimeIds.map((id) => porId.get(id)).filter(Boolean)
-      .map((p) => ({ nome: p.nick || p.nome, nivel: p.level, shiny: !!p.shiny }));
+      .map((p) => ({ nome: p.nome, nivel: p.level, shiny: !!p.shiny })); // espécie, não apelido: é o que define a comp
   }
 
   /** Quem está em `todos` e não em `entrou` (por nome, respeitando repetidos). */
@@ -260,7 +262,6 @@
   #ppvp-modal header{position:sticky;top:0;z-index:1;display:flex;justify-content:space-between;align-items:center;padding:10px 14px;
     background:#c9754a;color:#2a1212;font-weight:800;letter-spacing:.5px}
   #ppvp-modal header small{font-weight:600;opacity:.75;margin-left:8px}
-  #ppvp-modal header button{background:#b04ad0;border:2px solid #f3c77a;color:#fff;border-radius:8px;width:30px;height:30px;cursor:pointer;font-weight:800}
   #ppvp-modal section{padding:10px 14px;border-bottom:1px solid #5a3232}
   #ppvp-modal h4{margin:0 0 8px;font-size:12px;letter-spacing:.6px;text-transform:uppercase;color:#f3c77a}
   .ppvp-linha{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:6px}
@@ -279,6 +280,8 @@
   .ppvp-ordem b{color:#f3c77a;margin-right:3px}
   .ppvp-ordem .ppvp-fora{opacity:.6;font-style:italic}
   .ppvp-pags{display:flex;gap:8px;align-items:center;justify-content:center;margin-top:8px}
+  .ppvp-bt.ppvp-on{background:#b04ad0;border-color:#f3c77a;color:#fff}
+  #ppvp-modal header .ppvp-x{background:#b04ad0;border:2px solid #f3c77a;color:#fff;border-radius:8px;width:30px;height:30px;cursor:pointer;font-weight:800}
   .ppvp-aviso{color:#f3c77a;font-size:11px}
   .ppvp-log{font:11px ui-monospace,monospace;white-space:pre-wrap;max-height:110px;overflow:auto;background:#2a1515;border-radius:8px;padding:6px 8px;margin:0}`;
 
@@ -296,6 +299,7 @@
     });
     fundo.addEventListener('change', (e) => {
       if (e.target.dataset.c === 'derrotas') { cfg.derrotas = Math.max(1, Math.min(10, Number(e.target.value) || 2)); salvarCfg(); pintar(); }
+      if (e.target.dataset.c === 'stMinimo') { st.minimo = Math.max(1, Math.min(50, Number(e.target.value) || 1)); pintar(); }
     });
     const aoEsc = (e) => { if (e.key === 'Escape' && fundo.classList.contains('aberto')) fechar(); };
     document.addEventListener('keydown', aoEsc);
@@ -315,11 +319,123 @@
     return cel.length ? `<div class="ppvp-ordem">${cel.join('')}</div>` : '—';
   }
 
+  // ---------------------------------------------------------------- estatísticas
+  const DIAS = { tudo: null, '30d': 30, '7d': 7, hoje: 1 };
+  const nomes = (lista) => (lista ?? []).map((x) => String(x.nome ?? '?'));
+  /** A comp do rival: o CONJUNTO dos 5 (a ordem completa dele nem sempre é conhecida). */
+  function compRival(h) {
+    const n = [...nomes(h.dele), ...nomes(h.naoEntrou)];
+    if (!n.length) return null;
+    const ord = [...n].sort((a, b) => a.localeCompare(b));
+    return { chave: ord.join(' · '), rotulo: ord.join(' · '), parcial: n.length < TIME_PVP };
+  }
+  /** A sua comp: pelo conjunto ou, se pedido, pela ordem exata de entrada. */
+  function compMinha(h) {
+    const n = nomes(h.meu);
+    if (!n.length) return null;
+    const rotulo = st.porOrdem ? n.join(' → ') : [...n].sort((a, b) => a.localeCompare(b)).join(' · ');
+    return { chave: rotulo, rotulo, parcial: n.length < TIME_PVP };
+  }
+
+  function estatisticas() {
+    const dias = DIAS[st.periodo];
+    const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+    const desde = dias ? hoje.getTime() - (dias - 1) * 24 * 3600 * 1000 : 0;
+    const duelos = hist.filter((h) => h.em >= desde);
+    const minhas = new Map(), rivais = new Map(), meusPk = new Map(), delesPk = new Map();
+    const soma = (mapa, chave, base) => { const r = mapa.get(chave) ?? { ...base, n: 0, v: 0, delta: 0, x: new Map() }; mapa.set(chave, r); return r; };
+    const somaX = (r, chave, rotulo, venci) => { const x = r.x.get(chave) ?? { rotulo, n: 0, v: 0 }; x.n++; if (venci) x.v++; r.x.set(chave, x); };
+    for (const h of duelos) {
+      const cm = compMinha(h), cr = compRival(h);
+      if (cm) {
+        const r = soma(minhas, cm.chave, { rotulo: cm.rotulo, parcial: cm.parcial });
+        r.n++; if (h.venci) r.v++; r.delta += h.delta || 0;
+        if (cr) somaX(r, cr.chave, cr.rotulo, h.venci);
+      }
+      if (cr) {
+        const r = soma(rivais, cr.chave, { rotulo: cr.rotulo, parcial: cr.parcial, nicks: new Set() });
+        r.n++; if (h.venci) r.v++; r.delta += h.delta || 0; r.nicks.add(h.nick);
+        if (cm) somaX(r, cm.chave, cm.rotulo, h.venci);
+      }
+      for (const n of new Set(nomes(h.meu))) { const p = meusPk.get(n) ?? { n: 0, v: 0 }; p.n++; if (h.venci) p.v++; meusPk.set(n, p); }
+      for (const n of new Set([...nomes(h.dele), ...nomes(h.naoEntrou)])) { const p = delesPk.get(n) ?? { n: 0, v: 0 }; p.n++; if (h.venci) p.v++; delesPk.set(n, p); }
+    }
+    return { duelos, minhas, rivais, meusPk, delesPk };
+  }
+
+  const pct = (v, n) => (n ? Math.round((v / n) * 100) : 0);
+  const pctHtml = (v, n) => { const p = pct(v, n); return `<b class="${p >= 60 ? 'ppvp-v' : p < 45 ? 'ppvp-d' : ''}">${p}%</b>`; };
+  /** O melhor e o pior confronto de uma comp (por % de vitória; empate decide quem tem mais jogos). */
+  function extremos(x) {
+    const lista = [...x.values()];
+    if (!lista.length) return { melhor: null, pior: null };
+    const ord = [...lista].sort((a, b) => pct(b.v, b.n) - pct(a.v, a.n) || b.n - a.n);
+    return { melhor: ord[0], pior: ord.length > 1 ? ord[ord.length - 1] : null };
+  }
+  const confronto = (c) => (c ? `${esc(c.rotulo)} <small>(${c.v}V ${c.n - c.v}D)</small>` : '—');
+
+  function htmlStats() {
+    const s = estatisticas();
+    const ordenar = (m) => [...m.values()].filter((r) => r.n >= st.minimo).sort((a, b) => b.n - a.n || pct(b.v, b.n) - pct(a.v, a.n));
+    const minhas = ordenar(s.minhas), rivais = ordenar(s.rivais);
+    const v = s.duelos.filter((h) => h.venci).length;
+    const tabMinhas = minhas.map((r) => { const e = extremos(r.x); return `<tr>
+        <td style="white-space:normal"><b>${esc(r.rotulo)}</b>${r.parcial ? ' <small class="ppvp-aviso">(incompleta)</small>' : ''}</td>
+        <td>${r.n}</td><td><span class="ppvp-v">${r.v}</span>-<span class="ppvp-d">${r.n - r.v}</span></td><td>${pctHtml(r.v, r.n)}</td>
+        <td class="${r.delta >= 0 ? 'ppvp-v' : 'ppvp-d'}">${r.delta >= 0 ? '+' : ''}${r.delta}</td>
+        <td style="white-space:normal">${confronto(e.melhor)}</td><td style="white-space:normal">${confronto(e.pior)}</td></tr>`; }).join('');
+    const tabRivais = rivais.map((r) => { const e = extremos(r.x); return `<tr>
+        <td style="white-space:normal"><b>${esc(r.rotulo)}</b>${r.parcial ? ' <small class="ppvp-aviso">(incompleta)</small>' : ''}<br><small>${[...r.nicks].slice(0, 4).map(esc).join(', ')}${r.nicks.size > 4 ? '…' : ''}</small></td>
+        <td>${r.n}</td><td><span class="ppvp-v">${r.v}</span>-<span class="ppvp-d">${r.n - r.v}</span></td><td>${pctHtml(r.v, r.n)}</td>
+        <td style="white-space:normal">${confronto(e.melhor)}</td></tr>`; }).join('');
+    const pks = (m, titulo, dica, ordem) => {
+      const lista = [...m.entries()].filter(([, p]) => p.n >= st.minimo).sort(ordem).slice(0, 15);
+      return `<div style="flex:1;min-width:260px"><h4>${titulo} <span class="ppvp-aviso" style="text-transform:none">${dica}</span></h4>
+        ${lista.length ? `<table class="ppvp-tab"><tr><th>Pokémon</th><th>Duelos</th><th>Sua % de vitória</th></tr>
+          ${lista.map(([n, p]) => `<tr><td><b>${esc(n)}</b></td><td>${p.n}</td><td>${pctHtml(p.v, p.n)} <small>(${p.v}V ${p.n - p.v}D)</small></td></tr>`).join('')}</table>`
+          : '<span class="ppvp-aviso">Sem dados.</span>'}</div>`;
+    };
+    return `
+      <section>
+        <div class="ppvp-linha">
+          <b style="color:#f3c77a;font-size:11px;text-transform:uppercase">Período</b>
+          ${Object.entries({ tudo: 'Tudo', '30d': '30 dias', '7d': '7 dias', hoje: 'Hoje' }).map(([k, n]) => `<button class="ppvp-bt ${st.periodo === k ? 'ppvp-on' : ''}" data-a="stPeriodo" data-v="${k}">${n}</button>`).join('')}
+          <span style="width:12px"></span>
+          <label><input type="checkbox" data-a="stOrdem" ${st.porOrdem ? 'checked' : ''}> separar suas comps pela ordem de entrada</label>
+          <span style="width:12px"></span>
+          mínimo de duelos: <input type="number" class="ppvp-in" data-c="stMinimo" min="1" max="50" value="${st.minimo}">
+        </div>
+        <div class="ppvp-linha"><b>${s.duelos.length}</b> duelos no período · <span class="ppvp-v">${v}V</span> <span class="ppvp-d">${s.duelos.length - v}D</span> · ${pctHtml(v, s.duelos.length)} de vitória</div>
+      </section>
+      <section>
+        <h4>Suas composições</h4>
+        ${tabMinhas ? `<table class="ppvp-tab"><tr><th>Comp</th><th>Duelos</th><th>V-D</th><th>%</th><th>Pontos</th><th>Vai melhor contra</th><th>Vai pior contra</th></tr>${tabMinhas}</table>`
+          : '<span class="ppvp-aviso">Sem duelos com a sua comp registrada ainda.</span>'}
+      </section>
+      <section>
+        <h4>Composições rivais</h4>
+        ${tabRivais ? `<table class="ppvp-tab"><tr><th>Comp do rival</th><th>Enfrentou</th><th>Sua V-D</th><th>%</th><th>Sua comp que mais vence ela</th></tr>${tabRivais}</table>`
+          : '<span class="ppvp-aviso">Sem comps rivais registradas ainda.</span>'}
+      </section>
+      <section class="ppvp-linha" style="align-items:flex-start;gap:16px">
+        ${pks(s.meusPk, 'Seus pokémon', 'sua % de vitória quando ele está no time', (a, b) => pct(b[1].v, b[1].n) - pct(a[1].v, a[1].n) || b[1].n - a[1].n)}
+        ${pks(s.delesPk, 'Pokémon rivais que mais te derrotam', 'sua % de vitória quando ele está no time do rival', (a, b) => pct(a[1].v, a[1].n) - pct(b[1].v, b[1].n) || b[1].n - a[1].n)}
+      </section>`;
+  }
+
   function pintar() {
     const modal = document.getElementById('ppvp-modal');
     if (!modal || !estaAberto()) return;
+    const abas = `<span class="ppvp-linha" style="margin:0">
+        <button class="ppvp-bt ${aba === 'historico' ? 'ppvp-on' : ''}" data-a="aba" data-v="historico">Histórico</button>
+        <button class="ppvp-bt ${aba === 'stats' ? 'ppvp-on' : ''}" data-a="aba" data-v="stats">Estatísticas</button>
+        <button class="ppvp-x" data-a="fechar" title="Fechar">×</button></span>`;
+    if (aba === 'stats') {
+      modal.innerHTML = `<header><span>⚔ PvP — estatísticas<small>v${VERSAO_PVP}</small></span>${abas}</header>${htmlStats()}`;
+      return;
+    }
     modal.innerHTML = `
-      <header><span>⚔ PvP — ordem dos rivais<small>v${VERSAO_PVP}</small></span><button data-a="fechar" title="Fechar">×</button></header>
+      <header><span>⚔ PvP — ordem dos rivais<small>v${VERSAO_PVP}</small></span>${abas}</header>
       <section>
         <div class="ppvp-linha">
           <button class="ppvp-sw ${cfg.trava ? 'on' : ''}" data-a="trava"></button>
@@ -389,6 +505,9 @@
     if (a === 'trava') { cfg.trava = !cfg.trava; registrar(cfg.trava ? 'trava da fila ligada' : 'trava da fila desligada'); }
     else if (a === 'limpar') { hist = []; salvarHist(); }
     else if (a === 'pag') { pagina = Math.max(0, pagina + Number(b.dataset.v)); return pintarTabela(); }
+    else if (a === 'aba') aba = b.dataset.v;
+    else if (a === 'stPeriodo') st.periodo = b.dataset.v;
+    else if (a === 'stOrdem') st.porOrdem = b.checked;
     salvarCfg();
     pintar();
   }
