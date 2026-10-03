@@ -270,14 +270,14 @@
         </div>
         <div class="linha">
           Quantidade por conta ${[1, 2].map((n) => `<button data-reb="qtd" data-v="${n}" class="${reb.qtd === n ? 'on' : ''}">${n}</button>`).join('')}
-          · desconto <input data-reb-c="desconto" type="number" min="5" max="10" step="0.5" placeholder="auto" value="${escH(reb.desconto)}"> % <span class="ajuda">(vazio = automático entre 5% e 10%)</span>
+          · desconto <input data-reb-c="desconto" type="number" min="5" max="10" step="0.5" placeholder="auto" value="${escH(reb.desconto)}"> % <span class="ajuda">(desconto da 1ª conta; vazio = 5%; as outras descem até 10%)</span>
         </div>
         <div class="linha">
           <button data-reb="previa" ${reb.rodando ? 'disabled' : ''}>🔎 Ver preços em cada conta</button>
           <button data-reb="publicar" class="on" ${reb.rodando || !prontas.length ? 'disabled' : ''}>📢 Publicar em ${prontas.length} conta(s)</button>
           ${reb.rodando ? `<span class="ajuda">${escH(reb.rodando)}</span>` : ''}
         </div>` : '<p class="ajuda">Nenhuma pedra nas contas alternativas logadas.</p>'}
-        <p class="ajuda">Em COINS. O preço de cada conta é calculado no "Ver preços", antes de qualquer publicação — assim uma conta não baixa em cima do anúncio da outra.</p>
+        <p class="ajuda">Em COINS. Preços ESCALONADOS: cada conta um degrau abaixo da anterior, do desconto inicial (vazio = 5%) até 10%, todas sobre o mesmo menor anúncio lido no "Ver preços" — antes de qualquer publicação.</p>
       </section>
       <section>
         <table><tr><th>Conta</th><th>Tem</th><th>Referência</th><th>Vai anunciar por (cada)</th><th>Resultado</th></tr>
@@ -301,6 +301,16 @@
     await Promise.all(alvos.map(async (x) => {
       reb.previas.set(x.c.n, (await naConta(x.c, `window.__pokeVendas.previaRebaixar(${arg})`)) ?? { erro: 'sem resposta' });
     }));
+    // Escalonado: cada conta um degrau abaixo da anterior, do desconto inicial (o escolhido, ou 5%)
+    // até 10%, todas sobre a MESMA referência — o menor preço lido antes de qualquer publicação.
+    const comPreco = alvos.filter((x) => reb.previas.get(x.c.n)?.preco);
+    const ref = Math.min(...comPreco.map((x) => reb.previas.get(x.c.n).ref));
+    const d0 = reb.desconto === '' ? 0.05 : Math.min(0.10, Math.max(0.05, Number(reb.desconto) / 100));
+    comPreco.forEach((x, i) => {
+      const d = comPreco.length > 1 ? d0 + (0.10 - d0) * (i / (comPreco.length - 1)) : d0;
+      const pv = reb.previas.get(x.c.n);
+      reb.previas.set(x.c.n, { ...pv, ref, desconto: d, preco: Math.max(2, Math.floor(ref * (1 - d))) });
+    });
     reb.rodando = false;
     pintarReb();
   }

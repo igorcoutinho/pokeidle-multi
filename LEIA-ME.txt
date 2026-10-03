@@ -46,8 +46,8 @@ PEDRA ABAIXO DO MERCADO — botão 📉 na barra de cima do app (você dá a ord
   - Escolha a pedra (as que as contas alternativas têm), a quantidade por conta (1 ou 2) e o
     desconto (vazio = automático entre 5% e 10%, maior quanto mais anúncios houver).
   - "Ver preços": cada conta lê o Mercado e mostra o menor anúncio e o preço que vai anunciar.
-  - "Publicar": uma confirmação e cada conta anuncia em COINS. O preço de cada uma é o calculado
-    antes de qualquer publicação (uma conta não baixa em cima do anúncio da outra).
+  - "Publicar": uma confirmação e cada conta anuncia em COINS, com preços ESCALONADOS: cada conta
+    um degrau abaixo da anterior (do desconto inicial até 10%), todas sobre o mesmo menor anúncio.
   - A conta Bekazin é PROTEGIDA: nunca anuncia (trava na janela do app e dentro da conta).
   - Também dá para fazer numa conta só: 💰 Vendas → 📉 Anunciar abaixo do mercado.
 
