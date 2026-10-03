@@ -42,15 +42,13 @@ ROTAÇÃO DE MAPAS — botão 🔄 Rota (fica verde quando ligada)
     no Centro Pokémon, em boss ou Arena. Se o servidor recusar, tenta na próxima onda.
   - Funciona também no Modo Economia. A configuração é separada por conta.
 
-COMPRAS E VENDAS — botão 💰 Vendas
-  - Lê o seu extrato do Mercado (Histórico de compras e de vendas do RMT) e agrupa por item.
-  - Período: Hoje, Últimos 3 dias, 7 dias, 30 dias, Tudo ou entre duas datas.
-  - Filtros: busca por nome do item, moeda (Coins/Gemas) e tipo (Itens/Pokémon/Diamantes).
-  - Por item: quanto comprou e o preço médio, quanto vendeu, a taxa paga, o lucro, e
-    "Vender p/ empatar" / "Vender c/ X%": o menor preço por unidade que devolve o preço
-    médio de compra (ou a margem escolhida) DEPOIS da taxa do Mercado.
-  - Taxa: Coins 15%; Gemas 15% em itens e por faixas em pokémon (13% · 10% · 7,5%).
-  - Clique num item para ver cada compra e venda.
+PvP — botão ⚔ PvP
+  - A cada duelo, guarda a ORDEM em que o rival colocou os pokémon (e a sua), tirada da fita
+    da partida. A ficha do jogo mostra a equipe na ordem da Pokédex; aqui é a ordem de entrada.
+    Só aparecem os pokémon que chegaram a lutar.
+  - Histórico com data, rival, vitória/derrota, pontos e as duas ordens. Filtro por nick.
+  - Trava da fila: se a fila automática estiver ligada e você perder 2 seguidas (ajustável),
+    o app desliga a fila automática sozinho e avisa na tela.
 
 ANÁLISE DE TIME (PvP) — botão 📊 Time
   - Mostra seu time (equipe de PvP salva ou equipe atual) e as fraquezas dele por tipo.

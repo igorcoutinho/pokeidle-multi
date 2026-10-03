@@ -106,7 +106,7 @@
         <span class="esp"></span>
         <button data-a="shiny" class="eco" title="Caçador de shiny: registra os bichos do mapa e arremessa Great Ball quando um shiny cai">✨ Shiny</button>
         <button data-a="rota" class="eco" title="Rotação de mapas: troca de mapa sozinho quando a onda acaba">🔄 Rota</button>
-        <button data-a="vendas" title="Relatório de compras e vendas no Mercado: preço médio, taxa, lucro e preço de venda">💰 Vendas</button>
+        <button data-a="pvp" class="eco" title="PvP: ordem que cada rival usou e trava da fila automática">⚔ PvP</button>
         <button data-a="time" title="Análise do time para PvP: quem colocar no lugar de quem">📊 Time</button>
         <button data-a="eco" class="eco" title="Ligar/desligar o Modo Economia do jogo nesta conta">🍃 Eco</button>
         ${cfg.rotom ? '<button data-a="rotom" title="Abrir o Cockpit do Rotom Sniper desta conta">🎯 Rotom</button>' : ''}
@@ -148,7 +148,11 @@
     const lerShiny = () => wv.executeJavaScript('!!window.__pokeShiny?.ativo')
       .then((on) => { elShiny.classList.toggle('on', on); elShiny.textContent = on ? '✨ Shiny ON' : '✨ Shiny'; })
       .catch(() => {});
-    const lerEco = () => { lerRota(); lerShiny(); return wv.executeJavaScript(JS_ECO_ESTADO).then(pintarEco).catch(() => {}); };
+    const elPvp = caixa.querySelector('[data-a="pvp"]');
+    const lerPvp = () => wv.executeJavaScript('!!window.__pokePvp?.trava')
+      .then((on) => { elPvp.classList.toggle('on', on); elPvp.title = on ? 'PvP: trava da fila automática ligada' : 'PvP: ordem que cada rival usou e trava da fila automática'; })
+      .catch(() => {});
+    const lerEco = () => { lerRota(); lerShiny(); lerPvp(); return wv.executeJavaScript(JS_ECO_ESTADO).then(pintarEco).catch(() => {}); };
     // O modo também pode ser trocado pelo próprio jogo — o botão acompanha.
     setInterval(lerEco, 3000);
     pintar();
@@ -173,8 +177,8 @@
         wv.executeJavaScript('window.__pokeShiny?.abrir()').catch(() => aviso('Shiny: a conta ainda está carregando.'));
       } else if (a === 'rota') {
         wv.executeJavaScript('window.__pokeRotacao?.abrir()').catch(() => aviso('Rotação: a conta ainda está carregando.'));
-      } else if (a === 'vendas') {
-        wv.executeJavaScript('window.__pokeVendas?.abrir()').catch(() => aviso('Vendas: a conta ainda está carregando.'));
+      } else if (a === 'pvp') {
+        wv.executeJavaScript('window.__pokePvp?.abrir()').catch(() => aviso('PvP: a conta ainda está carregando.'));
       } else if (a === 'time') {
         wv.executeJavaScript('window.__pokeAnalise?.abrir()').catch(() => aviso('Análise: a conta ainda está carregando.'));
       } else if (a === 'eco') {
