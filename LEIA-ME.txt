@@ -72,6 +72,9 @@ PvP — botão ⚔ PvP
     porque o rival vai counterar; derrota → troca (opcional). Entra a de melhor taxa, sem repetir
     a atual, aplicada direto na equipe de PvP. Dá para tirar formações da rotação.
     O botão 👥 contra quem mostra o placar da formação por jogador (V-D, %, pontos, última vez).
+  - Histórico de trocas (aba Formações): cada decisão do auto-switch (trocou / manteve) e, na
+    partida seguinte, quem veio, se a previsão acertou, se a troca valeu e se você venceu. No
+    topo: % de acerto da previsão, % de vitória depois das trocas e % de vitória geral.
   - Ligar/desligar o auto-switch: botão "🔁 Auto-switch" no topo do painel ⚔ PvP, em qualquer aba
     (verde = ligado).
   - Modo 🔮 prever o próximo adversário (padrão do auto-switch): os ATIVOS são quem você enfrentou

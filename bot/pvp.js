@@ -14,7 +14,7 @@
 //    servidor só puxa a próxima partida 20 s depois do fim, então dá tempo.
 (() => {
   'use strict';
-  const VERSAO_PVP = '1.8.2';
+  const VERSAO_PVP = '1.9.0';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -457,6 +457,36 @@
     return { nota: peso ? soma / peso : notaF(f), det };
   }
 
+  // ---------------------------------------------------------------- histórico de trocas
+  // Cada decisão do auto-switch (trocou / manteve / sem opção) e, na partida SEGUINTE, o que
+  // aconteceu: quem veio, se a previsão acertou, se a formação escolhida foi a que lutou e se ganhou.
+  const CHAVE_TROCAS = 'pokepvp.trocas.v1';
+  let trocas = (() => { try { return JSON.parse(localStorage.getItem(CHAVE_TROCAS)) ?? []; } catch { return []; } })();
+  const salvarTrocas = () => { try { localStorage.setItem(CHAVE_TROCAS, JSON.stringify(trocas.slice(0, 200))); } catch {} };
+
+  function anotarTroca(reg, x) {
+    trocas.unshift({
+      em: Date.now(), depoisDe: reg.nick, venceuAnterior: !!reg.venci, modo: cfg.auto.modo,
+      previstos: (x.previstos ?? []).slice(0, 3).map((y) => ({ nick: y.nick, p: y.p })),
+      acao: x.acao, de: x.de ?? null, para: x.para ?? null, paraK: x.paraK ?? chaveAtual(), motivo: x.motivo ?? '', pendente: true,
+    });
+    trocas = trocas.slice(0, 200);
+    salvarTrocas();
+  }
+
+  /** A partida que acabou de chegar responde à última decisão pendente. */
+  function conferirTroca(reg) {
+    const t = trocas.find((x) => x.pendente);
+    if (!t) return;
+    t.pendente = false;
+    t.veio = reg.nick;
+    t.venceu = !!reg.venci;
+    t.acertou = t.previstos?.length ? mesmoNick(t.previstos[0].nick, reg.nick) : null;
+    const lutou = idsDoDuelo(reg)?.join(',');
+    t.aplicada = lutou && t.paraK ? lutou === t.paraK : null;
+    salvarTrocas();
+  }
+
   function autoSwitch(reg) {
     const a = cfg.auto;
     if (!a.ativo) return;
@@ -468,7 +498,7 @@
     if (reg.venci) {
       a.seguidas = (a.seguidas ?? 0) + 1;
       if (a.seguidas >= Math.max(1, Number(a.vitorias) || 1)) motivo = `${a.seguidas} vitória(s) seguida(s) — o rival deve counterar`;
-      else registrar(`auto-switch: vitória ${a.seguidas}/${a.vitorias} com ${nomeAtual} — mantém`);
+      else { registrar(`auto-switch: vitória ${a.seguidas}/${a.vitorias} com ${nomeAtual} — mantém`); anotarTroca(reg, { acao: 'manteve', de: atual?.nome, para: atual?.nome, motivo: `vitória ${a.seguidas}/${a.vitorias}` }); }
     } else {
       a.seguidas = 0;
       if (a.naDerrota) motivo = 'derrota';
@@ -476,6 +506,7 @@
     if (!motivo) { salvarCfg(); return; }
     const candidatas = todas.filter((f) => naRotacao(f) && f.k !== chaveAtual()).sort(ordemDeEscolha);
     if (!candidatas.length) {
+      anotarTroca(reg, { acao: 'sem opção', de: atual?.nome, motivo });
       registrar(`auto-switch: queria trocar (${motivo}), mas você ainda não tem outra formação usada ${a.minUso}+ vezes`);
       salvarCfg();
       return;
@@ -487,6 +518,7 @@
       reg.trocouDepois = true;
       salvarHist();
       registrar(`🔁 auto-switch: ${nomeAtual} → "${prox.nome}" (${prox.v}V ${prox.n - prox.v}D)`);
+      anotarTroca(reg, { acao: 'trocou', de: atual?.nome, para: prox.nome, paraK: prox.k, motivo });
       avisar(`🔁 Auto-switch: agora "${prox.nome}" — ${prox.v}V ${prox.n - prox.v}D (${motivo})`);
     }
     salvarCfg();
@@ -500,6 +532,7 @@
     const previstos = preverProximo(reg.nick);
     if (!previstos.length) {
       registrar('auto-switch: ainda não há adversários suficientes no histórico para prever o próximo');
+      anotarTroca(reg, { acao: 'sem opção', motivo: 'sem adversários ativos no histórico' });
       return;
     }
     const cand = candidatasPara(previstos);
@@ -510,6 +543,7 @@
     const quem = previstos.slice(0, 2).map((x) => `${x.nick} (${Math.round(x.p * 100)}%)`).join(', ');
     if (!melhor || melhor.f.k === chaveAtual() || melhor.nota < notaAtual + 0.02) {
       registrar(`auto-switch: próximo provável ${quem} — a equipe atual já é a melhor para ele${atual ? ` (${pontuar(atual, previstos).det[0] ?? ''})` : ''}`);
+      anotarTroca(reg, { acao: 'manteve', previstos, de: atual?.nome, para: atual?.nome, motivo: 'a atual já é a melhor contra eles' });
       return;
     }
     if (aplicarEquipe(melhor.f.ids, `próximo provável: ${previstos[0].nick}`)) {
@@ -518,6 +552,7 @@
       salvarHist();
       salvarCfg();
       registrar(`🔮 auto-switch: próximo provável ${quem} → "${melhor.f.nome}" (${melhor.det.join(' · ')})`);
+      anotarTroca(reg, { acao: 'trocou', previstos, de: atual?.nome, para: melhor.f.nome, paraK: melhor.f.k, motivo: melhor.det.join(' · ') });
       avisar(`🔮 Próximo deve ser ${previstos[0].nick}: troquei para "${melhor.f.nome}"`);
     }
   }
@@ -614,6 +649,41 @@
       </div>`;
   }
 
+  let trocasVerTodas = false;
+  function htmlTrocas() {
+    const feitas = trocas.filter((t) => !t.pendente);
+    const comPrev = feitas.filter((t) => t.acertou != null);
+    const acertos = comPrev.filter((t) => t.acertou).length;
+    const trocou = feitas.filter((t) => t.acao === 'trocou');
+    const vTrocou = trocou.filter((t) => t.venceu).length;
+    const aplicadas = trocou.filter((t) => t.aplicada === true).length;
+    const naoAplic = trocou.filter((t) => t.aplicada === false).length;
+    const vTudo = hist.filter((h) => h.venci).length;
+    const lista = trocasVerTodas ? trocas : trocas.slice(0, 12);
+    const sim = (b) => (b == null ? '—' : b ? '<span class="ppvp-v">✔</span>' : '<span class="ppvp-d">✘</span>');
+    return `
+      <h4>Histórico de trocas do auto-switch ${trocas.length ? '<button class="ppvp-bt ppvp-mini" data-a="limparTrocas">limpar</button>' : ''}</h4>
+      ${feitas.length ? `<div class="ppvp-linha">
+        Decisões conferidas: <b>${feitas.length}</b>
+        · previsão do próximo acertou: <b>${comPrev.length ? `${acertos}/${comPrev.length} (${pct(acertos, comPrev.length)}%)` : '—'}</b>
+        · depois de trocar, venceu: <b>${trocou.length ? `${vTrocou}/${trocou.length}` : '—'}</b> ${trocou.length ? pctHtml(vTrocou, trocou.length) : ''}
+        · vitória geral: ${pctHtml(vTudo, hist.length)}
+        ${naoAplic ? `· <span class="ppvp-d">⚠ ${naoAplic} troca(s) não chegaram a valer na partida seguinte</span>` : aplicadas ? `· trocas valeram na partida seguinte: <b class="ppvp-v">${aplicadas}/${trocou.length}</b>` : ''}
+      </div>` : ''}
+      ${lista.length ? `<table class="ppvp-tab"><tr><th>Quando</th><th>Depois de</th><th>Previu</th><th>Decisão</th><th>Veio</th><th>Previsão</th><th>Troca valeu</th><th>Resultado</th></tr>
+        ${lista.map((t) => `<tr>
+          <td>${dataCurta(t.em)}</td>
+          <td>${esc(t.depoisDe)} <small class="${t.venceuAnterior ? 'ppvp-v' : 'ppvp-d'}">${t.venceuAnterior ? 'V' : 'D'}</small></td>
+          <td>${t.previstos?.length ? t.previstos.map((y) => `${esc(y.nick)} ${Math.round(y.p * 100)}%`).join(', ') : '<small class="ppvp-aviso">rotação</small>'}</td>
+          <td style="white-space:normal">${t.acao === 'trocou' ? `🔁 ${esc(t.de ?? 'equipe atual')} → <b>${esc(t.para)}</b>` : t.acao === 'manteve' ? `manteve <b>${esc(t.para ?? 'a equipe')}</b>` : '<span class="ppvp-aviso">sem opção</span>'}<br><small class="ppvp-aviso">${esc(t.motivo)}</small></td>
+          <td>${t.pendente ? '<small class="ppvp-aviso">aguardando a próxima partida…</small>' : esc(t.veio)}</td>
+          <td>${t.pendente ? '' : sim(t.acertou)}</td>
+          <td>${t.pendente || t.acao === 'sem opção' ? '' : sim(t.aplicada)}</td>
+          <td>${t.pendente ? '' : t.venceu ? '<b class="ppvp-v">venceu</b>' : '<b class="ppvp-d">perdeu</b>'}</td></tr>`).join('')}</table>
+        ${trocas.length > 12 ? `<button class="ppvp-bt ppvp-mini" data-a="verTrocas">${trocasVerTodas ? 'ver menos' : `ver todas (${trocas.length})`}</button>` : ''}`
+        : '<p class="ppvp-aviso">Nenhuma decisão ainda — com o auto-switch ligado, cada partida registra aqui o que ele decidiu e, na seguinte, se deu certo.</p>'}`;
+  }
+
   function htmlFormacoes() {
     const a = cfg.auto;
     const todas = minhasFormacoes().sort((x, y) => y.n - x.n || notaF(y) - notaF(x));
@@ -659,6 +729,7 @@
           O jogo puxa a próxima partida 20 s depois do fim, então a troca entra antes dela.</p>
       </section>
       <section>
+        ${htmlTrocas()}
         <h4>Suas formações (${todas.length}) · na rotação: ${rot.length}</h4>
         ${linhas ? `<table class="ppvp-tab"><tr><th title="na rotação">Rot.</th><th>Formação</th><th>Ordem</th><th>Efetividade</th><th>Último uso</th><th></th></tr>${linhas}</table>`
           : '<span class="ppvp-aviso">Nenhuma formação ainda — elas aparecem aqui conforme você joga PvP.</span>'}
@@ -698,6 +769,7 @@
       if (reg) {
         contarResultado(reg);
         if (reg.dele.length) registrar(`${reg.venci ? 'vitória' : 'derrota'} vs ${reg.nick}: ${reg.dele.map((x) => x.nome).join(' → ')}`);
+        conferirTroca(reg);
         autoSwitch(reg);
       }
     }
@@ -1180,6 +1252,8 @@
       else salvarNoArmario(d.ids, d.nome);
       setTimeout(() => core.send({ t: 'pvp.info' }), 800); // traz o armário/equipe atualizados
     }
+    else if (a === 'limparTrocas') { trocas = []; salvarTrocas(); }
+    else if (a === 'verTrocas') trocasVerTodas = !trocasVerTodas;
     else if (a === 'contraQuem') formAberta = formAberta === b.dataset.v ? null : b.dataset.v;
     else if (a === 'usarForm') {
       const f = minhasFormacoes().find((x) => x.k === b.dataset.v);
