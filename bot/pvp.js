@@ -14,7 +14,7 @@
 //    servidor só puxa a próxima partida 20 s depois do fim, então dá tempo.
 (() => {
   'use strict';
-  const VERSAO_PVP = '1.7.0';
+  const VERSAO_PVP = '1.7.1';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -66,7 +66,7 @@
   let aba = 'historico';      // 'historico' | 'stats'
   const sugestoes = new Map(); // id do duelo -> { carregando, erro, r } (a "melhor ordem" calculada)
   let abertaSug = null;        // id do duelo com a sugestão aberta
-  const st = { porOrdem: false, minimo: 1, periodo: 'tudo' }; // filtros da aba Estatísticas
+  const st = { porOrdem: true, minimo: 1, periodo: 'tudo' }; // no PvP a ordem é a decisão: por padrão, cada ordem é uma comp // filtros da aba Estatísticas
   let meuTimeIds = null; // a ordem salva da sua equipe de PvP (ids), do último `pvp` com `time`
 
   const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -774,7 +774,7 @@
           <b style="color:#f3c77a;font-size:11px;text-transform:uppercase">Período</b>
           ${Object.entries({ tudo: 'Tudo', '30d': '30 dias', '7d': '7 dias', hoje: 'Hoje' }).map(([k, n]) => `<button class="ppvp-bt ${st.periodo === k ? 'ppvp-on' : ''}" data-a="stPeriodo" data-v="${k}">${n}</button>`).join('')}
           <span style="width:12px"></span>
-          <label><input type="checkbox" data-a="stOrdem" ${st.porOrdem ? 'checked' : ''}> separar suas comps pela ordem de entrada</label>
+          <label><input type="checkbox" data-a="stOrdem" ${st.porOrdem ? 'checked' : ''}> separar suas comps pela ordem de entrada <small class="ppvp-aviso">(desmarque para juntar as ordens do mesmo time)</small></label>
           <span style="width:12px"></span>
           mínimo de duelos: <input type="number" class="ppvp-in" data-c="stMinimo" min="1" max="50" value="${st.minimo}">
         </div>
