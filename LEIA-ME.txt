@@ -45,7 +45,8 @@ ROTAÇÃO DE MAPAS — botão 🔄 Rota (fica verde quando ligada)
 PvP — botão ⚔ PvP
   - A cada duelo, guarda a ORDEM em que o rival colocou os pokémon (e a sua), tirada da fita
     da partida. A ficha do jogo mostra a equipe na ordem da Pokédex; aqui é a ordem de entrada.
-    Só aparecem os pokémon que chegaram a lutar.
+    Os que chegaram a lutar aparecem na ordem exata; os que não lutaram completam os 5,
+    marcados com "?" (estão na equipe, mas a posição não é revelada). Paginado, 10 por página.
   - Histórico com data, rival, vitória/derrota, pontos e as duas ordens. Filtro por nick.
   - Trava da fila: se a fila automática estiver ligada e você perder 2 seguidas (ajustável),
     o app desliga a fila automática sozinho e avisa na tela.

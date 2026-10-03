@@ -4,15 +4,17 @@
 //    o servidor esconde a ordem de entrada de propósito. Mas, quando um duelo termina, chega a
 //    FITA inteira (`pvp` → `partida.replay`): os atores (cada pokémon com dono, nome, nível) e,
 //    quadro a quadro, as trocas (`q.c`: o próximo entra no slot de quem caiu). Dali sai a ordem
-//    em que cada lado entrou — só de quem chegou a lutar: se a partida acabou antes, os últimos
-//    do rival não aparecem. Fica salvo num histórico próprio, por conta.
+//    em que cada lado entrou — só de quem chegou a lutar. Para fechar os 5, o app pede a ficha
+//    da partida (`pvp.partida.ficha`), que traz a equipe do rival: quem não entrou completa as
+//    últimas posições, marcado como "não entrou" (essa parte da ordem o servidor não revela).
+//    A sua ordem completa vem da sua equipe de PvP salva (`pvp` → `time`). Histórico por conta.
 //
 // 2) Trava da fila. Com a fila automática ligada (`automation.pvpAutoFila`), N derrotas seguidas
 //    (2 por padrão) desligam a fila com o mesmo `auto.set` que o interruptor do jogo manda. O
 //    servidor só puxa a próxima partida 20 s depois do fim, então dá tempo.
 (() => {
   'use strict';
-  const VERSAO_PVP = '1.0.0';
+  const VERSAO_PVP = '1.1.0';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -33,6 +35,9 @@
   const CHAVE_CFG = 'pokepvp.v1';
   const CHAVE_HIST = 'pokepvp.hist.v1';
   const HIST_MAX = 300;
+  const POR_PAGINA = 10;
+  const TIME_PVP = 5;
+  const ESPERA_FICHA_MS = 1500;
 
   function lerCfg() {
     const padrao = { trava: true, derrotas: 2, seguidas: 0, log: [] };
@@ -43,6 +48,8 @@
   let hist = (() => { try { return JSON.parse(localStorage.getItem(CHAVE_HIST)) ?? []; } catch { return []; } })();
   const salvarHist = () => { try { localStorage.setItem(CHAVE_HIST, JSON.stringify(hist.slice(0, HIST_MAX))); } catch {} };
   let busca = '';
+  let pagina = 0;
+  let meuTimeIds = null; // a ordem salva da sua equipe de PvP (ids), do último `pvp` com `time`
 
   const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const quando = (ms) => new Date(ms).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
@@ -131,11 +138,56 @@
       catch (e) { aviso = `não deu para ler a fita: ${e.message}`; }
       if (!ordens.dele.length && !aviso) aviso = 'a fita não trouxe os pokémon do rival';
     } else aviso = fonte === 'fora' ? 'partida enquanto você estava fora — sem fita' : 'sem fita';
-    const reg = { id: p.id ?? null, em: Date.now(), nick, venci: !!p.venci, delta: Number(p.delta) || 0, dele: ordens.dele, meu: ordens.meu, aviso };
+    const minha = minhaOrdemSalva();
+    const reg = {
+      id: p.id ?? null, em: Date.now(), nick, venci: !!p.venci, delta: Number(p.delta) || 0,
+      dele: ordens.dele, naoEntrou: [], meu: minha.length ? minha : ordens.meu, meuCompleto: minha.length > 0, aviso,
+    };
     hist.unshift(reg);
     hist = hist.slice(0, HIST_MAX);
     salvarHist();
+    pedirFicha(reg.id);
     return reg;
+  }
+
+  // ---------------------------------------------------------------- completar os 5
+  /** A sua equipe de PvP salva, na ordem de entrada, com os nomes da bolsa. */
+  function minhaOrdemSalva() {
+    if (!meuTimeIds?.length) return [];
+    const porId = new Map((core.eu?.pokemons ?? []).map((p) => [p.id, p]));
+    return meuTimeIds.map((id) => porId.get(id)).filter(Boolean)
+      .map((p) => ({ nome: p.nick || p.nome, nivel: p.level, shiny: !!p.shiny }));
+  }
+
+  /** Quem está em `todos` e não em `entrou` (por nome, respeitando repetidos). */
+  function faltantes(todos, entrou) {
+    const conta = new Map();
+    for (const x of entrou) conta.set(x.nome, (conta.get(x.nome) ?? 0) + 1);
+    return todos.filter((x) => {
+      const n = conta.get(x.nome) ?? 0;
+      if (n > 0) { conta.set(x.nome, n - 1); return false; }
+      return true;
+    });
+  }
+
+  function aplicarFicha(f) {
+    const reg = hist.find((h) => h.id === Number(f.id));
+    if (!reg) return;
+    const equipe = (f.equipeAtual ?? []).map((pk) => ({ nome: pk.nome, nivel: pk.level ?? pk.nivel, shiny: !!pk.shiny }));
+    // Sem fita (partida enquanto estava fora): pelo menos quem entrou, na ordem da Pokédex.
+    if (!reg.dele.length && f.ele?.pks?.length) {
+      reg.dele = f.ele.pks.map((pk) => ({ nome: pk.nome, nivel: pk.nivel, shiny: !!pk.shiny }));
+      reg.deleSemOrdem = true;
+    }
+    reg.naoEntrou = faltantes(equipe, reg.dele).slice(0, Math.max(0, TIME_PVP - reg.dele.length));
+    reg.fichaOk = true;
+    salvarHist();
+    pintar();
+  }
+
+  function pedirFicha(id) {
+    if (id == null) return;
+    setTimeout(() => core.send({ t: 'pvp.partida.ficha', id }), ESPERA_FICHA_MS);
   }
 
   // ---------------------------------------------------------------- trava da fila automática
@@ -158,10 +210,19 @@
   // ---------------------------------------------------------------- escuta do jogo
   function aoMensagem(ev) {
     if (typeof ev.data !== 'string' || !ev.data.includes('"t":"pvp"')) return;
-    if (!ev.data.includes('"partida"') && !ev.data.includes('"naoVistas"')) return;
+    if (!/"(partida|naoVistas|ficha|time|timeSalvo)"/.test(ev.data)) return;
     let m;
     try { m = JSON.parse(ev.data); } catch { return; }
     if (m.t !== 'pvp') return;
+    const ids = (x) => (x ?? []).map((v) => (typeof v === 'object' ? v?.id : v)).filter((v) => v != null);
+    if (m.time !== undefined) meuTimeIds = ids(m.time);
+    if (m.timeSalvo !== undefined) meuTimeIds = ids(m.timeSalvo);
+    // A sua ordem pode chegar depois da partida (o jogo pede `pvp.info` logo após): completa a última.
+    if (meuTimeIds?.length && hist[0] && !hist[0].meuCompleto && Date.now() - hist[0].em < 60_000) {
+      const minha = minhaOrdemSalva();
+      if (minha.length) { hist[0].meu = minha; hist[0].meuCompleto = true; salvarHist(); }
+    }
+    if (m.ficha?.id != null) aplicarFicha(m.ficha);
     for (const p of m.naoVistas ?? []) {
       const reg = guardarPartida(p, 'fora');
       if (reg) contarResultado(reg);
@@ -216,6 +277,8 @@
   .ppvp-ordem{display:flex;flex-wrap:wrap;gap:3px}
   .ppvp-ordem span{background:#2a1515;border-radius:5px;padding:1px 6px;white-space:nowrap}
   .ppvp-ordem b{color:#f3c77a;margin-right:3px}
+  .ppvp-ordem .ppvp-fora{opacity:.6;font-style:italic}
+  .ppvp-pags{display:flex;gap:8px;align-items:center;justify-content:center;margin-top:8px}
   .ppvp-aviso{color:#f3c77a;font-size:11px}
   .ppvp-log{font:11px ui-monospace,monospace;white-space:pre-wrap;max-height:110px;overflow:auto;background:#2a1515;border-radius:8px;padding:6px 8px;margin:0}`;
 
@@ -229,7 +292,7 @@
     document.body.appendChild(fundo);
     fundo.addEventListener('click', aoClicar);
     fundo.addEventListener('input', (e) => {
-      if (e.target.dataset.c === 'busca') { busca = e.target.value; pintarTabela(); }
+      if (e.target.dataset.c === 'busca') { busca = e.target.value; pagina = 0; pintarTabela(); }
     });
     fundo.addEventListener('change', (e) => {
       if (e.target.dataset.c === 'derrotas') { cfg.derrotas = Math.max(1, Math.min(10, Number(e.target.value) || 2)); salvarCfg(); pintar(); }
@@ -240,9 +303,17 @@
   }
 
   const estaAberto = () => document.getElementById('ppvp-fundo')?.classList.contains('aberto');
-  const ordemHtml = (lista) => (lista?.length
-    ? `<div class="ppvp-ordem">${lista.map((x, i) => `<span><b>${i + 1}</b>${x.shiny ? '✨' : ''}${esc(x.nome)}${x.nivel ? ` <small>Nv ${esc(x.nivel)}</small>` : ''}</span>`).join('')}</div>`
-    : '—');
+  const pkHtml = (x) => `${x.shiny ? '✨' : ''}${esc(x.nome)}${x.nivel ? ` <small>Nv ${esc(x.nivel)}</small>` : ''}`;
+  /** As 5 posições: quem entrou, na ordem; depois quem não entrou; e "?" para o que não se sabe. */
+  function ordemHtml(lista, naoEntrou = [], semOrdem = false) {
+    const cel = [];
+    (lista ?? []).forEach((x, i) => cel.push(`<span><b>${semOrdem ? '•' : i + 1}</b>${pkHtml(x)}</span>`));
+    for (const x of naoEntrou ?? []) {
+      cel.push(`<span class="ppvp-fora" title="não chegou a lutar — a posição exata não é revelada"><b>${cel.length + 1}?</b>${pkHtml(x)}</span>`);
+    }
+    while (cel.length && cel.length < TIME_PVP) cel.push(`<span class="ppvp-fora"><b>${cel.length + 1}</b>?</span>`);
+    return cel.length ? `<div class="ppvp-ordem">${cel.join('')}</div>` : '—';
+  }
 
   function pintar() {
     const modal = document.getElementById('ppvp-modal');
@@ -262,7 +333,7 @@
         <h4>Histórico de duelos</h4>
         <div class="ppvp-linha">
           <input class="ppvp-in" data-c="busca" placeholder="filtrar por nick…" value="${esc(busca)}" spellcheck="false" style="width:220px">
-          <span class="ppvp-aviso">A ordem sai da fita da partida: só entram os pokémon que chegaram a lutar.</span>
+          <span class="ppvp-aviso">Números = ordem real de entrada (da fita). "4?" = não chegou a lutar: está na equipe, mas a posição não é revelada.</span>
           <span style="flex:1"></span>
           ${hist.length ? '<button class="ppvp-bt" data-a="limpar">limpar histórico</button>' : ''}
         </div>
@@ -280,15 +351,22 @@
     const host = document.getElementById('ppvp-tabela');
     if (!host) return;
     const q = busca.trim().toLowerCase();
-    const linhas = hist.filter((h) => !q || String(h.nick).toLowerCase().includes(q));
+    const todas = hist.filter((h) => !q || String(h.nick).toLowerCase().includes(q));
+    const paginas = Math.max(1, Math.ceil(todas.length / POR_PAGINA));
+    pagina = Math.min(pagina, paginas - 1);
+    const linhas = todas.slice(pagina * POR_PAGINA, (pagina + 1) * POR_PAGINA);
     host.innerHTML = linhas.length
       ? `<table class="ppvp-tab"><tr><th>Quando</th><th>Rival</th><th></th><th>Ordem do rival</th><th>Sua ordem</th></tr>
         ${linhas.map((h) => `<tr>
           <td>${quando(h.em)}</td>
           <td><b>${esc(h.nick)}</b></td>
           <td class="${h.venci ? 'ppvp-v' : 'ppvp-d'}">${h.venci ? 'V' : 'D'} <small>${h.delta >= 0 ? '+' : ''}${h.delta}</small></td>
-          <td>${ordemHtml(h.dele)}${h.aviso ? `<div class="ppvp-aviso">${esc(h.aviso)}</div>` : ''}</td>
-          <td>${ordemHtml(h.meu)}</td></tr>`).join('')}</table>`
+          <td>${ordemHtml(h.dele, h.naoEntrou, h.deleSemOrdem)}${h.deleSemOrdem ? '<div class="ppvp-aviso">sem fita: quem entrou, fora de ordem</div>' : h.aviso ? `<div class="ppvp-aviso">${esc(h.aviso)}</div>` : ''}</td>
+          <td>${ordemHtml(h.meu)}</td></tr>`).join('')}</table>
+        ${paginas > 1 ? `<div class="ppvp-pags">
+          <button class="ppvp-bt" data-a="pag" data-v="-1" ${pagina === 0 ? 'disabled' : ''}>‹</button>
+          <span>página ${pagina + 1} de ${paginas} · ${todas.length} duelos</span>
+          <button class="ppvp-bt" data-a="pag" data-v="1" ${pagina >= paginas - 1 ? 'disabled' : ''}>›</button></div>` : ''}`
       : '<span class="ppvp-aviso">Nenhum duelo registrado ainda — os próximos entram aqui sozinhos.</span>';
   }
 
@@ -310,11 +388,16 @@
     if (a === 'fechar') return fechar();
     if (a === 'trava') { cfg.trava = !cfg.trava; registrar(cfg.trava ? 'trava da fila ligada' : 'trava da fila desligada'); }
     else if (a === 'limpar') { hist = []; salvarHist(); }
+    else if (a === 'pag') { pagina = Math.max(0, pagina + Number(b.dataset.v)); return pintarTabela(); }
     salvarCfg();
     pintar();
   }
 
-  function abrir() { document.getElementById('ppvp-fundo').classList.add('aberto'); pintar(); }
+  function abrir() {
+    document.getElementById('ppvp-fundo').classList.add('aberto');
+    if (!meuTimeIds) core.send({ t: 'pvp.info' });
+    pintar();
+  }
   function fechar() { document.getElementById('ppvp-fundo')?.classList.remove('aberto'); }
 
   montarUI();
