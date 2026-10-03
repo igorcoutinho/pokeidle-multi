@@ -71,6 +71,8 @@ PvP — botão ⚔ PvP
     também entram). Ligado, depois de cada partida: N vitórias seguidas (1 por padrão) → troca,
     porque o rival vai counterar; derrota → troca (opcional). Entra a de melhor taxa, sem repetir
     a atual, aplicada direto na equipe de PvP. Dá para tirar formações da rotação.
+  - Ligar/desligar o auto-switch: botão 🔁 Switch no cabeçalho de cada conta (verde = ligado), ou
+    o botão "🔁 Auto-switch" no topo do painel ⚔ PvP, em qualquer aba.
   - Modo 🔮 prever o próximo adversário (padrão do auto-switch): os ATIVOS são quem você enfrentou
     na última hora (limitados pelo tamanho da fila que o jogo informa). Quem você acabou de
     enfrentar fica com 20% de chance de vir de novo; os outros dividem 80% (com peso pela

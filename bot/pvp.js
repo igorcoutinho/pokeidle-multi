@@ -14,7 +14,7 @@
 //    servidor só puxa a próxima partida 20 s depois do fim, então dá tempo.
 (() => {
   'use strict';
-  const VERSAO_PVP = '1.8.0';
+  const VERSAO_PVP = '1.8.1';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -25,6 +25,9 @@
   const P = {
     versao: VERSAO_PVP,
     get trava() { return cfg.trava; },
+    get autoSwitch() { return !!cfg.auto.ativo; },
+    /** Liga/desliga o auto-switch (o botão 🔁 Switch do cabeçalho da conta chama isto). */
+    alternarAutoSwitch() { alternarAuto(); pintar(); return !!cfg.auto.ativo; },
     desmontar() { for (const f of limpezas.splice(0)) { try { f(); } catch {} } },
     abrir: () => abrir(),
     fechar: () => fechar(),
@@ -325,6 +328,14 @@
    * venceu N seguidas com a mesma formação → troca (o rival vai counterar essa); perdeu → troca
    * (se ligado). Entra a melhor das suas formações, sem ser a atual, aplicada direto na equipe.
    */
+  function alternarAuto() {
+    cfg.auto.ativo = !cfg.auto.ativo;
+    cfg.auto.seguidas = 0;
+    salvarCfg();
+    registrar(cfg.auto.ativo ? '🔁 auto-switch LIGADO' : 'auto-switch desligado');
+    avisar(cfg.auto.ativo ? '🔁 Auto-switch LIGADO' : 'Auto-switch desligado');
+  }
+
   // ---------------------------------------------------------------- prever o próximo adversário
   const mesmoNick = (a, b) => String(a ?? '').toLowerCase() === String(b ?? '').toLowerCase();
 
@@ -722,6 +733,7 @@
   .ppvp-sug ol{margin:2px 0 2px 18px;padding:0;font-size:12px}
   .ppvp-sug .ppvp-op{background:#3a2020;border-radius:8px;padding:6px 8px;margin-top:6px}
   .ppvp-bt.ppvp-on{background:#b04ad0;border-color:#f3c77a;color:#fff}
+  .ppvp-auto-bt{font-weight:700}.ppvp-auto-bt.ligado{background:#2f9a4a;border-color:#7fdc8f;color:#fff}
   #ppvp-modal header .ppvp-x{background:#b04ad0;border:2px solid #f3c77a;color:#fff;border-radius:8px;width:30px;height:30px;cursor:pointer;font-weight:800}
   .ppvp-aviso{color:#f3c77a;font-size:11px}
   .ppvp-log{font:11px ui-monospace,monospace;white-space:pre-wrap;max-height:110px;overflow:auto;background:#2a1515;border-radius:8px;padding:6px 8px;margin:0}`;
@@ -885,6 +897,7 @@
     const modal = document.getElementById('ppvp-modal');
     if (!modal || !estaAberto()) return;
     const abas = `<span class="ppvp-linha" style="margin:0">
+        <button class="ppvp-bt ppvp-auto-bt ${cfg.auto.ativo ? 'ligado' : ''}" data-a="autoAtivo" title="Liga/desliga o auto-switch de formações">🔁 Auto-switch: ${cfg.auto.ativo ? 'LIGADO' : 'desligado'}</button>
         <button class="ppvp-bt ${aba === 'historico' ? 'ppvp-on' : ''}" data-a="aba" data-v="historico">Histórico</button>
         <button class="ppvp-bt ${aba === 'stats' ? 'ppvp-on' : ''}" data-a="aba" data-v="stats">Estatísticas</button>
         <button class="ppvp-bt ${aba === 'rivais' ? 'ppvp-on' : ''}" data-a="aba" data-v="rivais">Rivais</button>
@@ -1149,7 +1162,7 @@
       const f = minhasFormacoes().find((x) => x.k === b.dataset.v);
       if (f && aplicarEquipe(f.ids, `formação "${f.nome}" (manual)`)) { cfg.auto.usoEm[f.k] = Date.now(); cfg.auto.seguidas = 0; }
     }
-    else if (a === 'autoAtivo') { cfg.auto.ativo = !cfg.auto.ativo; cfg.auto.seguidas = 0; registrar(cfg.auto.ativo ? '🔁 auto-switch LIGADO' : 'auto-switch desligado'); }
+    else if (a === 'autoAtivo') alternarAuto();
     else if (a === 'autoNaDerrota') cfg.auto.naDerrota = b.checked;
     else if (a === 'autoModo') cfg.auto.modo = b.dataset.v;
     else if (a === 'calcAtivos') return calcularContraAtivos(b.dataset.v);
