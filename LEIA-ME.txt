@@ -31,16 +31,6 @@ CAÇADOR DE SHINY — botão ✨ Shiny (fica verde quando ligado)
   - Histórico de shinies: quando, mapa, bola e resultado. Se o contador "shinies vistos" do
     jogo marcar um shiny que o app não viu, aparece como "detecção perdida".
   - Precisa da cena ligada: no Modo Economia o jogo não informa os bichos do mapa.
-  - A rotação de mapas espera enquanto há um shiny no mapa.
-
-ROTAÇÃO DE MAPAS — botão 🔄 Rota (fica verde quando ligada)
-  - Monte a lista de mapas (da lista do jogo ou "Adicionar o mapa onde estou") e a ordem.
-  - Quando a onda acaba — o mesmo momento em que o jogo libera "Ir para o Centro Pokémon" —
-    o app troca para o próximo mapa da lista. Do último volta para o primeiro.
-  - "Trocar a cada N ondas": quantas ondas limpar em cada mapa antes de trocar.
-  - Respeita as travas do servidor: não troca em combate, nos 10 s depois de entrar num mapa,
-    no Centro Pokémon, em boss ou Arena. Se o servidor recusar, tenta na próxima onda.
-  - Funciona também no Modo Economia. A configuração é separada por conta.
 
 PvP — botão ⚔ PvP
   - A cada duelo, guarda a ORDEM em que o rival colocou os pokémon (e a sua), tirada da fita

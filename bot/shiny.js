@@ -11,7 +11,7 @@
 // marcar um shiny que o app não viu, fica no histórico como detecção perdida.
 //
 // Precisa da cena: no Modo Economia o servidor não manda `campo`, e não há como saber quem é
-// shiny antes da bola. A rotação de mapas espera enquanto há um shiny no mapa (`ocupado`).
+// shiny antes da bola.
 (() => {
   'use strict';
   const VERSAO_SHINY = '1.1.1';
@@ -25,7 +25,7 @@
   const S = {
     versao: VERSAO_SHINY,
     get ativo() { return cfg.ativo; },
-    /** Há shiny no mapa (vivo ou no chão esperando a bola) — a rotação de mapas espera. */
+    /** Há shiny no mapa (vivo ou no chão esperando a bola). */
     get ocupado() { return cfg.ativo && alvos.size > 0; },
     desmontar() { for (const f of limpezas.splice(0)) { try { f(); } catch {} } },
     abrir: () => abrir(),
