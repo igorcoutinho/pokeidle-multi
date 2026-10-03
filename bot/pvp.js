@@ -14,7 +14,7 @@
 //    servidor só puxa a próxima partida 20 s depois do fim, então dá tempo.
 (() => {
   'use strict';
-  const VERSAO_PVP = '1.10.2';
+  const VERSAO_PVP = '1.11.0';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -47,7 +47,7 @@
     // formação (o rival vai counterar) e, se `naDerrota`, logo após perder. `fora` = slots do
     // armário que não entram na rotação; `usoEm` = quando cada slot foi usado por último.
     const padrao = { trava: true, derrotas: 2, seguidas: 0, log: [],
-      auto: { ativo: false, modo: 'prever', vitorias: 1, naDerrota: true, minUso: 2, foraKeys: [], seguidas: 0, usoEm: {} } };
+      auto: { ativo: false, modo: 'prever', vitorias: 1, naDerrota: true, focoAmeacas: true, minUso: 2, foraKeys: [], seguidas: 0, usoEm: {} } };
     try {
       const s = JSON.parse(localStorage.getItem(CHAVE_CFG)) ?? {};
       return { ...padrao, ...s, auto: { ...padrao.auto, ...(s.auto ?? {}) } };
@@ -447,10 +447,24 @@
   }
 
   /** Nota de cada candidata contra a distribuição dos próximos prováveis. */
+  /**
+   * Quão difícil é um adversário para você, de 0 (ganha sempre) a 1 (perde sempre), pelo placar
+   * geral contra ele (com prior 1V 1D). Quem você já vence com qualquer comp pesa pouco na escolha.
+   */
+  function dificuldade(nick) {
+    let n = 0, v = 0;
+    for (const h of hist) if (mesmoNick(h.nick, nick)) { n++; if (h.venci) v++; }
+    return 1 - (v + 1) / (n + 2);
+  }
+  /** O peso de um adversário na escolha: a chance de ele vir × (com o foco ligado) quão difícil ele é. */
+  const pesoNaEscolha = (x) => (cfg.auto.focoAmeacas ? x.p * (0.3 + 1.4 * dificuldade(x.nick)) : x.p);
+
   function pontuar(f, previstos) {
     let soma = 0, peso = 0;
     const det = [];
-    for (const { nick, p } of previstos.slice(0, 4)) {
+    for (const x of previstos.slice(0, 4)) {
+      const { nick } = x;
+      const p = pesoNaEscolha(x);
       const r = notaVs(f, nick);
       soma += p * r.nota; peso += p;
       det.push(`${nick}: ${r.fonte}`);
@@ -612,7 +626,7 @@
         meus: meus.map((x) => ({ id: x.id, nome: x.nome, nivel: x.nivel })),
         rivais: previstos.map((x) => {
           const u = ultimoDuelo(x.nick);
-          return { nick: x.nick, peso: x.p, ordemRival: u && !u.deleSemOrdem ? (u.dele ?? []) : [] };
+          return { nick: x.nick, peso: pesoNaEscolha(x), ordemRival: u && !u.deleSemOrdem ? (u.dele ?? []) : [] };
         }),
         buscarNaBolsa: tipo === 'bolsa',
       });
@@ -645,7 +659,7 @@
     const geral = cand.map((f) => ({ f, ...pontuar(f, previstos) })).sort((x, y) => y.nota - x.nota)[0];
     return `<div class="ppvp-destaque" style="background:#2a2a4a;border-color:#8a8aff">
         🔮 Último adversário: <b>${esc(ultimo.nick)}</b> (${ultimo.venci ? '<span class="ppvp-v">venceu</span>' : '<span class="ppvp-d">perdeu</span>'}) · ativos na fila e chance de vir agora:
-        ${previstos.map((x) => `<b>${esc(x.nick)}</b> ${Math.round(x.p * 100)}%`).join(' · ')}
+        ${previstos.map((x) => { const d = dificuldade(x.nick); return `<b>${esc(x.nick)}</b> ${Math.round(x.p * 100)}% <small class="${d > 0.55 ? 'ppvp-d' : d < 0.35 ? 'ppvp-v' : ''}">(você ganha ${Math.round((1 - d) * 100)}%${d > 0.55 ? ' · ameaça' : ''})</small>`; }).join(' · ')}
         <small class="ppvp-aviso">(${esc(previstos[0].base)}; quem acabou de lutar com você pesa menos)</small>
         <table class="ppvp-tab" style="margin-top:4px"><tr><th>Contra</th><th>Melhor formação</th><th>Por quê</th></tr>
         ${previstos.map((x) => { const m = melhorPara(x.nick); return `<tr><td><b>${esc(x.nick)}</b></td><td>${m ? esc(m.f.nome) + (m.f.simulada ? ' <small class="ppvp-aviso">(simulada)</small>' : '') : '—'}</td><td>${m ? esc(m.r.fonte) : '—'}</td></tr>`; }).join('')}
@@ -729,6 +743,7 @@
         ${a.modo === 'prever' ? htmlPrevisao(todas) : ''}
         <div class="ppvp-linha">
           <span ${a.modo === 'prever' ? 'style="display:none"' : ''}>trocar depois de <input type="number" class="ppvp-in" data-c="autoVitorias" min="1" max="10" value="${esc(a.vitorias)}"> vitória(s) seguida(s)</span>
+          <label title="dá mais peso aos adversários que costumam te vencer (ex.: quem você perde quase sempre), em vez de tratar todos igual"><input type="checkbox" data-a="autoFoco" ${a.focoAmeacas ? 'checked' : ''}> foco nas ameaças (priorizar comps que ganham de quem te vence)</label>
           <label><input type="checkbox" data-a="autoNaDerrota" ${a.naDerrota ? 'checked' : ''}> sempre trocar depois de uma derrota${a.modo === 'prever' ? ' (a formação que perdeu sai, mesmo que pontue bem contra o grupo)' : ''}</label>
         </div>
         <div class="ppvp-linha">formação conta depois de <input type="number" class="ppvp-in" data-c="autoMinUso" min="1" max="20" value="${esc(a.minUso)}"> duelo(s)</div>
@@ -1341,6 +1356,7 @@
     else if (a === 'autoAtivo') alternarAuto();
     else if (a === 'autoNaDerrota') cfg.auto.naDerrota = b.checked;
     else if (a === 'autoModo') cfg.auto.modo = b.dataset.v;
+    else if (a === 'autoFoco') cfg.auto.focoAmeacas = b.checked;
     else if (a === 'calcAtivos') return calcularContraAtivos(b.dataset.v);
     else if (a === 'autoFora') {
       const k = b.dataset.v;

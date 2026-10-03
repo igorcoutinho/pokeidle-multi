@@ -91,6 +91,8 @@ PvP — botão ⚔ PvP
   - Ligar/desligar o auto-switch: botão "🔁 Auto-switch" no topo do painel ⚔ PvP, em qualquer aba
     (verde = ligado).
   - Modo 🔮 prever o próximo adversário (padrão do auto-switch): os ATIVOS são quem você enfrentou
+    Foco nas ameaças (padrão): cada adversário pesa pela chance de vir × quão difícil ele é para
+    você — prioriza comps que ganham de quem te vence, em vez de quem você já vence sempre.
     na última hora (limitados pelo tamanho da fila que o jogo informa). Quem você acabou de
     enfrentar fica com 20% de chance de vir de novo; os outros dividem 80% (com peso pela
     sequência do histórico). Depois de cada partida, aplica a formação de melhor resultado
