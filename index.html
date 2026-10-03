@@ -227,10 +227,39 @@
   // ---------------------------------------------------------------- pedra abaixo do mercado, em todas as contas
   // Você dá a ordem; cada conta alternativa anuncia a pedra em Coins, 5–10% abaixo do menor anúncio.
   // A conta protegida (Bekazin) é sempre pulada — a trava também existe dentro do módulo da conta.
-  const reb = { info: [], nome: '', qtd: 1, desconto: '', previas: null, rodando: false, resultados: null };
+  const reb = { info: [], nome: '', qtd: 1, desconto: '', previas: null, rodando: false, resultados: null,
+    base: 'mercado', acimaMax: 8, acimaMin: 3, regras: new Map() }; // base 'rotom' = um pouco ACIMA do seu alvo de compra no Rotom
   const escH = (x) => String(x ?? '').replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
   const fmtN = (n) => Number(n ?? 0).toLocaleString('pt-BR', { maximumFractionDigits: 0 });
   const naConta = (c, js) => c.wv.executeJavaScript(js).catch(() => null);
+
+  /**
+   * Os alvos de compra do Rotom Sniper (item → preço máximo em Coins), lidos das contas. A conta
+   * protegida vem primeiro: é nela que você compra, então os alvos dela valem sobre os das outras.
+   */
+  async function lerRegrasRotom() {
+    reb.regras = new Map();
+    if (!window.multi.rotomRegras) return;
+    const ordem = [...reb.info].sort((a, b) => (b.i?.protegida ? 1 : 0) - (a.i?.protegida ? 1 : 0));
+    for (const x of ordem) {
+      const regras = await window.multi.rotomRegras(x.c.n).catch(() => null);
+      for (const r of regras ?? []) {
+        const alvo = Number(r.maxPriceGold) || 0;
+        const nome = String(r.targetName ?? '').toLowerCase();
+        if (!alvo || !nome || reb.regras.has(nome)) continue;
+        const regra = { alvo, de: x.i?.nick ?? x.c.nome, ativa: r.active !== false };
+        reb.regras.set(nome, regra);
+        if (r.targetId != null && !reb.regras.has('#' + r.targetId)) reb.regras.set('#' + r.targetId, regra);
+      }
+    }
+  }
+  /** O alvo do Rotom para uma pedra: pelo nome ou, se a regra foi criada por id, pelo id do item. */
+  function alvoRotom(nome) {
+    const porNome = reb.regras.get(String(nome ?? '').toLowerCase());
+    if (porNome) return porNome;
+    for (const x of reb.info) for (const p of x.i?.pedras ?? []) if (p.nome === nome && reb.regras.has('#' + p.id)) return reb.regras.get('#' + p.id);
+    return null;
+  }
 
   async function lerContasReb() {
     reb.info = await Promise.all(contas.map(async (c) => ({ c, i: await naConta(c, 'window.__pokeVendas?.infoRebaixar ? window.__pokeVendas.infoRebaixar() : null') })));
@@ -247,6 +276,8 @@
     }
     const lista = [...pedras.values()].sort((a, b) => a.nome.localeCompare(b.nome));
     if (!reb.nome || !pedras.has(reb.nome)) reb.nome = lista[0]?.nome ?? '';
+    // Com alvo no Rotom para a pedra, a base padrão é ele (até você escolher a outra na mão).
+    if (!reb.escolheuBase) reb.base = alvoRotom(reb.nome) ? 'rotom' : 'mercado';
     const linhaConta = (x) => {
       const nome = x.i?.nick ?? x.c.nome;
       if (!x.i) return `<tr><td>${escH(x.c.nome)}</td><td colspan="4" class="ajuda">carregando / sem o módulo</td></tr>`;
@@ -256,8 +287,8 @@
       const res = reb.resultados?.get(x.c.n);
       const tem = (x.i.pedras ?? []).find((p) => p.nome === reb.nome)?.q ?? 0;
       return `<tr><td><b>${escH(nome)}</b></td><td>${tem ? fmtN(tem) : '<span class="ajuda">não tem</span>'}</td>
-        <td>${pv ? (pv.erro ? `<span class="ruim">${escH(pv.erro)}</span>` : pv.preco ? `${fmtN(pv.ref)} <span class="ajuda">(${escH(pv.fonte)}, ${fmtN(pv.anuncios)} anúncios)</span>` : '—') : '—'}</td>
-        <td>${pv?.preco ? `<b>${fmtN(pv.preco)}</b> <span class="ajuda">−${Math.round(pv.desconto * 1000) / 10}%</span>` : '—'}</td>
+        <td>${pv ? (pv.erro ? `<span class="ruim">${escH(pv.erro)}</span>` : pv.preco ? (pv.alvo ? `alvo <b>${fmtN(pv.alvo)}</b> <span class="ajuda">· menor anúncio ${pv.menor ? fmtN(pv.menor) : '—'}</span>` : `${fmtN(pv.ref)} <span class="ajuda">(${escH(pv.fonte)}, ${fmtN(pv.anuncios)} anúncios)</span>`) : '—') : '—'}</td>
+        <td>${pv?.preco ? `<b>${fmtN(pv.preco)}</b> <span class="ajuda">${pv.desconto < 0 ? '+' : '−'}${Math.round(Math.abs(pv.desconto) * 1000) / 10}%${pv.alvo ? ' do alvo' : ''}</span>` : '—'}</td>
         <td>${res ? (res.ok ? `<span class="ok">✅ ${res.qtd}× por ${fmtN(res.preco)}</span>` : `<span class="ruim">${escH(res.msg)}</span>`) : ''}</td></tr>`;
     };
     const prontas = reb.previas ? alvos.filter((x) => reb.previas.get(x.c.n)?.preco) : [];
@@ -269,15 +300,25 @@
           <span class="ajuda">${(() => { const p = pedras.get(reb.nome); return p ? `${fmtN(p.total)} no total, em ${p.contas} conta(s)` : ''; })()}</span>
         </div>
         <div class="linha">
+          Base do preço
+          <button data-reb="base" data-v="mercado" class="${reb.base === 'mercado' ? 'on' : ''}">menor anúncio (abaixo dele)</button>
+          <button data-reb="base" data-v="rotom" class="${reb.base === 'rotom' ? 'on' : ''}">🎯 alvo do Rotom (um pouco acima)</button>
+          <span class="ajuda">${(() => { const a = alvoRotom(reb.nome); return a ? `seu alvo no Rotom para ${escH(reb.nome)}: <b>${fmtN(a.alvo)}</b> Coins (regra da ${escH(a.de)}${a.ativa ? '' : ', pausada'})` : `sem alvo no Rotom para ${escH(reb.nome)}`; })()}</span>
+        </div>
+        <div class="linha">
           Quantidade por conta ${[1, 2].map((n) => `<button data-reb="qtd" data-v="${n}" class="${reb.qtd === n ? 'on' : ''}">${n}</button>`).join('')}
-          · desconto <input data-reb-c="desconto" type="number" min="5" max="10" step="0.5" placeholder="auto" value="${escH(reb.desconto)}"> % <span class="ajuda">(desconto da 1ª conta; vazio = 5%; cada conta seguinte fica abaixo da anterior)</span>
+          ${reb.base === 'rotom'
+            ? `· acima do alvo: de <input data-reb-c="acimaMax" type="number" min="0" max="50" step="0.5" value="${escH(reb.acimaMax)}"> % até <input data-reb-c="acimaMin" type="number" min="0" max="50" step="0.5" value="${escH(reb.acimaMin)}"> % <span class="ajuda">(1ª conta mais alta, a última mais perto do alvo)</span>`
+            : `· desconto <input data-reb-c="desconto" type="number" min="5" max="10" step="0.5" placeholder="auto" value="${escH(reb.desconto)}"> % <span class="ajuda">(desconto da 1ª conta; vazio = 5%; cada conta seguinte fica abaixo da anterior)</span>`}
         </div>
         <div class="linha">
           <button data-reb="previa" ${reb.rodando ? 'disabled' : ''}>🔎 Ver preços em cada conta</button>
           <button data-reb="publicar" class="on" ${reb.rodando || !prontas.length ? 'disabled' : ''}>📢 Publicar em ${prontas.length} conta(s)</button>
           ${reb.rodando ? `<span class="ajuda">${escH(reb.rodando)}</span>` : ''}
         </div>` : '<p class="ajuda">Nenhuma pedra nas contas alternativas logadas.</p>'}
-        <p class="ajuda">Em COINS. Preços ESCALONADOS: cada conta um degrau abaixo da anterior (de 5% até 10%; se começar em 10% ou mais, cada uma desce 2,5% a mais), todas sobre o mesmo menor anúncio lido no "Ver preços" — antes de qualquer publicação.</p>
+        <p class="ajuda">${reb.base === 'rotom'
+          ? 'Em COINS. Base: seu alvo de compra no Rotom Sniper (regras da conta protegida valem primeiro). Cada conta anuncia um pouco ACIMA do alvo — a 1ª mais alta, descendo até a última, sempre uma abaixo da outra —, para quem vende ancorar no seu alvo.'
+          : `Em COINS. Preços ESCALONADOS: cada conta um degrau abaixo da anterior (de 5% até 10%; se começar em 10% ou mais, cada uma desce 2,5% a mais), todas sobre o mesmo menor anúncio lido no "Ver preços" — antes de qualquer publicação.`}</p>
       </section>
       <section>
         <table><tr><th>Conta</th><th>Tem</th><th>Referência</th><th>Vai anunciar por (cada)</th><th>Resultado</th></tr>
@@ -288,8 +329,9 @@
   async function abrirReb() {
     reb.previas = null; reb.resultados = null;
     document.getElementById('reb-fundo').classList.add('aberto');
-    document.getElementById('reb-modal').innerHTML = '<p style="padding:14px">Lendo as contas…</p>';
+    document.getElementById('reb-modal').innerHTML = '<p style="padding:14px">Lendo as contas e os alvos do Rotom…</p>';
     await lerContasReb();
+    await lerRegrasRotom();
     pintarReb();
   }
 
@@ -304,6 +346,30 @@
     // Escalonado: cada conta um degrau abaixo da anterior, do desconto inicial (o escolhido, ou 5%)
     // até 10%, todas sobre a MESMA referência — o menor preço lido antes de qualquer publicação.
     const comPreco = alvos.filter((x) => reb.previas.get(x.c.n)?.preco);
+    const alvoR = reb.base === 'rotom' ? alvoRotom(reb.nome) : null;
+    if (reb.base === 'rotom') {
+      if (!alvoR) {
+        for (const x of comPreco) reb.previas.set(x.c.n, { ...reb.previas.get(x.c.n), preco: null, erro: 'sem alvo no Rotom para esta pedra' });
+        reb.rodando = false;
+        return pintarReb();
+      }
+      // Um pouco ACIMA do alvo, escalonado: a 1ª conta mais alta, a última mais perto do alvo.
+      // (Aqui basta a conta ter a pedra; não precisa haver anúncio no mercado.)
+      const comPedra = alvos.filter((x) => reb.previas.get(x.c.n)?.itemId);
+      const aMax = Math.max(0, Number(reb.acimaMax) || 0) / 100, aMin = Math.max(0, Number(reb.acimaMin) || 0) / 100;
+      let anterior = Infinity;
+      comPedra.forEach((x, i) => {
+        const a = comPedra.length > 1 ? aMax + (aMin - aMax) * (i / (comPedra.length - 1)) : aMax;
+        const pv = reb.previas.get(x.c.n);
+        delete pv.erro;
+        const menor = pv.fonte === 'menor anúncio' ? pv.ref : null;
+        const preco = Math.max(2, Math.min(anterior - 1, Math.ceil(alvoR.alvo * (1 + a)))); // sempre abaixo da conta anterior
+        anterior = preco;
+        reb.previas.set(x.c.n, { ...pv, menor, alvo: alvoR.alvo, ref: alvoR.alvo, desconto: 1 - preco / alvoR.alvo, preco }); // negativo = acima do alvo
+      });
+      reb.rodando = false;
+      return pintarReb();
+    }
     const ref = Math.min(...comPreco.map((x) => reb.previas.get(x.c.n).ref));
     const d0 = reb.desconto === '' ? 0.05 : Math.max(0.01, Number(reb.desconto) / 100);
     // Degrau: distribui até 10%; se não houver espaço (ex.: começou em 10%), cada uma desce 2,5% a
@@ -322,7 +388,8 @@
     const alvos = reb.info.filter((x) => x.i?.logado && !x.i.protegida && reb.previas?.get(x.c.n)?.preco);
     if (!alvos.length) return;
     const linhas = alvos.map((x) => { const pv = reb.previas.get(x.c.n); return `${x.i.nick}: ${Math.min(pv.tem, reb.qtd)}× por ${fmtN(pv.preco)} Coins`; }).join('\n');
-    if (!confirm(`Publicar ${reb.nome} em ${alvos.length} conta(s)?\n\n${linhas}\n\nMoeda: COINS. A conta protegida não entra.`)) return;
+    const baseTxt = reb.base === 'rotom' ? `Base: um pouco acima do seu alvo no Rotom (${fmtN(alvoRotom(reb.nome)?.alvo)}).` : 'Base: abaixo do menor anúncio.';
+    if (!confirm(`Publicar ${reb.nome} em ${alvos.length} conta(s)?\n\n${linhas}\n\n${baseTxt}\nMoeda: COINS. A conta protegida não entra.`)) return;
     reb.resultados = new Map();
     reb.rodando = 'publicando…'; pintarReb();
     for (const x of alvos) {
@@ -346,6 +413,7 @@
     const a = b.dataset.reb;
     if (a === 'fechar') document.getElementById('reb-fundo').classList.remove('aberto');
     else if (a === 'qtd') { reb.qtd = Number(b.dataset.v); pintarReb(); }
+    else if (a === 'base') { reb.base = b.dataset.v; reb.escolheuBase = true; reb.previas = null; reb.resultados = null; pintarReb(); }
     else if (a === 'previa') previaReb();
     else if (a === 'publicar') publicarReb();
   });

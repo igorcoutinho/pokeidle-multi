@@ -157,6 +157,27 @@ async function carregarRotom() {
   }
 }
 
+/**
+ * As regras de compra do Rotom Sniper de uma conta (item → preço máximo). Elas moram no
+ * `chrome.storage` da extensão, que a página do jogo não lê: abre o Cockpit escondido na partição
+ * da conta, pergunta e fecha. `null` = sem Rotom.
+ */
+async function lerRegrasRotom(n) {
+  if (!rotom) return null;
+  const w = new BrowserWindow({ show: false, webPreferences: { partition: `persist:conta${n}`, contextIsolation: true, nodeIntegration: false } });
+  try {
+    await w.loadURL(`chrome-extension://${rotom.id}/cockpit.html`);
+    return await w.webContents.executeJavaScript(
+      "new Promise((r) => chrome.storage.local.get(['rotom_sniper_rules'], (x) => r(x.rotom_sniper_rules || [])))",
+    );
+  } catch (e) {
+    console.warn('[PokeIdle Multi] regras do Rotom não lidas na conta', n, e.message);
+    return null;
+  } finally {
+    if (!w.isDestroyed()) w.destroy();
+  }
+}
+
 function abrirCockpit(n) {
   if (!rotom) return false;
   const aberta = cockpits.get(n);
@@ -236,7 +257,9 @@ app.on('web-contents-created', (_ev, wc) => {
 ipcMain.on('pb:core', (ev) => { ev.returnValue = lerBot('core.js'); });
 ipcMain.handle('pb:logica', () => lerLogica());
 ipcMain.handle('multi:cfg', () => ({ ...lerCfg(), nContas: N_CONTAS, urlJogo: URL_JOGO, pastaBot: PASTA_BOT, rotom }));
-ipcMain.handle('multi:abrirCockpit', (_e, n) => abrirCockpit(n));ipcMain.handle('multi:salvar', (_e, parcial) => { salvarCfg({ ...lerCfg(), ...parcial }); return true; });
+ipcMain.handle('multi:abrirCockpit', (_e, n) => abrirCockpit(n));
+ipcMain.handle('multi:rotomRegras', (_e, n) => lerRegrasRotom(n));
+ipcMain.handle('multi:salvar', (_e, parcial) => { salvarCfg({ ...lerCfg(), ...parcial }); return true; });
 ipcMain.handle('multi:abrirPastaBot', () => shell.openPath(PASTA_BOT));
 ipcMain.handle('multi:sairDaConta', async (_e, n) => {
   // Limpa só a partição daquela conta (cookies + localStorage): equivale a "deslogar" ali.

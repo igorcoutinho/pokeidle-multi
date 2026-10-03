@@ -7,7 +7,7 @@
 // A comissão é a do jogo: `shared/taxa-mercado.mjs`, o mesmo arquivo que o servidor usa.
 (() => {
   'use strict';
-  const VERSAO_VENDAS = '1.1.0';
+  const VERSAO_VENDAS = '1.1.1';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -121,7 +121,7 @@
       const m = await pedir({ t: 'market.itens' }, (x) => x.aba === 'itens');
       reb.mercado = { resumo: m.resumo ?? {}, medias: m.medias ?? {}, em: Date.now() };
       const sug = precoSugerido(it.id);
-      return sug ? { tem: it.q, itemId: it.id, ...sug } : { tem: it.q, erro: 'sem referência de preço em Coins' };
+      return sug ? { tem: it.q, itemId: it.id, ...sug } : { tem: it.q, itemId: it.id, erro: 'sem referência de preço em Coins' };
     } catch (e) {
       return { tem: it.q, erro: e.message };
     } finally { reb.desconto = antes; }
@@ -213,7 +213,7 @@
       <section>
         <h4 class="pv-rot">Anúncios feitos por aqui</h4>
         ${reb.log.length ? `<table class="pv-tab"><tr><th>Quando</th><th>Conta</th><th>Pedra</th><th>Qtd</th><th>Preço</th><th>Referência</th><th>Resultado</th></tr>
-          ${reb.log.slice(0, 15).map((l) => `<tr><td>${dataHora(l.em)}</td><td>${esc(l.conta)}</td><td>${esc(l.item)}</td><td>${l.qtd}</td><td>${preco(l.preco, 'gold')}</td><td>${preco(l.ref, 'gold')} −${l.desconto}%</td><td>${esc(l.resultado)}</td></tr>`).join('')}</table>`
+          ${reb.log.slice(0, 15).map((l) => `<tr><td>${dataHora(l.em)}</td><td>${esc(l.conta)}</td><td>${esc(l.item)}</td><td>${l.qtd}</td><td>${preco(l.preco, 'gold')}</td><td>${preco(l.ref, 'gold')} ${l.desconto < 0 ? `+${-l.desconto}% (alvo do Rotom)` : `−${l.desconto}%`}</td><td>${esc(l.resultado)}</td></tr>`).join('')}</table>`
           : '<p class="pv-ajuda">Nenhum ainda.</p>'}
       </section>`;
   }

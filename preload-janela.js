@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('multi', {
   abrirPastaBot: () => ipcRenderer.invoke('multi:abrirPastaBot'),
   sairDaConta: (n) => ipcRenderer.invoke('multi:sairDaConta', n),
   abrirCockpit: (n) => ipcRenderer.invoke('multi:abrirCockpit', n),
+  rotomRegras: (n) => ipcRenderer.invoke('multi:rotomRegras', n),
   aoMudarLogica: (fn) => ipcRenderer.on('pb:logicaMudou', (_e, codigo) => fn(codigo)),
   aoMudarCore: (fn) => ipcRenderer.on('pb:coreMudou', () => fn()),
 });

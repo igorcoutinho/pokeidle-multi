@@ -48,6 +48,10 @@ PEDRA ABAIXO DO MERCADO — botão 📉 na barra de cima do app (você dá a ord
   - "Ver preços": cada conta lê o Mercado e mostra o menor anúncio e o preço que vai anunciar.
   - "Publicar": uma confirmação e cada conta anuncia em COINS, com preços ESCALONADOS: cada conta
     um degrau abaixo da anterior (do desconto inicial até 10%), todas sobre o mesmo menor anúncio.
+  - Base "alvo do Rotom" (padrão quando a pedra tem regra no Rotom Sniper): o preço sai um
+    pouco ACIMA do seu alvo de compra (de +8% na 1ª conta até +3% na última, ajustável),
+    sempre uma conta abaixo da outra — quem vende tende a ancorar no seu alvo. As regras da
+    Bekazin valem primeiro (só leitura). A tabela mostra o alvo e o menor anúncio atual.
   - A conta Bekazin é PROTEGIDA: nunca anuncia (trava na janela do app e dentro da conta).
   - Também dá para fazer numa conta só: 💰 Vendas → 📉 Anunciar abaixo do mercado.
 
