@@ -14,7 +14,7 @@
 //    servidor só puxa a próxima partida 20 s depois do fim, então dá tempo.
 (() => {
   'use strict';
-  const VERSAO_PVP = '1.9.0';
+  const VERSAO_PVP = '1.10.1';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -1082,6 +1082,74 @@
     : o.vitorias ? `<span>vence ${o.vitorias} de ${o.total} ordens dele</span>` : '<span class="ppvp-d">perde</span>') + ` · margem ${margemTxt(o.pior)}`;
   const dataCurta = (ms) => new Date(ms).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 
+  /** "Aplicar esta ordem" de um duelo do histórico (ids do duelo, ou casados pelos nomes com a bolsa). */
+  function botoesDoDuelo(h, nome) {
+    const ids = idsDoDuelo(h);
+    if (!ids) return '<small class="ppvp-aviso">(algum pokémon desta ordem saiu da bolsa)</small>';
+    const ordem = h.meu.map((x, i) => ({ ...x, id: ids[i] }));
+    if (ids.join(',') === chaveAtual()) return '<small class="ppvp-v">● é a sua equipe atual</small>';
+    return botoesAplicar({ ordem }, nome);
+  }
+
+  let rivalAberto = null;     // jogador com o "📜 histórico" aberto na aba Rivais
+  let rivalPagina = 0;
+  const ordemTxt = (lista) => (lista ?? []).map((x) => x.nome).join(' → ');
+
+  /** O placar REAL de uma ordem (pelos nomes, na ordem) contra um jogador. */
+  function realDaOrdem(nick, o) {
+    const alvo = ordemTxt(o.ordem);
+    const ds = hist.filter((h) => mesmoNick(h.nick, nick) && ordemTxt(h.meu) === alvo);
+    return { n: ds.length, v: ds.filter((h) => h.venci).length };
+  }
+  const realTxt = (r) => (r.n ? ` · <b class="${pct(r.v, r.n) >= 50 ? 'ppvp-v' : 'ppvp-d'}">real: ${r.v}V ${r.n - r.v}D</b>` : ' · <small class="ppvp-aviso">real: nunca usada contra ele</small>');
+
+  /** Tudo o que já aconteceu contra um jogador: suas comps, as dele e os duelos. */
+  function htmlHistoricoRival(nick) {
+    const ds = hist.filter((h) => mesmoNick(h.nick, nick)).sort((a, b) => b.em - a.em);
+    if (!ds.length) return '<div class="ppvp-sug ppvp-aviso">Nenhum duelo contra ele ainda.</div>';
+    const v = ds.filter((h) => h.venci).length;
+    const agrupa = (chaveDe) => {
+      const m = new Map();
+      for (const h of ds) {
+        const k = chaveDe(h);
+        if (!k) continue;
+        const r = m.get(k) ?? { k, n: 0, v: 0, ultimo: 0, delta: 0 };
+        r.n++; if (h.venci) r.v++; r.delta += h.delta || 0; r.ultimo = Math.max(r.ultimo, h.em);
+        m.set(k, r);
+      }
+      return [...m.values()].sort((a, b) => pct(b.v, b.n) - pct(a.v, a.n) || b.n - a.n);
+    };
+    const minhas = agrupa((h) => ordemTxt(h.meu) || null);
+    const dueloDe = new Map(); // ordem → o duelo mais recente com ela (para o botão aplicar)
+    for (const h of ds) { const k = ordemTxt(h.meu); if (k && !dueloDe.has(k)) dueloDe.set(k, h); }
+    const dele = agrupa((h) => { const n = [...(h.dele ?? []), ...(h.naoEntrou ?? [])].map((x) => x.nome); return n.length ? [...n].sort((a, b) => a.localeCompare(b)).join(' · ') : null; });
+    const linhasGrupo = (lista, comBotao) => lista.map((r) => `<tr><td style="white-space:normal">${esc(r.k)}${comBotao && dueloDe.get(r.k) ? `<div>${botoesDoDuelo(dueloDe.get(r.k), `Contra ${nick}`)}</div>` : ''}</td><td>${r.n}</td>
+      <td><span class="ppvp-v">${r.v}</span>-<span class="ppvp-d">${r.n - r.v}</span></td><td>${pctHtml(r.v, r.n)}</td>
+      <td class="${r.delta >= 0 ? 'ppvp-v' : 'ppvp-d'}">${r.delta >= 0 ? '+' : ''}${r.delta}</td><td>${dataCurta(r.ultimo)}</td></tr>`).join('');
+    const POR = 10;
+    const paginas = Math.max(1, Math.ceil(ds.length / POR));
+    rivalPagina = Math.min(rivalPagina, paginas - 1);
+    const pag = ds.slice(rivalPagina * POR, (rivalPagina + 1) * POR);
+    // A simulação guardada diz "vence", mas o real contra ele está abaixo de 50%?
+    const salvo = melhores[String(nick).toLowerCase()] ?? {};
+    const diverge = [salvo.ordem?.r, ...(salvo.bolsa?.r ?? [])].filter(Boolean)
+      .some((o) => o.vitorias === o.total && (() => { const r = realDaOrdem(nick, o); return r.n >= 3 && pct(r.v, r.n) < 50; })());
+    return `<div class="ppvp-sug">
+      <b>📜 Contra ${esc(nick)}:</b> ${ds.length} duelos · <span class="ppvp-v">${v}V</span> <span class="ppvp-d">${ds.length - v}D</span> · ${pctHtml(v, ds.length)}
+      ${diverge ? '<p class="ppvp-d" style="margin:4px 0">⚠ A simulação guardada diz que uma ordem vence, mas com ela o seu placar REAL contra ele é negativo — confie no histórico abaixo.</p>' : ''}
+      <h5>Suas comps contra ele (ordem exata)</h5>
+      <table class="ppvp-tab"><tr><th>Sua ordem</th><th>Duelos</th><th>V-D</th><th>%</th><th>Pontos</th><th>Última vez</th></tr>${linhasGrupo(minhas, true)}</table>
+      <h5>Comps dele contra você</h5>
+      <table class="ppvp-tab"><tr><th>Time dele</th><th>Duelos</th><th>Sua V-D</th><th>%</th><th>Pontos</th><th>Última vez</th></tr>${linhasGrupo(dele)}</table>
+      <h5>Duelos</h5>
+      <table class="ppvp-tab"><tr><th>Quando</th><th></th><th>Ordem dele</th><th>Sua ordem</th></tr>
+        ${pag.map((h) => `<tr><td>${dataCurta(h.em)}</td><td class="${h.venci ? 'ppvp-v' : 'ppvp-d'}">${h.venci ? 'V' : 'D'} <small>${h.delta >= 0 ? '+' : ''}${h.delta}</small></td>
+          <td>${ordemHtml(h.dele, h.naoEntrou, h.deleSemOrdem)}</td><td>${ordemHtml(h.meu)}<div>${botoesDoDuelo(h, `Contra ${h.nick}`)}</div></td></tr>`).join('')}</table>
+      ${paginas > 1 ? `<div class="ppvp-pags"><button class="ppvp-bt ppvp-mini" data-a="rivalPag" data-v="-1" ${rivalPagina === 0 ? 'disabled' : ''}>‹</button>
+        <span>página ${rivalPagina + 1} de ${paginas}</span><button class="ppvp-bt ppvp-mini" data-a="rivalPag" data-v="1" ${rivalPagina >= paginas - 1 ? 'disabled' : ''}>›</button></div>` : ''}
+    </div>`;
+  }
+
   function htmlRivais() {
     const top = ladder.slice(0, 10).map(nickDaLadder).filter(Boolean)
       .filter((n) => n.toLowerCase() !== String(core.eu?.nick ?? '').toLowerCase());
@@ -1111,12 +1179,12 @@
         .map(([c, n]) => `<div>${esc(c)} <small class="ppvp-v">(${n} vitória${n > 1 ? 's' : ''})</small></div>`).join('') || '<span class="ppvp-aviso">—</span>';
       const salvo = melhores[k] ?? {};
       const calc = calcRival.get(nick);
-      const simOrdem = salvo.ordem ? `<div><small class="ppvp-aviso">sua equipe atual · ${dataCurta(salvo.ordem.em)}</small><br>${ordemCurta(salvo.ordem.r)}<br><small>${resultadoCurto(salvo.ordem.r)}</small><br>${botoesAplicar(salvo.ordem.r, `Anti ${nick}`)}</div>` : '';
+      const simOrdem = salvo.ordem ? `<div><small class="ppvp-aviso">sua equipe atual · ${dataCurta(salvo.ordem.em)}</small><br>${ordemCurta(salvo.ordem.r)}<br><small>simulação: ${resultadoCurto(salvo.ordem.r)}${realTxt(realDaOrdem(nick, salvo.ordem.r))}</small><br>${botoesAplicar(salvo.ordem.r, `Anti ${nick}`)}</div>` : '';
       const simBolsa = salvo.bolsa?.r?.length ? `<div style="margin-top:4px"><small class="ppvp-aviso">melhor comp da bolsa · ${dataCurta(salvo.bolsa.em)}</small>
-          ${salvo.bolsa.r.map((o, i) => `<div>${i === 0 ? '🥇' : i === 1 ? '🥈' : '🥉'} ${ordemCurta(o)} <small>${resultadoCurto(o)}</small><br>${botoesAplicar(o, `Anti ${nick} bolsa${i ? ` ${i + 1}` : ''}`)}</div>`).join('')}</div>` : '';
+          ${salvo.bolsa.r.map((o, i) => `<div>${i === 0 ? '🥇' : i === 1 ? '🥈' : '🥉'} ${ordemCurta(o)} <small>simulação: ${resultadoCurto(o)}${realTxt(realDaOrdem(nick, o))}</small><br>${botoesAplicar(o, `Anti ${nick} bolsa${i ? ` ${i + 1}` : ''}`)}</div>`).join('')}</div>` : '';
       return `<tr>
         <td><b>${esc(nick)}</b>${posTop.has(k) ? ` <small class="ppvp-top">#${posTop.get(k)} PvP</small>` : ''}</td>
-        <td>${duelos.length ? `<span class="ppvp-v">${v}</span>-<span class="ppvp-d">${duelos.length - v}</span>` : '<span class="ppvp-aviso">nunca</span>'}</td>
+        <td>${duelos.length ? `<span class="ppvp-v">${v}</span>-<span class="ppvp-d">${duelos.length - v}</span><br><button class="ppvp-bt ppvp-mini" data-a="rivalHist" data-v="${esc(nick)}">📜 ${mesmoNick(rivalAberto, nick) ? 'fechar' : 'histórico'}</button>` : '<span class="ppvp-aviso">nunca</span>'}</td>
         <td>${ult ? ordemHtml(ult.dele, ult.naoEntrou, ult.deleSemOrdem) : '<span class="ppvp-aviso">—</span>'}</td>
         <td style="white-space:normal">${real}</td>
         <td style="white-space:normal">${simOrdem}${simBolsa}${!simOrdem && !simBolsa ? '<span class="ppvp-aviso">ainda não calculado</span>' : ''}
@@ -1124,7 +1192,8 @@
           <div style="margin-top:4px">
             <button class="ppvp-bt ppvp-mini" data-a="calcOrdem" data-v="${esc(nick)}" ${calc && !calc.erro ? 'disabled' : ''}>${calc === 'ordem' ? 'calculando…' : '💡 melhor ordem'}</button>
             <button class="ppvp-bt ppvp-mini" data-a="calcBolsa" data-v="${esc(nick)}" ${calc && !calc.erro ? 'disabled' : ''}>${calc === 'bolsa' ? 'procurando…' : '🔍 melhor comp da bolsa'}</button>
-          </div></td></tr>`;
+          </div></td></tr>
+        ${mesmoNick(rivalAberto, nick) ? `<tr><td colspan="5">${htmlHistoricoRival(nick)}</td></tr>` : ''}`;
     }).join('');
     return `
       <section>
@@ -1214,7 +1283,7 @@
           <td><b>${esc(h.nick)}</b></td>
           <td class="${h.venci ? 'ppvp-v' : 'ppvp-d'}">${h.venci ? 'V' : 'D'} <small>${h.delta >= 0 ? '+' : ''}${h.delta}</small></td>
           <td>${ordemHtml(h.dele, h.naoEntrou, h.deleSemOrdem)}${h.deleSemOrdem ? '<div class="ppvp-aviso">sem fita: quem entrou, fora de ordem</div>' : h.aviso ? `<div class="ppvp-aviso">${esc(h.aviso)}</div>` : ''}</td>
-          <td>${ordemHtml(h.meu)}${!h.venci && h.meu?.length && (h.dele?.length || h.naoEntrou?.length)
+          <td>${ordemHtml(h.meu)}${h.meu?.length ? `<div>${botoesDoDuelo(h, `Contra ${h.nick}`)}</div>` : ''}${!h.venci && h.meu?.length && (h.dele?.length || h.naoEntrou?.length)
             ? `<button class="ppvp-bt ppvp-sug-bt" data-a="sugerir" data-v="${esc(h.id)}">💡 ${abertaSug === h.id ? 'fechar' : 'Melhor ordem'}</button>` : ''}</td></tr>
           ${abertaSug === h.id ? `<tr><td colspan="5">${htmlSugestao(h)}</td></tr>` : ''}`).join('')}</table>
         ${paginas > 1 ? `<div class="ppvp-pags">
@@ -1269,6 +1338,8 @@
     }
     else if (a === 'top10') { st.soTop = true; core.send({ t: 'pvp.info' }); }
     else if (a === 'soTop') st.soTop = b.checked;
+    else if (a === 'rivalHist') { rivalAberto = mesmoNick(rivalAberto, b.dataset.v) ? null : b.dataset.v; rivalPagina = 0; }
+    else if (a === 'rivalPag') rivalPagina = Math.max(0, rivalPagina + Number(b.dataset.v));
     else if (a === 'calcOrdem') return calcularRival(b.dataset.v, 'ordem');
     else if (a === 'calcBolsa') return calcularRival(b.dataset.v, 'bolsa');
     else if (a === 'sugerir') {
