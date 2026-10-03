@@ -425,7 +425,8 @@
       const log = [];
       lutar(r.ordem, ordensRival[0], log);
       return {
-        ordem: r.ordem.map((p) => ({ nome: nomeDe(p), nivel: p.level })),
+        // `id` só existe para pokémon seus de verdade (estimativas não têm): é o que permite aplicar.
+        ordem: r.ordem.map((p) => ({ id: p._origem === 'bolsa' ? p.id : null, nome: nomeDe(p), nivel: p.level })),
         vitorias: r.vitorias, total: r.total, media: r.media, pior: r.pior,
         passos: log.map((s) => ({ eu: nomeDe(s.eu), ele: nomeDe(s.ele), venceu: s.venceu, sobra: s.sobra, golpe: s.golpe?.name ?? '', ef: s.ef })),
       };

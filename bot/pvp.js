@@ -14,7 +14,7 @@
 //    servidor só puxa a próxima partida 20 s depois do fim, então dá tempo.
 (() => {
   'use strict';
-  const VERSAO_PVP = '1.4.0';
+  const VERSAO_PVP = '1.5.0';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -40,8 +40,15 @@
   const ESPERA_FICHA_MS = 1500;
 
   function lerCfg() {
-    const padrao = { trava: true, derrotas: 2, seguidas: 0, log: [] };
-    try { return { ...padrao, ...JSON.parse(localStorage.getItem(CHAVE_CFG)) }; } catch { return padrao; }
+    // `auto` = o auto-switch de formações: troca depois de `vitorias` vitórias seguidas com a mesma
+    // formação (o rival vai counterar) e, se `naDerrota`, logo após perder. `fora` = slots do
+    // armário que não entram na rotação; `usoEm` = quando cada slot foi usado por último.
+    const padrao = { trava: true, derrotas: 2, seguidas: 0, log: [],
+      auto: { ativo: false, vitorias: 1, naDerrota: true, fora: [], seguidas: 0, usoEm: {} } };
+    try {
+      const s = JSON.parse(localStorage.getItem(CHAVE_CFG)) ?? {};
+      return { ...padrao, ...s, auto: { ...padrao.auto, ...(s.auto ?? {}) } };
+    } catch { return padrao; }
   }
   const cfg = lerCfg();
   const salvarCfg = () => { try { localStorage.setItem(CHAVE_CFG, JSON.stringify(cfg)); } catch {} };
@@ -52,6 +59,7 @@
   let melhores = (() => { try { return JSON.parse(localStorage.getItem(CHAVE_MELHORES)) ?? {}; } catch { return {}; } })();
   const salvarMelhores = () => { try { localStorage.setItem(CHAVE_MELHORES, JSON.stringify(melhores)); } catch {} };
   let ladder = [];             // o top do PvP (pvp.info → ladder)
+  let formacoes = null;        // o armário do jogo: [{ slot, nome, ids, v, d, cv, cd }] (pvp.info / respostas do armário)
   const calcRival = new Map(); // nick -> 'ordem' | 'bolsa' | { erro } enquanto calcula
   let busca = '';
   let pagina = 0;
@@ -217,19 +225,157 @@
     salvarCfg();
   }
 
+  // ---------------------------------------------------------------- aplicar, armário e auto-switch
+  const mesmaEscalacao = (a, b) => Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((x, i) => Number(x) === Number(b[i]));
+  const formacaoEmUso = () => (formacoes ?? []).find((f) => mesmaEscalacao(f.ids, meuTimeIds));
+  const partidasF = (f) => (Number(f?.v) || 0) + (Number(f?.d) || 0) + (Number(f?.cv) || 0) + (Number(f?.cd) || 0);
+  const vitoriasF = (f) => (Number(f?.v) || 0) + (Number(f?.cv) || 0);
+  /** Nota da formação para escolher a próxima: taxa com "prior" (1V 1D), para 1 jogo não valer 100%. */
+  const notaF = (f) => (vitoriasF(f) + 1) / (partidasF(f) + 2);
+  const NOVA_ATE = 2; // com menos partidas que isso, a formação é "nova": entra antes, para ser testada
+  /** Quem entra primeiro: formação nova (para medir), depois a melhor nota, depois a há mais tempo sem uso. */
+  const ordemDeEscolha = (x, y) => (partidasF(x) < NOVA_ATE ? 0 : 1) - (partidasF(y) < NOVA_ATE ? 0 : 1)
+    || notaF(y) - notaF(x) || (cfg.auto.usoEm[x.slot] ?? 0) - (cfg.auto.usoEm[y.slot] ?? 0);
+
+  /** Troca a equipe de PvP agora (a mesma mensagem do editor de equipe do jogo). */
+  function aplicarEquipe(ids, motivo) {
+    if (!ids?.length) return false;
+    if (!core.send({ t: 'pvp.time.salvar', pokemonIds: ids })) { registrar('⚠ não deu para trocar a equipe: conta desconectada'); return false; }
+    meuTimeIds = [...ids];
+    registrar(`✅ equipe trocada${motivo ? ` (${motivo})` : ''}: ${nomesDosIds(ids).join(' → ')}`);
+    return true;
+  }
+
+  /** Guarda a escalação no armário do jogo: na primeira vaga livre, ou na que o jogador escolher. */
+  function salvarNoArmario(ids, nome) {
+    if (!ids?.length) return;
+    if (formacoes == null) { core.send({ t: 'pvp.info' }); avisar('Carregando o armário… tente de novo em um instante.'); return; }
+    const usados = new Set(formacoes.map((f) => f.slot));
+    let slot = [1, 2, 3, 4, 5].find((s) => !usados.has(s));
+    if (!slot) {
+      const r = prompt(`O armário está cheio. Substituir qual formação? (digite o número)\n\n${formacoes.map((f) => `${f.slot}: ${f.nome} — ${vitoriasF(f)}V ${partidasF(f) - vitoriasF(f)}D`).join('\n')}`);
+      slot = Number(r);
+      if (![1, 2, 3, 4, 5].includes(slot)) return;
+    }
+    const n = [...String(nome ?? 'Formação').replace(/\s+/g, ' ').trim()].slice(0, 30).join('');
+    core.send({ t: 'pvp.formacao.salvar', slot, nome: n, pokemonIds: ids });
+    registrar(`💾 salvando no armário (vaga ${slot}): "${n}" — ${nomesDosIds(ids).join(' → ')}`);
+  }
+
+  function nomesDosIds(ids) {
+    const porId = new Map((core.eu?.pokemons ?? []).map((p) => [p.id, p]));
+    return ids.map((id) => porId.get(id)?.nome ?? `#${id}`);
+  }
+
+  /**
+   * Depois de cada partida: venceu N seguidas com a mesma formação → troca (o rival vai counterar
+   * essa); perdeu → troca (se ligado). Entra a formação da rotação com a melhor nota, sem ser a
+   * atual; empate = a que está há mais tempo sem uso.
+   */
+  function autoSwitch(reg) {
+    const a = cfg.auto;
+    if (!a.ativo) return;
+    const atual = formacaoEmUso();
+    let motivo = null;
+    if (reg.venci) {
+      a.seguidas = (a.seguidas ?? 0) + 1;
+      if (a.seguidas >= Math.max(1, Number(a.vitorias) || 1)) motivo = `${a.seguidas} vitória(s) seguida(s) — o rival deve counterar`;
+      else registrar(`auto-switch: vitória ${a.seguidas}/${a.vitorias} com ${atual ? `"${atual.nome}"` : 'a equipe atual'} — mantém`);
+    } else {
+      a.seguidas = 0;
+      if (a.naDerrota) motivo = 'derrota';
+    }
+    if (!motivo) { salvarCfg(); return; }
+    const candidatas = (formacoes ?? []).filter((f) => !a.fora.includes(f.slot) && f !== atual && f.ids?.length);
+    if (!candidatas.length) {
+      registrar(`auto-switch: queria trocar (${motivo}), mas não há outra formação na rotação — salve formações no armário`);
+      salvarCfg();
+      return;
+    }
+    candidatas.sort(ordemDeEscolha);
+    const prox = candidatas[0];
+    if (core.send({ t: 'pvp.formacao.usar', slot: prox.slot })) {
+      a.usoEm[prox.slot] = Date.now();
+      a.seguidas = 0;
+      meuTimeIds = [...prox.ids];
+      reg.trocouDepois = true;
+      salvarHist();
+      registrar(`🔁 auto-switch (${motivo}): ${atual ? `"${atual.nome}"` : 'equipe atual'} → "${prox.nome}" (${vitoriasF(prox)}V ${partidasF(prox) - vitoriasF(prox)}D)`);
+      avisar(`🔁 Auto-switch: agora "${prox.nome}" (${motivo})`);
+    }
+    salvarCfg();
+  }
+
+  const idsDe = (o) => (o?.ordem?.length && o.ordem.every((p) => p.id != null) ? o.ordem.map((p) => p.id) : null);
+  /** Os botões "aplicar agora" e "salvar no armário" de uma ordem sugerida. */
+  function botoesAplicar(o, nome) {
+    const ids = idsDe(o);
+    if (!ids) return '<small class="ppvp-aviso">(tem pokémon estimado — não dá para aplicar)</small>';
+    const v = esc(JSON.stringify({ ids, nome }));
+    return `<button class="ppvp-bt ppvp-mini" data-a="aplicar" data-v="${v}">✅ aplicar agora</button><button class="ppvp-bt ppvp-mini" data-a="armario" data-v="${v}">💾 salvar no armário</button>`;
+  }
+
+  function htmlFormacoes() {
+    const a = cfg.auto;
+    const atual = formacaoEmUso();
+    const lista = formacoes == null ? null : [...formacoes].sort((x, y) => x.slot - y.slot);
+    const naRotacao = (lista ?? []).filter((f) => !a.fora.includes(f.slot));
+    const prox = [...naRotacao].filter((f) => f !== atual).sort(ordemDeEscolha)[0];
+    const cards = (lista ?? []).map((f) => {
+      const n = partidasF(f), v = vitoriasF(f);
+      return `<tr class="${f === atual ? 'ppvp-em-uso' : ''}">
+        <td><label title="entra na rotação do auto-switch"><input type="checkbox" data-a="autoFora" data-v="${f.slot}" ${a.fora.includes(f.slot) ? '' : 'checked'}> ${f.slot}</label></td>
+        <td><b>${esc(f.nome)}</b>${f === atual ? ' <small class="ppvp-v">● em uso</small>' : ''}${f === prox && a.ativo ? ' <small class="ppvp-top">próxima</small>' : ''}</td>
+        <td style="white-space:normal">${nomesDosIds(f.ids ?? []).map((x, i) => `<b style="color:#f3c77a">${i + 1}</b> ${esc(x)}`).join(' → ')}</td>
+        <td>${n ? `<span class="ppvp-v">${v}</span>-<span class="ppvp-d">${n - v}</span> · ${pctHtml(v, n)}` : '<span class="ppvp-aviso">sem jogos</span>'}</td>
+        <td>${a.usoEm[f.slot] ? dataCurta(a.usoEm[f.slot]) : '—'}</td>
+        <td><button class="ppvp-bt ppvp-mini" data-a="usarForm" data-v="${f.slot}" ${f === atual ? 'disabled' : ''}>usar agora</button></td></tr>`;
+    }).join('');
+    return `
+      <section>
+        <div class="ppvp-linha">
+          <button class="ppvp-sw ${a.ativo ? 'on' : ''}" data-a="autoAtivo"></button>
+          <b>Auto-switch de formações</b>
+          <span class="ppvp-aviso">troca a equipe de PvP sozinho entre as formações do armário, para antecipar o counter do rival</span>
+        </div>
+        <div class="ppvp-linha">
+          trocar depois de <input type="number" class="ppvp-in" data-c="autoVitorias" min="1" max="10" value="${esc(a.vitorias)}"> vitória(s) seguida(s) com a mesma formação
+          <span style="width:12px"></span>
+          <label><input type="checkbox" data-a="autoNaDerrota" ${a.naDerrota ? 'checked' : ''}> trocar logo após uma derrota</label>
+        </div>
+        <p style="margin:4px 0 0">Em uso: <b>${atual ? esc(atual.nome) : 'equipe montada à mão (fora do armário)'}</b>
+          · vitórias seguidas: <b>${a.seguidas ?? 0}</b>${prox ? ` · próxima troca vai para <b>${esc(prox.nome)}</b>` : ''}</p>
+        <p class="ppvp-aviso" style="margin:4px 0 0">A próxima é: primeiro uma formação nova (menos de 2 partidas), para ser testada; senão, a de melhor taxa de vitória (placar do próprio jogo), sem repetir a atual; empate = a que está há mais tempo sem uso.
+          O jogo puxa a próxima partida 20 s depois do fim, então a troca entra antes dela.</p>
+      </section>
+      <section>
+        <h4>Armário do jogo (${lista ? lista.length : '…'}/5)</h4>
+        ${lista == null ? '<span class="ppvp-aviso">Carregando o armário…</span>'
+          : cards ? `<table class="ppvp-tab"><tr><th title="na rotação">Rot.</th><th>Formação</th><th>Ordem</th><th>Placar do jogo</th><th>Último uso (auto)</th><th></th></tr>${cards}</table>`
+          : '<span class="ppvp-aviso">O armário está vazio.</span>'}
+        <p class="ppvp-aviso">Para encher o armário: use "💾 salvar no armário" nas sugestões (aba Rivais, 💡 Melhor ordem das derrotas, comps das Estatísticas) — ou salve no próprio jogo.
+          ${naRotacao.length < 2 ? '<b>O auto-switch precisa de pelo menos 2 formações na rotação.</b>' : ''}</p>
+      </section>`;
+  }
+
   // ---------------------------------------------------------------- escuta do jogo
   function aoMensagem(ev) {
     if (typeof ev.data !== 'string' || !ev.data.includes('"t":"pvp"')) return;
-    if (!/"(partida|naoVistas|ficha|time|timeSalvo|ladder)"/.test(ev.data)) return;
+    if (!/"(partida|naoVistas|ficha|time|timeSalvo|ladder|formacoes|formacaoOk|formacaoRecusa|recusa)"/.test(ev.data)) return;
     let m;
     try { m = JSON.parse(ev.data); } catch { return; }
     if (m.t !== 'pvp') return;
     const ids = (x) => (x ?? []).map((v) => (typeof v === 'object' ? v?.id : v)).filter((v) => v != null);
     if (m.time !== undefined) meuTimeIds = ids(m.time);
     if (Array.isArray(m.ladder)) { ladder = m.ladder; if (aba === 'rivais') pintar(); }
+    if (m.formacoes !== undefined) formacoes = m.formacoes ?? [];
+    if (m.formacaoOk) registrar(`armário: ${m.formacaoOk.acao ?? 'ok'}${m.formacaoOk.slot ? ` (formação ${m.formacaoOk.slot})` : ''}`);
+    if (m.formacaoRecusa) registrar(`⚠ o armário recusou: ${m.formacaoRecusa.msg ?? 'sem motivo'}`);
+    if (m.recusa) registrar(`⚠ o jogo recusou a troca de equipe: ${m.recusa.msg ?? 'sem motivo'}`);
     if (m.timeSalvo !== undefined) meuTimeIds = ids(m.timeSalvo);
-    // A sua ordem pode chegar depois da partida (o jogo pede `pvp.info` logo após): completa a última.
-    if (meuTimeIds?.length && hist[0] && !hist[0].meuCompleto && Date.now() - hist[0].em < 60_000) {
+    // A sua ordem pode chegar depois da partida (o jogo pede `pvp.info` logo após): completa a última —
+    // a não ser que o auto-switch já tenha trocado a equipe (aí a de agora não é a que lutou).
+    if (meuTimeIds?.length && hist[0] && !hist[0].meuCompleto && !hist[0].trocouDepois && Date.now() - hist[0].em < 60_000) {
       const minha = minhaOrdemSalva();
       if (minha.length) { hist[0].meu = minha; hist[0].meuCompleto = true; salvarHist(); }
     }
@@ -243,6 +389,7 @@
       if (reg) {
         contarResultado(reg);
         if (reg.dele.length) registrar(`${reg.venci ? 'vitória' : 'derrota'} vs ${reg.nick}: ${reg.dele.map((x) => x.nome).join(' → ')}`);
+        autoSwitch(reg);
       }
     }
     pintar();
@@ -291,6 +438,7 @@
   .ppvp-pags{display:flex;gap:8px;align-items:center;justify-content:center;margin-top:8px}
   .ppvp-sug-bt{display:block;margin-top:4px;font-size:11px;padding:2px 8px}
   .ppvp-mini{font-size:11px;padding:2px 7px;margin:2px 4px 0 0}
+  .ppvp-tab tr.ppvp-em-uso td{background:#2f4a2a}
   .ppvp-top{background:#b04ad0;color:#fff;border-radius:5px;padding:0 5px;font-weight:700}
   .ppvp-destaque{background:#2f4a2a;border:1px solid #7fdc8f;border-radius:8px;padding:6px 10px;margin-top:6px}
   .ppvp-sug{background:#2a1515;border:1px solid #6a4040;border-radius:10px;padding:8px 10px;white-space:normal}
@@ -323,6 +471,7 @@
     fundo.addEventListener('change', (e) => {
       if (e.target.dataset.c === 'derrotas') { cfg.derrotas = Math.max(1, Math.min(10, Number(e.target.value) || 2)); salvarCfg(); pintar(); }
       if (e.target.dataset.c === 'stMinimo') { st.minimo = Math.max(1, Math.min(50, Number(e.target.value) || 1)); pintar(); }
+      if (e.target.dataset.c === 'autoVitorias') { cfg.auto.vitorias = Math.max(1, Math.min(10, Number(e.target.value) || 1)); salvarCfg(); pintar(); }
     });
     const aoEsc = (e) => { if (e.key === 'Escape' && fundo.classList.contains('aberto')) fechar(); };
     document.addEventListener('keydown', aoEsc);
@@ -406,7 +555,8 @@
         <td style="white-space:normal"><b>${esc(r.rotulo)}</b>${r.parcial ? ' <small class="ppvp-aviso">(incompleta)</small>' : ''}</td>
         <td>${r.n}</td><td><span class="ppvp-v">${r.v}</span>-<span class="ppvp-d">${r.n - r.v}</span></td><td>${pctHtml(r.v, r.n)}</td>
         <td class="${r.delta >= 0 ? 'ppvp-v' : 'ppvp-d'}">${r.delta >= 0 ? '+' : ''}${r.delta}</td>
-        <td style="white-space:normal">${confronto(e.melhor)}</td><td style="white-space:normal">${confronto(e.pior)}</td></tr>`; }).join('');
+        <td style="white-space:normal">${confronto(e.melhor)}</td><td style="white-space:normal">${confronto(e.pior)}</td>
+        <td>${(() => { const h = s.duelos.find((x) => compMinha(x)?.rotulo === r.rotulo && x.meu?.every((p) => p.id != null)); return h ? botoesAplicar({ ordem: h.meu }, `Comp ${pct(r.v, r.n)}%`) : '<small class="ppvp-aviso">—</small>'; })()}</td></tr>`; }).join('');
     const tabRivais = rivais.map((r) => { const e = extremos(r.x); return `<tr>
         <td style="white-space:normal"><b>${esc(r.rotulo)}</b>${r.parcial ? ' <small class="ppvp-aviso">(incompleta)</small>' : ''}<br><small>${[...r.nicks].slice(0, 4).map(esc).join(', ')}${r.nicks.size > 4 ? '…' : ''}</small></td>
         <td>${r.n}</td><td><span class="ppvp-v">${r.v}</span>-<span class="ppvp-d">${r.n - r.v}</span></td><td>${pctHtml(r.v, r.n)}</td>
@@ -440,7 +590,7 @@
       </section>
       <section>
         <h4>Suas composições</h4>
-        ${tabMinhas ? `<table class="ppvp-tab"><tr><th>Comp</th><th>Duelos</th><th>V-D</th><th>%</th><th>Pontos</th><th>Vai melhor contra</th><th>Vai pior contra</th></tr>${tabMinhas}</table>`
+        ${tabMinhas ? `<table class="ppvp-tab"><tr><th>Comp</th><th>Duelos</th><th>V-D</th><th>%</th><th>Pontos</th><th>Vai melhor contra</th><th>Vai pior contra</th><th>Aplicar</th></tr>${tabMinhas}</table>`
           : '<span class="ppvp-aviso">Sem duelos com a sua comp registrada ainda.</span>'}
       </section>
       <section>
@@ -461,7 +611,12 @@
         <button class="ppvp-bt ${aba === 'historico' ? 'ppvp-on' : ''}" data-a="aba" data-v="historico">Histórico</button>
         <button class="ppvp-bt ${aba === 'stats' ? 'ppvp-on' : ''}" data-a="aba" data-v="stats">Estatísticas</button>
         <button class="ppvp-bt ${aba === 'rivais' ? 'ppvp-on' : ''}" data-a="aba" data-v="rivais">Rivais</button>
+        <button class="ppvp-bt ${aba === 'formacoes' ? 'ppvp-on' : ''}" data-a="aba" data-v="formacoes">Formações${cfg.auto.ativo ? ' 🔁' : ''}</button>
         <button class="ppvp-x" data-a="fechar" title="Fechar">×</button></span>`;
+    if (aba === 'formacoes') {
+      modal.innerHTML = `<header><span>⚔ PvP — formações e auto-switch<small>v${VERSAO_PVP}</small></span>${abas}</header>${htmlFormacoes()}`;
+      return;
+    }
     if (aba === 'rivais') {
       modal.innerHTML = `<header><span>⚔ PvP — rivais<small>v${VERSAO_PVP}</small></span>${abas}</header>${htmlRivais()}`;
       return;
@@ -572,9 +727,9 @@
         .map(([c, n]) => `<div>${esc(c)} <small class="ppvp-v">(${n} vitória${n > 1 ? 's' : ''})</small></div>`).join('') || '<span class="ppvp-aviso">—</span>';
       const salvo = melhores[k] ?? {};
       const calc = calcRival.get(nick);
-      const simOrdem = salvo.ordem ? `<div><small class="ppvp-aviso">sua equipe atual · ${dataCurta(salvo.ordem.em)}</small><br>${ordemCurta(salvo.ordem.r)}<br><small>${resultadoCurto(salvo.ordem.r)}</small></div>` : '';
+      const simOrdem = salvo.ordem ? `<div><small class="ppvp-aviso">sua equipe atual · ${dataCurta(salvo.ordem.em)}</small><br>${ordemCurta(salvo.ordem.r)}<br><small>${resultadoCurto(salvo.ordem.r)}</small><br>${botoesAplicar(salvo.ordem.r, `Anti ${nick}`)}</div>` : '';
       const simBolsa = salvo.bolsa?.r?.length ? `<div style="margin-top:4px"><small class="ppvp-aviso">melhor comp da bolsa · ${dataCurta(salvo.bolsa.em)}</small>
-          ${salvo.bolsa.r.map((o, i) => `<div>${i === 0 ? '🥇' : i === 1 ? '🥈' : '🥉'} ${ordemCurta(o)} <small>${resultadoCurto(o)}</small></div>`).join('')}</div>` : '';
+          ${salvo.bolsa.r.map((o, i) => `<div>${i === 0 ? '🥇' : i === 1 ? '🥈' : '🥉'} ${ordemCurta(o)} <small>${resultadoCurto(o)}</small><br>${botoesAplicar(o, `Anti ${nick} bolsa${i ? ` ${i + 1}` : ''}`)}</div>`).join('')}</div>` : '';
       return `<tr>
         <td><b>${esc(nick)}</b>${posTop.has(k) ? ` <small class="ppvp-top">#${posTop.get(k)} PvP</small>` : ''}</td>
         <td>${duelos.length ? `<span class="ppvp-v">${v}</span>-<span class="ppvp-d">${duelos.length - v}</span>` : '<span class="ppvp-aviso">nunca</span>'}</td>
@@ -627,7 +782,7 @@
   }
 
   const margemTxt = (m) => `${m >= 0 ? '+' : ''}${Math.round(m * 100)}%`;
-  function opcaoHtml(o, titulo) {
+  function opcaoHtml(o, titulo, nome = '') {
     const res = o.vitorias === o.total
       ? `<b class="ppvp-v">vence</b>${o.total > 1 ? ` nos ${o.total} cenários` : ''}`
       : o.vitorias ? `<b>vence ${o.vitorias} de ${o.total} cenários</b>` : '<b class="ppvp-d">perde</b>';
@@ -636,6 +791,7 @@
       : `<span class="ppvp-d">${esc(s.ele)} dele</span> derruba seu ${esc(s.eu)}${s.golpe ? ` <small>(${esc(s.golpe)}${s.ef > 1 ? ', super efetivo' : ''})</small>` : ''} — fica com ${Math.round(s.sobra * 100)}%`);
     return `<div class="ppvp-op"><b>${titulo}:</b> ${o.ordem.map((p, i) => `<b style="color:#f3c77a">${i + 1}</b> ${esc(p.nome)}`).join(' → ')}
       <div>${res} · margem ${margemTxt(o.pior)}${o.total > 1 ? ` no pior cenário (média ${margemTxt(o.media)})` : ''}</div>
+      ${nome ? `<div>${botoesAplicar(o, nome)}</div>` : ''}
       <details><summary class="ppvp-aviso">como a luta se desenrola</summary><ol>${passos.map((p) => `<li>${p}</li>`).join('')}</ol></details></div>`;
   }
 
@@ -651,7 +807,7 @@
         ${r.cenarios > 1 ? `<span class="ppvp-aviso"> · as posições com "?" não são conhecidas: testei as ${r.cenarios} combinações</span>` : ''}</div>
       ${opcaoHtml(r.usada, 'A ordem que você usou')}
       ${mesma ? '<p class="ppvp-aviso">A ordem que você usou já é a melhor possível com esse time — para virar, só trocando pokémon (use o 📊 Time).</p>'
-        : r.melhores.map((o, i) => opcaoHtml(o, i === 0 ? '💡 Melhor ordem' : `${i + 1}ª opção`)).join('')}
+        : r.melhores.map((o, i) => opcaoHtml(o, i === 0 ? '💡 Melhor ordem' : `${i + 1}ª opção`, `Anti ${h.nick}${i ? ` ${i + 1}` : ''}`)).join('')}
       ${melhor && !melhor.vitorias ? '<p class="ppvp-d">Nenhuma ordem desse time vence a dele na simulação — vale trocar pokémon (📊 Time sugere quem).</p>' : ''}
       ${r.usada.vitorias === r.usada.total ? '<p class="ppvp-aviso">⚠ A simulação diz que a ordem usada venceria, mas você perdeu: o rival pode ter mudado o time desde o duelo, ou a sorte do dano pesou.</p>' : ''}
       ${r.avisos.length ? `<p class="ppvp-aviso">${r.avisos.map(esc).join(' · ')}</p>` : ''}
@@ -703,7 +859,30 @@
     if (a === 'trava') { cfg.trava = !cfg.trava; registrar(cfg.trava ? 'trava da fila ligada' : 'trava da fila desligada'); }
     else if (a === 'limpar') { hist = []; salvarHist(); }
     else if (a === 'pag') { pagina = Math.max(0, pagina + Number(b.dataset.v)); return pintarTabela(); }
-    else if (a === 'aba') { aba = b.dataset.v; if (aba === 'rivais' && !ladder.length) core.send({ t: 'pvp.info' }); }
+    else if (a === 'aba') { aba = b.dataset.v; if ((aba === 'rivais' && !ladder.length) || (aba === 'formacoes' && formacoes == null)) core.send({ t: 'pvp.info' }); }
+    else if (a === 'aplicar' || a === 'armario') {
+      let d = null;
+      try { d = JSON.parse(b.dataset.v); } catch {}
+      if (!d?.ids?.length) return;
+      if (a === 'aplicar') aplicarEquipe(d.ids, d.nome);
+      else salvarNoArmario(d.ids, d.nome);
+      setTimeout(() => core.send({ t: 'pvp.info' }), 800); // traz o armário/equipe atualizados
+    }
+    else if (a === 'usarForm') {
+      const slot = Number(b.dataset.v);
+      if (core.send({ t: 'pvp.formacao.usar', slot })) {
+        cfg.auto.usoEm[slot] = Date.now();
+        const f = (formacoes ?? []).find((x) => x.slot === slot);
+        if (f) meuTimeIds = [...f.ids];
+        registrar(`✅ formação ${slot}${f ? ` "${f.nome}"` : ''} em uso (manual)`);
+      }
+    }
+    else if (a === 'autoAtivo') { cfg.auto.ativo = !cfg.auto.ativo; cfg.auto.seguidas = 0; registrar(cfg.auto.ativo ? '🔁 auto-switch LIGADO' : 'auto-switch desligado'); }
+    else if (a === 'autoNaDerrota') cfg.auto.naDerrota = b.checked;
+    else if (a === 'autoFora') {
+      const slot = Number(b.dataset.v);
+      cfg.auto.fora = b.checked ? cfg.auto.fora.filter((s) => s !== slot) : [...new Set([...cfg.auto.fora, slot])];
+    }
     else if (a === 'top10') { st.soTop = true; core.send({ t: 'pvp.info' }); }
     else if (a === 'soTop') st.soTop = b.checked;
     else if (a === 'calcOrdem') return calcularRival(b.dataset.v, 'ordem');
