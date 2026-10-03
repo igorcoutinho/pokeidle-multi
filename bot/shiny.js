@@ -14,7 +14,7 @@
 // shiny antes da bola.
 (() => {
   'use strict';
-  const VERSAO_SHINY = '1.3.0';
+  const VERSAO_SHINY = '1.4.0';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -53,7 +53,7 @@
   // Os selvagens do mapa e a contagem do que já apareceu (sobrevivem à troca a quente).
   const mem = (core.memoria.shiny ??= { mobs: new Map(), vistos: new Map(), mapa: null, ultimoCampo: 0, ballIdsAntes: null });
   const alvos = new Map(); // slot -> { nome, nivel, caido, jogou, timer, registro }
-  const soRegistrados = new Map(); // slot -> registro dos shinies vistos que o caçador não vai pegar (limite/desligado)
+  const soRegistrados = new Map(); // slot -> registro dos shinies vistos com o caçador desligado
   const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const hora = (ms = Date.now()) => new Date(ms).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
@@ -70,35 +70,6 @@
     return null;
   }
   const semBola = () => `sem ${cfg.bola}${cfg.reserva ? ` nem ${cfg.reserva}` : ''}`;
-
-  // Limite de capturas por instalação do app (fica no multi.json, ver main.js). App antigo, sem a
-  // ponte: sem limite. `limite` 0 = sem limite.
-  function limite() {
-    try { return window.__pokeMultiShiny?.info?.() ?? null; } catch { return null; }
-  }
-  const limiteAtingido = (l = limite()) => !!(l && l.limite > 0 && l.capturados >= l.limite);
-  function contarCaptura() {
-    try { window.__pokeMultiShiny?.somar?.(); } catch {}
-  }
-
-  /**
-   * Chegou ao limite (somando todas as contas deste app): o caçador é ENCERRADO para sempre —
-   * desliga, solta o que estava preparando e o interruptor não liga mais. Roda a cada segundo,
-   * então a captura feita em outra conta encerra esta também.
-   */
-  let avisouEncerrado = false;
-  function verificarEncerramento() {
-    if (!limiteAtingido()) return;
-    const estava = cfg.ativo || alvos.size > 0;
-    if (cfg.ativo) { cfg.ativo = false; salvarCfg(); }
-    for (const s of [...alvos.keys()]) encerrar(s, 'caçador encerrado (limite de capturas atingido)');
-    if (estava && !avisouEncerrado) {
-      avisouEncerrado = true;
-      const l = limite();
-      avisar(`✨ Caçador de shiny encerrado: ${l?.capturados ?? ''} shinies capturados (limite de ${l?.limite ?? ''}).`);
-    }
-    if (estava) pintar();
-  }
 
   function avisar(txt) {
     if (!cfg.aviso) return;
@@ -174,18 +145,10 @@
     const registro = { em: Date.now(), mapa: core.eu?.huntSlug ?? '', nome: m.nome, nivel: m.nivel, resultado: 'à vista', bolas: 0, bola: '' };
     registrarHist(registro);
     if (!cfg.ativo) {
-      registro.resultado = limiteAtingido() ? 'caçador encerrado (limite de capturas atingido)' : 'caçador desligado';
+      registro.resultado = 'caçador desligado';
       soRegistrados.set(slot, registro);
       salvarHist();
       avisar(`✨ SHINY no mapa: ${m.nome} Nv ${m.nivel} (caçador desligado)`);
-      return null;
-    }
-    const lim = limite();
-    // Dois shinies juntos não furam o limite: conta também quem já está com a bola preparada.
-    if (lim && lim.limite > 0 && alvos.size && lim.capturados + alvos.size >= lim.limite) {
-      registro.resultado = `outro shiny já está com a bola preparada e falta só ${lim.limite - lim.capturados} captura para o limite`;
-      soRegistrados.set(slot, registro);
-      salvarHist();
       return null;
     }
     const a = { nome: m.nome, nivel: m.nivel, caido: false, jogou: false, timer: null, registro };
@@ -242,7 +205,7 @@
     const a = alvos.get(e.slot);
     const nome = nomeDoId(e.ballId);
     if (!a) {
-      // Um shiny que o app viu mas não ia pegar (limite/desligado): a bola foi do automático do jogo.
+      // Um shiny que o app viu com o caçador desligado: a bola foi do automático do jogo.
       const reg = soRegistrados.get(e.slot);
       if (reg) {
         reg.bolas = 1;
@@ -265,9 +228,7 @@
     a.jogou = true;
     a.registro.bolas = 1;
     a.registro.bola = nome;
-    if (e.sucesso) contarCaptura();
     encerrar(e.slot, e.sucesso ? `capturado com ${nome}` : `escapou da ${nome} (o jogo só deixa 1 bola por shiny)`);
-    if (e.sucesso) verificarEncerramento();
   }
 
   // ---------------------------------------------------------------- escuta do jogo
@@ -343,7 +304,7 @@
   ligarWs();
   // Se a lógica foi recarregada no meio de uma troca, devolve as bolas de antes.
   restaurarBolas();
-  const vigia = setInterval(() => { ligarWs(); verificarEncerramento(); if (estaAberto()) pintarStatus(); }, 1000);
+  const vigia = setInterval(() => { ligarWs(); if (estaAberto()) pintarStatus(); }, 1000);
   limpezas.push(() => {
     clearInterval(vigia);
     for (const a of alvos.values()) { clearTimeout(a.timer); clearTimeout(a.garantia); }
@@ -418,10 +379,8 @@
       <header><span>✨ Caçador de shiny<small>v${VERSAO_SHINY}</small></span><button data-a="fechar" title="Fechar">×</button></header>
       <section>
         <div class="pbsh-linha">
-          <button class="pbsh-sw ${cfg.ativo ? 'on' : ''}" data-a="ativo" ${limiteAtingido() ? 'disabled style="opacity:.4;cursor:not-allowed"' : ''}></button>
-          <b>${limiteAtingido()
-            ? '<span class="pbsh-ruim">Encerrado: o caçador já capturou o limite de shinies (somando todas as contas) e não pode mais ser ligado</span>'
-            : cfg.ativo ? 'Ligado: prepara a bola quando um shiny aparece' : 'Desligado (só registra)'}</b>
+          <button class="pbsh-sw ${cfg.ativo ? 'on' : ''}" data-a="ativo"></button>
+          <b>${cfg.ativo ? 'Ligado: prepara a bola quando um shiny aparece' : 'Desligado (só registra)'}</b>
         </div>
         <div class="pbsh-linha">
           Bola para shiny: <select class="pbsh-in" data-c="bola">${opcoesBola(cfg.bola, false)}</select>
@@ -453,11 +412,7 @@
     if (!el) return;
     const semCena = Date.now() - mem.ultimoCampo > 8000 && !!core.eu?.huntSlug;
     const b = idBola(cfg.bola), r = idBola(cfg.reserva);
-    const lim = limite();
     el.innerHTML = [
-      lim && lim.limite > 0
-        ? `Capturas do caçador (todas as contas): <b class="${limiteAtingido(lim) ? 'pbsh-ruim' : ''}">${lim.capturados} / ${lim.limite}</b>`
-        : '',
       autoBallLigado()
         ? 'Arremesso automático do jogo: <b>ligado</b> — quando um shiny aparece, o app deixa só a bola escolhida ativa e devolve as outras depois'
         : 'Arremesso automático do jogo: <b>desligado</b> — o app joga 1 bola quando o shiny cair',
@@ -474,7 +429,6 @@
     if (!b) return;
     const a = b.dataset.a;
     if (a === 'fechar') return fechar();
-    if (a === 'ativo' && limiteAtingido()) { avisar('✨ O caçador de shiny foi encerrado: o limite de capturas já foi atingido.'); return pintar(); }
     if (a === 'ativo') { cfg.ativo = !cfg.ativo; if (!cfg.ativo) for (const s of [...alvos.keys()]) encerrar(s, 'caçador desligado'); }
     else if (a === 'aviso') cfg.aviso = b.checked;
     else if (a === 'limparHist') { hist = []; salvarHist(); }
@@ -486,6 +440,5 @@
   function fechar() { document.getElementById('pbsh-fundo')?.classList.remove('aberto'); }
 
   montarUI();
-  verificarEncerramento(); // depois da UI: o encerramento repinta o painel
   if (estavaAberto) abrir();
 })();

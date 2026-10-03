@@ -1,7 +1,7 @@
 // Preload de cada conta (roda dentro da webview, antes do jogo).
 // Põe o NÚCLEO do PokeBot no contexto da página — ele precisa estar lá antes de o jogo abrir
 // o WebSocket. A lógica vem depois, injetada pela janela.
-const { ipcRenderer, webFrame, contextBridge } = require('electron');
+const { ipcRenderer, webFrame } = require('electron');
 
 // Captcha do login (Cloudflare Turnstile). O <script> da API chama `window.onTurnstilePronto`
 // assim que carrega, mas quem define essa função é o app.js do jogo — um módulo grande que
@@ -32,16 +32,6 @@ try {
   webFrame.executeJavaScript(ESPERA_TURNSTILE);
 } catch (e) {
   console.error('[PokeIdle Multi] ajuste do captcha não entrou', e);
-}
-
-// O contador de shinies do caçador fica no app (multi.json), não na conta: a página só lê e soma.
-try {
-  contextBridge.exposeInMainWorld('__pokeMultiShiny', {
-    info: () => ipcRenderer.sendSync('multi:shinyInfo'),
-    somar: () => ipcRenderer.sendSync('multi:shinySomar'),
-  });
-} catch (e) {
-  console.error('[PokeIdle Multi] contador de shiny não entrou', e);
 }
 
 try {

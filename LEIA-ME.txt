@@ -30,10 +30,6 @@ CAÇADOR DE SHINY — botão ✨ Shiny (fica verde quando ligado)
   - Se a Great acabar, usa a reserva (Ultra Ball por padrão).
   - Histórico de shinies: quando, mapa, bola e resultado. Se o contador "shinies vistos" do
     jogo marcar um shiny que o app não viu, aparece como "detecção perdida".
-  - Limite de capturas: quando o caçador capturar 3 shinies (somando as 4 contas do app), ele é
-    ENCERRADO para sempre: desliga em todas as contas e o interruptor não liga mais. O limite
-    fica no multi.json do app (pasta de dados):
-    "limiteShiny": 0 = sem limite, ou outro número. "Sair" de uma conta não zera o contador.
   - Precisa da cena ligada: no Modo Economia o jogo não informa os bichos do mapa.
 
 ITENS E BOSS — botão 📦 Itens
