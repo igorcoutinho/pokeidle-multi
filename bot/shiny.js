@@ -14,7 +14,7 @@
 // shiny antes da bola.
 (() => {
   'use strict';
-  const VERSAO_SHINY = '1.4.0';
+  const VERSAO_SHINY = '1.5.0';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -39,13 +39,22 @@
   const ESPERA_AUTO_MS = 2500;     // automático ligado: se ele não jogar nesse tempo, o app joga
   const SEM_RESPOSTA_MS = 5000;    // sem evento `bola` depois do arremesso: desiste
   const DEVOLVER_MS = 5000;        // garantia: tantos ms depois de cair, a bola ativa volta de qualquer jeito
+  const VIVO_MAX_MS = 60_000;      // "shiny" vivo há mais que isso não é selvagem de onda: desiste e devolve as bolas
   const HIST_MAX = 200;
+  // Bolas caras: com o arremesso automático, a bola ativa vai em TODO bicho que cair enquanto o
+  // shiny não cai — escolher uma destas exige confirmação, e a configuração antiga é desfeita.
+  const BOLA_CARA = /beast|master/i;
 
   function lerCfg() {
     const padrao = { ativo: false, bola: 'Great Ball', reserva: 'Ultra Ball', aviso: true };
     try { return { ...padrao, ...JSON.parse(localStorage.getItem(CHAVE_CFG)) }; } catch { return padrao; }
   }
   const cfg = lerCfg();
+  const trocouBolaCara = BOLA_CARA.test(cfg.bola) || BOLA_CARA.test(cfg.reserva ?? '');
+  if (BOLA_CARA.test(cfg.bola)) cfg.bola = 'Great Ball';
+  if (BOLA_CARA.test(cfg.reserva ?? '')) cfg.reserva = 'Ultra Ball';
+  delete cfg.maxBolas; // sobra da versão 1.0
+  if (trocouBolaCara) { try { localStorage.setItem(CHAVE_CFG, JSON.stringify(cfg)); } catch {} }
   const salvarCfg = () => { try { localStorage.setItem(CHAVE_CFG, JSON.stringify(cfg)); } catch {} };
   let hist = (() => { try { return JSON.parse(localStorage.getItem(CHAVE_HIST)) ?? []; } catch { return []; } })();
   const salvarHist = () => { try { localStorage.setItem(CHAVE_HIST, JSON.stringify(hist.slice(0, HIST_MAX))); } catch {} };
@@ -86,6 +95,13 @@
     avisar.t = setTimeout(() => (el.style.opacity = '0'), 6000);
   }
 
+  /** Linha do tempo do shiny: cada etapa com o tempo desde que ele apareceu. */
+  function marcar(reg, txt) {
+    if (!reg) return;
+    (reg.linha ??= []).push(`+${((Date.now() - reg.em) / 1000).toFixed(1)}s ${txt}`);
+    salvarHist();
+  }
+
   function registrarHist(reg) {
     hist.unshift(reg);
     hist = hist.slice(0, HIST_MAX);
@@ -109,19 +125,21 @@
   }
 
   /** Deixa só a bola do shiny ativa no arremesso automático — guardando as de antes. */
-  function ativarBolaDoShiny(bola) {
+  function ativarBolaDoShiny(bola, reg) {
     const atuais = auto().ballIds ?? [];
     if (mem.ballIdsAntes == null) mem.ballIdsAntes = [...atuais];
-    if (mesmaLista(atuais, [bola.id])) return;
+    if (mesmaLista(atuais, [bola.id])) return marcar(reg, `${bola.nome} já era a bola ativa`);
     definirBolasAtivas([bola.id]);
+    marcar(reg, `bola ativa trocada: [${atuais.map(nomeDoId).join(', ')}] → [${bola.nome}]`);
   }
 
   /** Devolve as bolas ativas de antes (sempre manda — não confia na cópia local). */
-  function restaurarBolas() {
+  function restaurarBolas(reg) {
     if (mem.ballIdsAntes == null || alvos.size) return;
     const antes = mem.ballIdsAntes;
     mem.ballIdsAntes = null;
     definirBolasAtivas(antes);
+    marcar(reg, `bolas ativas devolvidas: [${antes.map(nomeDoId).join(', ')}]`);
   }
 
   // ---------------------------------------------------------------- captura
@@ -130,11 +148,12 @@
     if (!a) return;
     clearTimeout(a.timer);
     clearTimeout(a.garantia);
+    clearTimeout(a.vivoDemais);
     alvos.delete(slot);
     a.registro.resultado = resultado;
-    salvarHist();
+    marcar(a.registro, `fim: ${resultado}`);
     avisar(`✨ ${a.nome}: ${resultado}`);
-    restaurarBolas();
+    restaurarBolas(a.registro);
     pintar();
   }
 
@@ -153,10 +172,15 @@
     }
     const a = { nome: m.nome, nivel: m.nivel, caido: false, jogou: false, timer: null, registro };
     alvos.set(slot, a);
+    marcar(registro, `apareceu (slot ${slot}, Nv ${m.nivel})`);
+    // Selvagem de onda cai em segundos. Vivo há 1 min = não é selvagem (pet, treino…): desiste.
+    a.vivoDemais = setTimeout(() => {
+      if (alvos.get(slot) === a && !a.caido) encerrar(slot, `não caiu em ${VIVO_MAX_MS / 1000} s — não parece selvagem; bolas devolvidas`);
+    }, VIVO_MAX_MS);
     const bola = bolaDaVez();
     if (!bola) { encerrar(slot, semBola()); return null; }
     if (autoBallLigado()) {
-      ativarBolaDoShiny(bola);
+      ativarBolaDoShiny(bola, registro);
       registro.resultado = `${bola.nome} ativa — esperando ele cair`;
     } else registro.resultado = `esperando ele cair para jogar ${bola.nome}`;
     salvarHist();
@@ -176,6 +200,7 @@
     a.registro.bolas = 1;
     a.registro.bola = bola.nome;
     a.registro.resultado = `${bola.nome} arremessada…`;
+    marcar(a.registro, `app arremessou ${bola.nome}`);
     clearTimeout(a.timer);
     a.timer = setTimeout(() => encerrar(slot, 'o servidor não respondeu ao arremesso'), SEM_RESPOSTA_MS);
     pintar();
@@ -186,6 +211,7 @@
     const a = alvos.get(slot) ?? shinyApareceu(slot, m); // caiu no mesmo pacote em que apareceu
     if (!a || a.caido) return;
     a.caido = true;
+    marcar(a.registro, autoBallLigado() ? 'caiu — esperando o arremesso automático do jogo' : 'caiu');
     if (autoBallLigado()) {
       // O automático joga a bola ativa (a Great). Se em 2,5 s nada acontecer, o app joga.
       a.timer = setTimeout(() => arremessarUmaVez(slot), ESPERA_AUTO_MS);
@@ -228,6 +254,7 @@
     a.jogou = true;
     a.registro.bolas = 1;
     a.registro.bola = nome;
+    marcar(a.registro, `resultado da bola: ${nome} — ${e.sucesso ? 'capturou' : 'escapou'}`);
     encerrar(e.slot, e.sucesso ? `capturado com ${nome}` : `escapou da ${nome} (o jogo só deixa 1 bola por shiny)`);
   }
 
@@ -249,8 +276,12 @@
     if (b.nv !== undefined) m.nivel = b.nv;
     if (b.sh !== undefined) m.shiny = !!b.sh;
     if (b.x !== undefined) m.morto = !!b.x;
-    if (b.tr || b.dn !== undefined || b.tn !== undefined) m.ignorar = true; // treinador/boneco, não selvagem
+    // Não é selvagem: treinador (tr), pokémon com dono (dn), boneco/posto do XP Share (bn/tn/bi),
+    // pokémon EM TREINO (ti — era o "Mbappé" que o caçador tomava por shiny), NPCs da praça.
+    if (b.tr || b.dn !== undefined || b.tn !== undefined || b.bn || b.bi !== undefined || b.ti !== undefined || b.cura || b.tm || b.depot) m.ignorar = true;
     if (!core.eu?.huntSlug || core.eu.noCentro) m.ignorar = true;          // Centro, PvP: não são selvagens
+    // Apelido de um pokémon seu (selvagem não tem apelido): também não é alvo.
+    if (!m.ignorar && b.n !== undefined && (core.eu?.pokemons ?? []).some((p) => (p.apelido || p.nick) === b.n)) m.ignorar = true;
     if (m.ignorar) return;
     const reviveu = eraMorto && !m.morto; // o slot foi reaproveitado por um bicho novo
     if (nasceu || reviveu) {
@@ -336,6 +367,8 @@
   .pbsh-tab th{text-align:left;color:#f3c77a;padding:4px 6px;font-weight:700}
   .pbsh-tab td{padding:4px 6px;border-top:1px solid #4a2a2a}
   .pbsh-sh{color:#ffd166;font-weight:700}.pbsh-ok{color:#7fdc8f}.pbsh-ruim{color:#ff8a8a}.pbsh-aviso{color:#f3c77a}
+  .pbsh-linha-tempo{font:11px ui-monospace,monospace;color:#f6e7d4;opacity:.85;margin-top:3px}
+  .pbsh-linha-tempo summary{cursor:pointer;color:#f3c77a;font:11px system-ui}
   .pbsh-vistos{display:flex;flex-wrap:wrap;gap:4px}
   .pbsh-vistos span{background:#2a1515;border-radius:6px;padding:2px 8px;font-size:12px}`;
 
@@ -351,7 +384,12 @@
     fundo.addEventListener('change', (e) => {
       const c = e.target.dataset.c;
       if (!c) return;
-      cfg[c] = e.target.value;
+      const v = e.target.value;
+      if ((c === 'bola' || c === 'reserva') && BOLA_CARA.test(v)
+        && !confirm(`${v} é uma bola cara.\n\nCom o arremesso automático ligado, enquanto o shiny não cai a bola ativa vai em TODO bicho que cair.\n\nUsar ${v} mesmo assim?`)) {
+        return pintar(); // volta o seletor para a bola de antes
+      }
+      cfg[c] = v;
       salvarCfg();
       pintar();
     });
@@ -383,6 +421,7 @@
           <b>${cfg.ativo ? 'Ligado: prepara a bola quando um shiny aparece' : 'Desligado (só registra)'}</b>
         </div>
         <div class="pbsh-linha">
+          ${trocouBolaCara ? '<div class="pbsh-ruim" style="flex-basis:100%">⚠ Esta conta estava com Beast/Master Ball no caçador — voltou para Great Ball. Confira os chips de bola das Automações do jogo.</div>' : ''}
           Bola para shiny: <select class="pbsh-in" data-c="bola">${opcoesBola(cfg.bola, false)}</select>
           se acabar, usar: <select class="pbsh-in" data-c="reserva">${opcoesBola(cfg.reserva, true)}</select>
           <small>(o jogo só aceita 1 bola por shiny)</small>
@@ -401,7 +440,8 @@
         ${hist.length ? `<table class="pbsh-tab"><tr><th>Quando</th><th>Mapa</th><th>Pokémon</th><th>Bola</th><th>Resultado</th></tr>
           ${hist.map((h) => `<tr><td>${hora(h.em)}</td><td>${esc(core.hunts?.find((x) => x.slug === h.mapa)?.nome ?? h.mapa)}</td>
             <td class="pbsh-sh">✨ ${esc(h.nome)} Nv ${esc(h.nivel)}</td><td>${h.bolas ? esc(h.bola) : '—'}</td>
-            <td class="${classeResultado(h.resultado)}">${esc(h.resultado)}</td></tr>`).join('')}</table>`
+            <td class="${classeResultado(h.resultado)}">${esc(h.resultado)}${h.linha?.length
+              ? `<details class="pbsh-linha-tempo"><summary>linha do tempo</summary>${h.linha.map(esc).join('<br>')}</details>` : ''}</td></tr>`).join('')}</table>`
           : '<span class="pbsh-aviso">Nenhum shiny encontrado ainda.</span>'}
       </section>`;
     pintarStatus();
@@ -440,5 +480,6 @@
   function fechar() { document.getElementById('pbsh-fundo')?.classList.remove('aberto'); }
 
   montarUI();
+  if (trocouBolaCara) avisar("⚠ Caçador de shiny: estava com Beast/Master Ball — voltou para Great Ball. Confira as bolas ativas nas Automações.");
   if (estavaAberto) abrir();
 })();
