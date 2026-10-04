@@ -87,6 +87,10 @@ PvP — botão ⚔ PvP
     %), as comps dele e todos os duelos — com "✅ aplicar esta ordem" em cada uma. As sugestões
     simuladas mostram ao lado o placar REAL daquela ordem contra ele, e avisa quando divergem.
   - Aba Histórico: cada duelo tem "✅ aplicar esta ordem" para voltar a usar aquela escalação.
+  - Aba Rivais → 🔀 Cruzar 2 jogadores: escolha dois rivais (padrão: os de "sempre trocar", ex.:
+    Zator × Alan) e veja as suas formações com o placar REAL contra cada um, ordenadas pelo pior
+    dos dois (no topo, a que vai bem contra ambos). 💡/🔍 simulam a melhor ordem da sua equipe ou a
+    melhor comp da bolsa contra os dois ao mesmo tempo. Tudo com "✅ aplicar agora".
   - Aba Rivais: os jogadores do Top 10 do PvP (botão 🏅) e os que você já enfrentou. Para cada um:
     seu V-D, o último time dele, as ordens suas que já venceram dele e, guardado, o melhor contra
     ele: 💡 melhor ordem da sua equipe atual ou 🔍 melhor comp da bolsa (5 dos seus 8 mais fortes).

@@ -18,7 +18,7 @@
 //    (vitórias > derrotas), encerra de vez. Enquanto a sessão roda, ela substitui a trava do item 2.
 (() => {
   'use strict';
-  const VERSAO_PVP = '1.12.2';
+  const VERSAO_PVP = '1.13.0';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -1123,6 +1123,7 @@
       }
     });
     fundo.addEventListener('change', (e) => {
+      if (e.target.dataset.c === 'cruzA' || e.target.dataset.c === 'cruzB') { cruz[e.target.dataset.c === 'cruzA' ? 'a' : 'b'] = e.target.value; cruz.calc = null; pintar(); }
       if (e.target.dataset.c === 'sempreTrocar') { cfg.auto.sempreTrocar = e.target.value; salvarCfg(); }
       if (e.target.dataset.c === 'apSeg') { cfg.autoPvp.maxSeguidas = Math.max(1, Math.min(10, Number(e.target.value) || 3)); salvarCfg(); pintar(); }
       if (e.target.dataset.c === 'apCada') { cfg.autoPvp.checarCada = Math.max(2, Math.min(50, Number(e.target.value) || 10)); salvarCfg(); pintar(); }
@@ -1440,6 +1441,90 @@
     </div>`;
   }
 
+  // ---------------------------------------------------------------- cruzar 2 jogadores
+  // Times bons contra DOIS rivais ao mesmo tempo. Real: suas formações com o placar contra cada um,
+  // ordenadas pelo PIOR dos dois (uma comp que só ganha de um não serve). Simulado: o mesmo
+  // `sugerirContraVarios` dos ativos, com os dois de peso igual (sua equipe ou a bolsa).
+  const cruz = { a: '', b: '', calc: null };
+
+  /** Os dois padrão: os de "sempre trocar" que existem no histórico; senão os 2 que mais te vencem. */
+  function cruzPadrao(nicks) {
+    if (cruz.a && cruz.b) return;
+    const termos = String(cfg.auto.sempreTrocar ?? '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean);
+    const achados = termos.map((t) => nicks.find((n) => n.toLowerCase().includes(t))).filter(Boolean);
+    const porDificuldade = nicks.filter((n) => hist.filter((h) => mesmoNick(h.nick, n)).length >= 2)
+      .sort((x, y) => dificuldade(y) - dificuldade(x));
+    const escolha = [...new Set([...achados, ...porDificuldade])];
+    cruz.a ||= escolha[0] ?? '';
+    cruz.b ||= escolha.find((n) => !mesmoNick(n, cruz.a)) ?? '';
+  }
+
+  function cruzReal() {
+    const nota = (pv) => (pv.v + 1) / (pv.n + 2);
+    return minhasFormacoes()
+      .map((f) => ({ f, pa: placarVs(f.k, cruz.a), pb: placarVs(f.k, cruz.b) }))
+      .filter((x) => x.pa.n || x.pb.n)
+      .map((x) => ({ ...x, pior: Math.min(nota(x.pa), nota(x.pb)), ambos: x.pa.n > 0 && x.pb.n > 0 }))
+      .sort((x, y) => Number(y.ambos) - Number(x.ambos) || y.pior - x.pior || (y.pa.n + y.pb.n) - (x.pa.n + x.pb.n))
+      .slice(0, 6);
+  }
+
+  async function calcularCruz(tipo) {
+    if (!window.__pokeAnalise?.sugerirContraVarios) { cruz.calc = { erro: 'o módulo 📊 Time não está carregado nesta conta' }; return pintar(); }
+    if (!cruz.a || !cruz.b || mesmoNick(cruz.a, cruz.b)) { cruz.calc = { erro: 'escolha dois jogadores diferentes' }; return pintar(); }
+    cruz.calc = tipo;
+    pintar();
+    const meus = minhaOrdemSalva().length ? minhaOrdemSalva() : ([...hist].sort((x, y) => y.em - x.em)[0]?.meu ?? []);
+    try {
+      const r = await window.__pokeAnalise.sugerirContraVarios({
+        meus: meus.map((x) => ({ id: x.id, nome: x.nome, nivel: x.nivel })),
+        rivais: [cruz.a, cruz.b].map((nick) => {
+          const u = ultimoDuelo(nick);
+          return { nick, peso: 1, ordemRival: u && !u.deleSemOrdem ? (u.dele ?? []) : [] };
+        }),
+        buscarNaBolsa: tipo === 'bolsa',
+      });
+      melhores.__cruz__ = { nick: '__cruz__', em: Date.now(), tipo, a: cruz.a, b: cruz.b, r: r.opcoes, avisos: r.avisos };
+      salvarMelhores();
+      cruz.calc = null;
+      registrar(`🔀 cruzamento ${cruz.a} × ${cruz.b} (${tipo === 'bolsa' ? 'bolsa' : 'sua equipe'}): ${r.opcoes[0]?.ordem.map((p) => p.nome).join(' → ') ?? '—'}`);
+    } catch (e) {
+      cruz.calc = { erro: e.message };
+    }
+    pintar();
+  }
+
+  function htmlCruzar(nicks) {
+    cruzPadrao(nicks);
+    const opcoes = (sel) => `<option value="">— escolha —</option>${nicks.map((n) => `<option ${mesmoNick(n, sel) ? 'selected' : ''}>${esc(n)}</option>`).join('')}`;
+    const placar = (pv) => (pv.n ? `<b class="${pv.v * 2 > pv.n ? 'ppvp-v' : pv.v * 2 < pv.n ? 'ppvp-d' : ''}">${pv.v}V ${pv.n - pv.v}D</b>` : '<small class="ppvp-aviso">nunca</small>');
+    const real = cruz.a && cruz.b && !mesmoNick(cruz.a, cruz.b) ? cruzReal() : [];
+    const sim = melhores.__cruz__;
+    const simOk = sim?.r?.length && mesmoNick(sim.a, cruz.a) && mesmoNick(sim.b, cruz.b);
+    const ocupado = cruz.calc && !cruz.calc.erro;
+    return `<section>
+        <h4>🔀 Cruzar 2 jogadores — times bons contra os dois</h4>
+        <div class="ppvp-linha">
+          <select class="ppvp-in" data-c="cruzA">${opcoes(cruz.a)}</select> <b>×</b>
+          <select class="ppvp-in" data-c="cruzB">${opcoes(cruz.b)}</select>
+          <button class="ppvp-bt ppvp-mini" data-a="cruzCalc" data-v="ordem" ${ocupado ? 'disabled' : ''}>${cruz.calc === 'ordem' ? 'calculando…' : '💡 simular (minha equipe, melhor ordem)'}</button>
+          <button class="ppvp-bt ppvp-mini" data-a="cruzCalc" data-v="bolsa" ${ocupado ? 'disabled' : ''}>${cruz.calc === 'bolsa' ? 'procurando…' : '🔍 simular (melhor comp da bolsa)'}</button>
+          ${cruz.calc?.erro ? `<span class="ppvp-d">${esc(cruz.calc.erro)}</span>` : ''}
+        </div>
+        ${cruz.a && cruz.b && !mesmoNick(cruz.a, cruz.b) ? `
+        <table class="ppvp-tab" style="margin-top:4px"><tr><th>Sua formação (real)</th><th>vs ${esc(cruz.a)}</th><th>vs ${esc(cruz.b)}</th><th></th></tr>
+          ${real.length ? real.map((x) => `<tr><td>${esc(nomesDosIds(x.f.ids).join(' → '))}${x.ambos ? '' : ' <small class="ppvp-aviso">(só jogou contra um)</small>'}</td><td>${placar(x.pa)}</td><td>${placar(x.pb)}</td>
+            <td>${botoesAplicar({ ordem: x.f.ids.map((id) => ({ id })) }, `${cruz.a} × ${cruz.b}`)}</td></tr>`).join('')
+            : '<tr><td colspan="4"><span class="ppvp-aviso">Nenhuma formação sua jogou contra eles ainda — use a simulação.</span></td></tr>'}
+        </table>
+        <small class="ppvp-aviso">Ordenado pelo PIOR placar dos dois (com prior 1V 1D): no topo, a que vai bem contra ambos.</small>
+        ${simOk ? `<div style="margin-top:6px"><b>🔬 Simulado</b> <small class="ppvp-aviso">(${sim.tipo === 'bolsa' ? 'da bolsa' : 'sua equipe'} · ${dataCurta(sim.em)} · stats atuais do perfil deles)</small>
+          ${sim.r.map((o, i) => `<div>${i === 0 ? '🥇' : i === 1 ? '🥈' : '🥉'} ${ordemCurta(o)} — ${o.porRival.map((x) => `${esc(x.nick)}: <b class="${x.vitorias === x.total ? 'ppvp-v' : x.vitorias ? '' : 'ppvp-d'}">${x.vitorias}/${x.total}</b>${realTxt(realDaOrdem(x.nick, o))}`).join(' · ')}
+            <br>${botoesAplicar(o, `${sim.a} × ${sim.b}${i ? ` ${i + 1}` : ''}`)}</div>`).join('')}
+          ${sim.avisos?.length ? `<small class="ppvp-aviso">${esc(sim.avisos.slice(0, 4).join(' · '))}</small>` : ''}</div>` : ''}` : ''}
+      </section>`;
+  }
+
   function htmlRivais() {
     const top = ladder.slice(0, 10).map(nickDaLadder).filter(Boolean)
       .filter((n) => n.toLowerCase() !== String(core.eu?.nick ?? '').toLowerCase());
@@ -1447,7 +1532,7 @@
     const nicks = new Map();
     for (const n of top) nicks.set(n.toLowerCase(), n);
     for (const h of hist) if (!nicks.has(String(h.nick).toLowerCase())) nicks.set(String(h.nick).toLowerCase(), h.nick);
-    for (const m of Object.values(melhores)) if (m.nick !== '__ativos__' && !nicks.has(m.nick.toLowerCase())) nicks.set(m.nick.toLowerCase(), m.nick);
+    for (const m of Object.values(melhores)) if (!String(m.nick).startsWith('__') && !nicks.has(m.nick.toLowerCase())) nicks.set(m.nick.toLowerCase(), m.nick);
     const q = busca.trim().toLowerCase();
     const lista = [...nicks.values()]
       .filter((n) => !q || n.toLowerCase().includes(q))
@@ -1486,6 +1571,7 @@
         ${mesmoNick(rivalAberto, nick) ? `<tr><td colspan="5">${htmlHistoricoRival(nick)}</td></tr>` : ''}`;
     }).join('');
     return `
+      ${htmlCruzar([...nicks.values()].sort((a, b) => a.localeCompare(b)))}
       <section>
         <div class="ppvp-linha">
           <button class="ppvp-bt" data-a="top10">🏅 Top 10 do PvP</button>
@@ -1627,6 +1713,7 @@
     else if (a === 'autoAnti') cfg.auto.contraCounter = b.checked;
     else if (a === 'autoAbertura') cfg.auto.abertura = b.checked;
     else if (a === 'calcAtivos') return calcularContraAtivos(b.dataset.v);
+    else if (a === 'cruzCalc') return calcularCruz(b.dataset.v);
     else if (a === 'autoFora') {
       const k = b.dataset.v;
       cfg.auto.foraKeys = b.checked ? cfg.auto.foraKeys.filter((x) => x !== k) : [...new Set([...cfg.auto.foraKeys, k])];
