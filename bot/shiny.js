@@ -11,10 +11,11 @@
 // marcar um shiny que o app não viu, fica no histórico como detecção perdida.
 //
 // Precisa da cena: no Modo Economia o servidor não manda `campo`, e não há como saber quem é
-// shiny antes da bola.
+// shiny antes da bola (o automático jogaria a bola comum). Por isso, com o caçador ligado e a
+// conta caçando, o app SAI do Modo Economia sozinho.
 (() => {
   'use strict';
-  const VERSAO_SHINY = '1.6.0';
+  const VERSAO_SHINY = '1.7.0';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -25,6 +26,8 @@
   const S = {
     versao: VERSAO_SHINY,
     get ativo() { return cfg.ativo; },
+    /** Liga/desliga o caçador (a janela do app usa ao ligar o Eco). */
+    definirAtivo(v) { cfg.ativo = !!v; if (!cfg.ativo) for (const s of [...alvos.keys()]) encerrar(s, 'caçador desligado'); salvarCfg(); pintar(); return cfg.ativo; },
     /** Há shiny no mapa (vivo ou no chão esperando a bola). */
     get ocupado() { return cfg.ativo && alvos.size > 0; },
     desmontar() { for (const f of limpezas.splice(0)) { try { f(); } catch {} } },
@@ -251,7 +254,9 @@
       if (e.shiny) {
         registrarHist({
           em: Date.now(), mapa: core.eu?.huntSlug ?? '', nome: e.nome ?? '?', nivel: e.level ?? '?', bolas: 1, bola: nome,
-          resultado: `⚠ detecção perdida (o jogo contou o shiny na bola)${e.sucesso ? ' — capturado' : ''}`,
+          resultado: emEco()
+            ? `⚠ não visto: a conta estava no 🍃 Eco (o jogo não mostra os bichos) — levou ${nome}${e.sucesso ? ' e foi capturado' : ' e escapou'}`
+            : `⚠ detecção perdida (o jogo contou o shiny na bola)${e.sucesso ? ' — capturado' : ''}`,
         });
       }
       return;
@@ -340,7 +345,17 @@
   ligarWs();
   // Se a lógica foi recarregada no meio de uma troca, devolve as bolas de antes.
   restaurarBolas();
-  const vigia = setInterval(() => { ligarWs(); if (estaAberto()) pintarStatus(); }, 1000);
+  // Caçador ligado + Modo Economia = cego: sai do Eco (no máximo a cada 30 s, se o jogo recolocar).
+  const emEco = () => document.documentElement.classList.contains('modo-economia');
+  let saiuDoEcoEm = 0;
+  function vigiarEco() {
+    if (!cfg.ativo || !core.logado || !emEco() || Date.now() - saiuDoEcoEm < 30_000) return;
+    saiuDoEcoEm = Date.now();
+    document.getElementById('eco-sair')?.click();
+    avisar('🍃 Modo Economia desligado: o caçador de shiny precisa ver o mapa (no Eco o shiny levaria a bola comum)');
+    console.log('[Shiny] saiu do Modo Economia — caçador ligado');
+  }
+  const vigia = setInterval(() => { ligarWs(); vigiarEco(); if (estaAberto()) pintarStatus(); }, 1000);
   limpezas.push(() => {
     clearInterval(vigia);
     for (const a of alvos.values()) { clearTimeout(a.timer); clearTimeout(a.garantia); }
@@ -463,7 +478,7 @@
       `${esc(cfg.bola)}: <b>${b != null ? qtd(b).toLocaleString('pt-BR') : '?'}</b>`,
       cfg.reserva ? `${esc(cfg.reserva)}: <b>${r != null ? qtd(r).toLocaleString('pt-BR') : '?'}</b>` : '',
       alvos.size ? `<span class="pbsh-sh">shiny no mapa: ${[...alvos.values()].map((a) => `${esc(a.nome)}${a.caido ? ' (caído)' : ''}`).join(', ')}</span>` : '',
-      semCena ? '<span class="pbsh-aviso">⚠ sem informações do mapa — no Modo Economia o jogo não mostra os bichos; desligue o 🍃 Eco nesta conta</span>' : '',
+      semCena ? `<span class="pbsh-aviso">⚠ sem informações do mapa${emEco() ? ' — conta no 🍃 Eco: com o caçador ligado o app sai do Eco sozinho' : ' — aguardando o mapa'}</span>` : '',
     ].filter(Boolean).join(' · ');
   }
 

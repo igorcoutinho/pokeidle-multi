@@ -30,6 +30,9 @@ CAÇADOR DE SHINY — botão ✨ Shiny (fica verde quando ligado)
   - Se a bola escolhida acabar, usa a reserva (Ultra Ball por padrão). A Master Ball pede confirmação.
   - Histórico de shinies: quando, mapa, bola e resultado. Se o contador "shinies vistos" do
     jogo marcar um shiny que o app não viu, aparece como "detecção perdida".
+  - Modo Economia: no 🍃 Eco o jogo não mostra os bichos e o shiny levaria a bola comum. Por
+    isso, com o caçador LIGADO, a conta sai do Eco sozinha (e avisa). Ao ligar o Eco numa conta
+    com o caçador ligado, o app pergunta e desliga o caçador nela.
   - Precisa da cena ligada: no Modo Economia o jogo não informa os bichos do mapa.
 
 ITENS E BOSS — botão 📦 Itens

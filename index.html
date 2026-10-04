@@ -179,7 +179,7 @@
     wv.addEventListener('did-fail-load', (e) => { if (e.errorCode !== -3) elEstado.className = 'estado'; });
 
     caixa.querySelector('.nome').onchange = (e) => { c.nome = e.target.value.trim() || `Conta ${n}`; salvar(); };
-    caixa.querySelector('.cab').onclick = (e) => {
+    caixa.querySelector('.cab').onclick = async (e) => {
       const a = e.target.closest('button')?.dataset.a;
       if (!a) return;
       if (a === 'mais' || a === 'menos') {
@@ -196,6 +196,13 @@
       } else if (a === 'time') {
         wv.executeJavaScript('window.__pokeAnalise?.abrir()').catch(() => aviso('Análise: a conta ainda está carregando.'));
       } else if (a === 'eco') {
+        // Ligar o Eco com o caçador de shiny ligado deixa o caçador cego: pergunta e desliga o caçador.
+        const [emEco, shinyOn] = await Promise.all([wv.executeJavaScript(JS_ECO_ESTADO).catch(() => false), wv.executeJavaScript('!!window.__pokeShiny?.ativo').catch(() => false)]);
+        if (!emEco && shinyOn) {
+          if (!confirm(`${c.nome ?? `Conta ${n}`}: o caçador de shiny está ligado.\n\nNo Modo Economia o jogo não mostra os bichos — o shiny levaria a bola comum (Ultra) em vez da Beast Ball.\n\nDesligar o caçador nesta conta e ligar o Eco?`)) return;
+          await wv.executeJavaScript('window.__pokeShiny?.definirAtivo(false)').catch(() => {});
+          lerShiny();
+        }
         wv.executeJavaScript(JS_ECO_ALTERNAR).then(pintarEco).catch(() => aviso('Modo Economia: a conta ainda está carregando.'));
       } else if (a === 'rotom') {
         window.multi.abrirCockpit(n);
