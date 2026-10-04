@@ -15,7 +15,7 @@
 // conta caçando, o app SAI do Modo Economia sozinho.
 (() => {
   'use strict';
-  const VERSAO_SHINY = '1.7.0';
+  const VERSAO_SHINY = '1.8.0';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -252,11 +252,16 @@
       }
       // O contador "shinies vistos" do jogo marcou um shiny que o app não viu chegar.
       if (e.shiny) {
+        const visto = e.slot != null ? mem.mobs.get(e.slot) : null;
+        const diag = visto
+          ? `slot ${e.slot}: o app tinha "${visto.nome}" ${visto.shiny ? 'shiny' : 'não-shiny'}${visto.porque ? `, ignorado (${visto.porque})` : ''}`
+          : `slot ${e.slot ?? '?'} desconhecido · último pacote do mapa há ${Math.round((Date.now() - mem.ultimoCampo) / 1000)} s`;
+        console.warn('[Shiny] detecção perdida —', diag, e);
         registrarHist({
           em: Date.now(), mapa: core.eu?.huntSlug ?? '', nome: e.nome ?? '?', nivel: e.level ?? '?', bolas: 1, bola: nome,
           resultado: emEco()
             ? `⚠ não visto: a conta estava no 🍃 Eco (o jogo não mostra os bichos) — levou ${nome}${e.sucesso ? ' e foi capturado' : ' e escapou'}`
-            : `⚠ detecção perdida (o jogo contou o shiny na bola)${e.sucesso ? ' — capturado' : ''}`,
+            : `⚠ detecção perdida (o jogo contou o shiny na bola)${e.sucesso ? ' — capturado' : ''} · ${diag}`,
         });
       }
       return;
@@ -277,28 +282,57 @@
     mem.vistos.set(k, v);
   }
 
+  /**
+   * Por que um bicho NÃO é alvo (ou null se é selvagem). A marca de identidade (`naoSelvagem`) é
+   * do bicho, não do slot: o servidor reaproveita slots, e uma marca presa no slot fazia o caçador
+   * ignorar para sempre quem nascesse ali depois — inclusive shiny. O contexto (Centro, sem hunt)
+   * e o apelido são conferidos na hora, nunca gravados.
+   */
+  function porqueIgnorar(m) {
+    if (m.naoSelvagem) return m.naoSelvagem;
+    if (!core.eu?.huntSlug) return 'sem hunt';
+    if (core.eu.noCentro) return 'Centro';
+    // Apelido de um pokémon seu (selvagem não tem apelido).
+    if ((core.eu?.pokemons ?? []).some((p) => (p.apelido || p.nick) && (p.apelido || p.nick) === m.nome && (p.apelido || p.nick) !== p.nome)) return 'apelido de pokémon seu';
+    return null;
+  }
+
   function aplicarMob(b, novo) {
     let m = mem.mobs.get(b.s);
-    const nasceu = !m || novo;
-    if (!m) { m = { nome: '?', nivel: 0, shiny: false, morto: false }; mem.mobs.set(b.s, m); }
-    const eraMorto = m.morto;
+    const eraMorto = !!m?.morto;
+    // Bicho NOVO no slot: o pacote inicial, slot sem dono, ou nome chegando num slot de corpo
+    // (corpo não muda de nome) / nome diferente do que estava. Zera a identidade do anterior.
+    const trocou = !!m && !novo && b.n !== undefined && (eraMorto || b.n !== m.nome);
+    const nasceu = !m || novo || trocou;
+    if (!m || novo || trocou) {
+      if (m && trocou) soRegistrados.delete(b.s);
+      if (m && trocou && alvos.has(b.s)) encerrar(b.s, alvos.get(b.s).jogou ? 'sumiu do chão' : 'sumiu do chão sem bola');
+      m = { nome: '?', nivel: 0, shiny: false, morto: false, naoSelvagem: null };
+      mem.mobs.set(b.s, m);
+    }
     if (b.n !== undefined) m.nome = b.n;
     if (b.nv !== undefined) m.nivel = b.nv;
+    const shAntes = m.shiny;
     if (b.sh !== undefined) m.shiny = !!b.sh;
     if (b.x !== undefined) m.morto = !!b.x;
+    if (!nasceu && eraMorto && !m.morto) m.naoSelvagem = null; // corpo virou bicho vivo: é outro bicho
     // Não é selvagem: treinador (tr), pokémon com dono (dn), boneco/posto do XP Share (bn/tn/bi),
     // pokémon EM TREINO (ti — era o "Mbappé" que o caçador tomava por shiny), NPCs da praça.
-    if (b.tr || b.dn !== undefined || b.tn !== undefined || b.bn || b.bi !== undefined || b.ti !== undefined || b.cura || b.tm || b.depot) m.ignorar = true;
-    if (!core.eu?.huntSlug || core.eu.noCentro) m.ignorar = true;          // Centro, PvP: não são selvagens
-    // Apelido de um pokémon seu (selvagem não tem apelido): também não é alvo.
-    if (!m.ignorar && b.n !== undefined && (core.eu?.pokemons ?? []).some((p) => (p.apelido || p.nick) === b.n)) m.ignorar = true;
-    if (m.ignorar) return;
-    const reviveu = eraMorto && !m.morto; // o slot foi reaproveitado por um bicho novo
+    if (b.tr) m.naoSelvagem = 'treinador';
+    else if (b.dn !== undefined) m.naoSelvagem = 'tem dono';
+    else if (b.tn !== undefined || b.bn || b.bi !== undefined) m.naoSelvagem = 'boneco do XP Share';
+    else if (b.ti !== undefined) m.naoSelvagem = 'pokémon em treino';
+    else if (b.cura || b.tm || b.depot) m.naoSelvagem = 'NPC';
+    m.porque = porqueIgnorar(m);
+    if (m.porque) return;
+    const reviveu = !nasceu && eraMorto && !m.morto; // o slot foi reaproveitado por um bicho novo
     if (nasceu || reviveu) {
       contarVisto(m);
       if (reviveu) soRegistrados.delete(b.s);
       if (reviveu && alvos.has(b.s)) encerrar(b.s, alvos.get(b.s).jogou ? 'sumiu do chão' : 'sumiu do chão sem bola');
       if (m.shiny && !m.morto) shinyApareceu(b.s, m);
+    } else if (m.shiny && !shAntes && !m.morto && !alvos.has(b.s)) {
+      shinyApareceu(b.s, m); // a marca de shiny chegou num pacote depois do nascimento
     }
     if (m.shiny && m.morto && (!eraMorto || nasceu)) shinyCaiu(b.s, m);
   }
