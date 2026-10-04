@@ -45,6 +45,13 @@ ITENS E BOSS — botão 📦 Itens
     Resumo por boss (lutas, V/D, % de vitórias com peça de TM, drops por vitória) e histórico
     paginado, com filtro por boss e por período.
 
+LIVES DA TWITCH → CHROME — botão 📺 na barra de cima (ligado por padrão)
+  - O jogo dá bônus de XP (+15%, +1% por live a mais) a quem assiste as lives oficiais com a
+    Twitch vinculada. A cada minuto o app olha as lives no ar (o mesmo bloco do modal Twitch do
+    jogo) e abre no seu Chrome principal as que nenhuma conta está assistindo — UMA vez por live.
+    Fechou a aba? Só abre de novo numa live nova (canal 15 min fora do ar). Esteja logado na
+    Twitch no Chrome com o login vinculado ao jogo.
+
 PEDRA ABAIXO DO MERCADO — botão 📉 na barra de cima do app (você dá a ordem, roda em todas)
   - Escolha a pedra (as que as contas alternativas têm), a quantidade por conta (1 ou 2) e o
     desconto (vazio = automático entre 5% e 10%, maior quanto mais anúncios houver).

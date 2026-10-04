@@ -11,6 +11,7 @@ const { app, BrowserWindow, ipcMain, shell, dialog, session } = require('electro
 const path = require('path');
 const fs = require('fs');
 const vm = require('vm');
+const { spawn } = require('child_process');
 
 const URL_JOGO = 'https://pokeidle.io/app';
 const N_CONTAS = 4;
@@ -259,6 +260,46 @@ ipcMain.handle('pb:logica', () => lerLogica());
 ipcMain.handle('multi:cfg', () => ({ ...lerCfg(), nContas: N_CONTAS, urlJogo: URL_JOGO, pastaBot: PASTA_BOT, rotom }));
 ipcMain.handle('multi:abrirCockpit', (_e, n) => abrirCockpit(n));
 ipcMain.handle('multi:rotomRegras', (_e, n) => lerRegrasRotom(n));
+ipcMain.handle('multi:twitchLives', (_e, lives) => abrirLivesNovas(lives));
+
+// ---------------------------------------------------------------- lives da Twitch → Chrome
+// O jogo dá bônus de XP a quem assiste as lives oficiais (o vigia acha o login da Twitch no chat).
+// A janela manda, a cada minuto, as lives no ar que nenhuma conta está assistindo; cada uma abre
+// UMA vez no Chrome principal. Se você fechar a aba, ela só volta a abrir numa live nova (o canal
+// precisa ficar 15 min fora do ar para contar como live nova).
+const twitchAbertas = new Map(); // login → { abertaEm, vistaEm }
+const FORA_DO_AR_MS = 15 * 60 * 1000;
+
+function acharChrome() {
+  const bases = [process.env.PROGRAMFILES, process.env['PROGRAMFILES(X86)'], process.env.LOCALAPPDATA].filter(Boolean);
+  for (const b of bases) {
+    const exe = path.join(b, 'Google', 'Chrome', 'Application', 'chrome.exe');
+    if (fs.existsSync(exe)) return exe;
+  }
+  return null;
+}
+
+function abrirNoChrome(url) {
+  const exe = acharChrome();
+  if (!exe) { shell.openExternal(url); return 'navegador padrão'; }
+  spawn(exe, [url], { detached: true, stdio: 'ignore' }).unref();
+  return 'Chrome';
+}
+
+function abrirLivesNovas(lives) {
+  const agora = Date.now();
+  const abertas = [];
+  for (const l of Array.isArray(lives) ? lives : []) {
+    const login = String(l?.login ?? '').toLowerCase();
+    if (!/^[a-z0-9_]{2,40}$/.test(login)) continue;
+    const ja = twitchAbertas.get(login);
+    if (ja && agora - ja.vistaEm < FORA_DO_AR_MS) { ja.vistaEm = agora; continue; }
+    const onde = abrirNoChrome(`https://www.twitch.tv/${login}`);
+    twitchAbertas.set(login, { abertaEm: agora, vistaEm: agora });
+    abertas.push({ login, nome: l.nome ?? login, onde });
+  }
+  return abertas;
+}
 ipcMain.handle('multi:salvar', (_e, parcial) => { salvarCfg({ ...lerCfg(), ...parcial }); return true; });
 ipcMain.handle('multi:abrirPastaBot', () => shell.openPath(PASTA_BOT));
 ipcMain.handle('multi:sairDaConta', async (_e, n) => {
