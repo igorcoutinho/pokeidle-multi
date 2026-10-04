@@ -18,7 +18,7 @@
 //    (vitórias > derrotas), encerra de vez. Enquanto a sessão roda, ela substitui a trava do item 2.
 (() => {
   'use strict';
-  const VERSAO_PVP = '1.12.1';
+  const VERSAO_PVP = '1.12.2';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -339,8 +339,27 @@
       if (partidasF(a) > f.n) { f.n = partidasF(a); f.v = vitoriasF(a); }
     }
     return [...mapa.values()]
+      .filter((f) => f.ids.length >= timeCheio()) // duelo gravado incompleto (4 de 5): não é formação
       .filter((f) => f.ids.every((id) => naBolsa.has(id))) // pokémon vendido/solto: a formação não existe mais
       .map((f) => ({ ...f, nome: f.armario?.nome ?? (() => { const n = nomesDosIds(f.ids); return n.length > 2 ? `${n[0]} … ${n[n.length - 1]}` : n.join(' → '); })() }));
+  }
+  /**
+   * Equipe de PvP salva com menos de 5 (ex.: uma troca antiga aplicou só 4): volta para a formação
+   * completa mais recente que tenha todos os que estão nela. Sem nenhuma, só avisa.
+   */
+  let consertoEm = 0;
+  function consertarTimeIncompleto() {
+    if (!meuTimeIds?.length || meuTimeIds.length >= timeCheio() || Date.now() - consertoEm < 60_000) return;
+    consertoEm = Date.now();
+    const atuais = new Set(meuTimeIds.map(Number));
+    const cheia = minhasFormacoes().filter((f) => [...atuais].every((id) => f.ids.includes(id)))
+      .sort((a, b) => b.ultimo - a.ultimo)[0];
+    if (cheia && aplicarEquipe(cheia.ids, `equipe estava com ${atuais.size} — completada`)) {
+      avisar(`⚠ Equipe de PvP estava com ${atuais.size} pokémon — completei com "${cheia.nome}"`);
+    } else {
+      registrar(`⚠ a equipe de PvP está com ${atuais.size} pokémon e não achei formação completa com eles — monte os 5 no jogo`);
+      avisar(`⚠ Equipe de PvP com ${atuais.size} pokémon — monte os 5 no jogo`);
+    }
   }
   const chaveAtual = () => (meuTimeIds?.length ? meuTimeIds.join(',') : null);
   const naRotacao = (f) => (f.n >= Math.max(1, Number(cfg.auto.minUso) || 1) || f.armario) && !cfg.auto.foraKeys.includes(f.k);
@@ -352,8 +371,16 @@
     || notaF(y) - notaF(x) || (cfg.auto.usoEm[x.k] ?? x.ultimo) - (cfg.auto.usoEm[y.k] ?? y.ultimo);
 
   /** Troca a equipe de PvP agora (a mesma mensagem do editor de equipe do jogo). */
+  /** Quantos a equipe de PvP tem de ter: 5 (ou todos da bolsa, se tiver menos). */
+  const timeCheio = () => Math.min(TIME_PVP, (core.eu?.pokemons ?? []).length || TIME_PVP);
+
   function aplicarEquipe(ids, motivo) {
     if (!ids?.length) return false;
+    ids = [...new Set(ids.map(Number))];
+    if (ids.length < timeCheio()) {
+      registrar(`⚠ troca CANCELADA: a equipe nova teria só ${ids.length} pokémon (${nomesDosIds(ids).join(', ')}) — o PvP usa ${timeCheio()}`);
+      return false;
+    }
     if (!core.send({ t: 'pvp.time.salvar', pokemonIds: ids })) { registrar('⚠ não deu para trocar a equipe: conta desconectada'); return false; }
     meuTimeIds = [...ids];
     registrar(`✅ equipe trocada${motivo ? ` (${motivo})` : ''}: ${nomesDosIds(ids).join(' → ')}`);
@@ -485,7 +512,7 @@
     const naBolsa = new Set((core.eu?.pokemons ?? []).map((p) => p.id));
     for (const o of melhores.__ativos__?.r ?? []) {
       const ids = idsDe(o);
-      if (!ids || !ids.every((id) => naBolsa.has(id))) continue;
+      if (!ids || ids.length < timeCheio() || !ids.every((id) => naBolsa.has(id))) continue;
       const k = ids.join(',');
       if (lista.some((f) => f.k === k)) continue;
       lista.push(todas.find((f) => f.k === k) ?? { k, ids, n: 0, v: 0, ultimo: 0, armario: null, simulada: true, nome: 'Contra os ativos' });
@@ -494,7 +521,7 @@
       const salvo = melhores[String(nick).toLowerCase()];
       for (const o of [salvo?.ordem?.r, ...(salvo?.bolsa?.r ?? []).slice(0, 1)].filter(Boolean)) {
         const ids = idsDe(o);
-        if (!ids || !ids.every((id) => naBolsa.has(id))) continue;
+        if (!ids || ids.length < timeCheio() || !ids.every((id) => naBolsa.has(id))) continue;
         const k = ids.join(',');
         if (lista.some((f) => f.k === k)) continue;
         const ja = todas.find((f) => f.k === k);
@@ -997,6 +1024,7 @@
     if (m.formacaoRecusa) registrar(`⚠ o armário recusou: ${m.formacaoRecusa.msg ?? 'sem motivo'}`);
     if (m.recusa) registrar(`⚠ o jogo recusou a troca de equipe: ${m.recusa.msg ?? 'sem motivo'}`);
     if (m.timeSalvo !== undefined) meuTimeIds = ids(m.timeSalvo);
+    if (m.time !== undefined || m.timeSalvo !== undefined) consertarTimeIncompleto();
     // A sua ordem pode chegar depois da partida (o jogo pede `pvp.info` logo após): completa a última —
     // a não ser que o auto-switch já tenha trocado a equipe (aí a de agora não é a que lutou).
     if (meuTimeIds?.length && hist[0] && !hist[0].meuCompleto && !hist[0].trocouDepois && Date.now() - hist[0].em < 60_000) {
