@@ -15,7 +15,7 @@
 // conta caçando, o app SAI do Modo Economia sozinho.
 (() => {
   'use strict';
-  const VERSAO_SHINY = '1.8.0';
+  const VERSAO_SHINY = '1.9.0';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -51,7 +51,7 @@
   const VERSAO_CFG = 2;
 
   function lerCfg() {
-    const padrao = { v: VERSAO_CFG, ativo: false, bola: BOLA_PADRAO, reserva: 'Ultra Ball', aviso: true };
+    const padrao = { v: VERSAO_CFG, ativo: false, bola: BOLA_PADRAO, reserva: 'Ultra Ball', aviso: true, duasAtivas: true };
     try {
       const salvo = JSON.parse(localStorage.getItem(CHAVE_CFG));
       if (!salvo) return padrao;
@@ -141,13 +141,47 @@
     marcar(reg, `bola ativa trocada: [${atuais.map(nomeDoId).join(', ')}] → [${bola.nome}]`);
   }
 
-  /** Devolve as bolas ativas de antes (sempre manda — não confia na cópia local). */
+  /**
+   * As bolas do dia a dia: as comuns na frente (Ultra) e a do shiny (Beast) ATIVA EM SEGUNDO — o
+   * jogo usa pela ordem de seleção, então ela não gasta, e na hora do shiny basta tirar a Ultra.
+   * Com "manter a bola do shiny em 2º" desligado, devolve exatamente as de antes.
+   */
+  function bolasNormais(base) {
+    const shiny = bolaDaVez();
+    if (!cfg.duasAtivas || !shiny || shiny.nome !== cfg.bola) return { comuns: [...base], todas: [...base] };
+    let comuns = [...new Set(base.map(Number))].filter((id) => id !== shiny.id);
+    if (!comuns.length) { const r = idBola(cfg.reserva); if (r != null && r !== shiny.id) comuns = [r]; }
+    return { comuns, todas: [...comuns, shiny.id] };
+  }
+
+  /**
+   * Devolve as bolas: primeiro só as comuns (tira a do shiny), depois comuns + a do shiny em 2º —
+   * em dois passos, para a ordem de seleção ficar certa no jogo.
+   */
   function restaurarBolas(reg) {
     if (mem.ballIdsAntes == null || alvos.size) return;
     const antes = mem.ballIdsAntes;
     mem.ballIdsAntes = null;
-    definirBolasAtivas(antes);
-    marcar(reg, `bolas ativas devolvidas: [${antes.map(nomeDoId).join(', ')}]`);
+    const { comuns, todas } = bolasNormais(antes);
+    definirBolasAtivas(comuns.length ? comuns : todas);
+    if (todas.length !== comuns.length) {
+      setTimeout(() => { if (!alvos.size && mem.ballIdsAntes == null) definirBolasAtivas(todas); }, 600);
+    }
+    marcar(reg, `bolas ativas devolvidas: [${todas.map(nomeDoId).join(', ')}]`);
+  }
+
+  /** Fora de shiny: mantém [comuns…, bola do shiny] ativas nessa ordem (confere a cada 20 s). */
+  let ordemConferidaEm = 0;
+  function garantirBolasNormais() {
+    if (!cfg.ativo || !cfg.duasAtivas || !core.logado || !autoBallLigado() || alvos.size || mem.ballIdsAntes != null) return;
+    if (Date.now() - ordemConferidaEm < 20_000) return;
+    ordemConferidaEm = Date.now();
+    const atuais = (auto().ballIds ?? []).map(Number);
+    const { comuns, todas } = bolasNormais(atuais);
+    if (atuais.length === todas.length && atuais.every((id, i) => id === todas[i])) return;
+    definirBolasAtivas(comuns.length ? comuns : todas);
+    if (todas.length !== comuns.length) setTimeout(() => { if (!alvos.size && mem.ballIdsAntes == null) definirBolasAtivas(todas); }, 600);
+    console.log('[Shiny] bolas ativas arrumadas:', todas.map(nomeDoId).join(' → '));
   }
 
   // ---------------------------------------------------------------- captura
@@ -389,7 +423,7 @@
     avisar('🍃 Modo Economia desligado: o caçador de shiny precisa ver o mapa (no Eco o shiny levaria a bola comum)');
     console.log('[Shiny] saiu do Modo Economia — caçador ligado');
   }
-  const vigia = setInterval(() => { ligarWs(); vigiarEco(); if (estaAberto()) pintarStatus(); }, 1000);
+  const vigia = setInterval(() => { ligarWs(); vigiarEco(); garantirBolasNormais(); if (estaAberto()) pintarStatus(); }, 1000);
   limpezas.push(() => {
     clearInterval(vigia);
     for (const a of alvos.values()) { clearTimeout(a.timer); clearTimeout(a.garantia); }
@@ -481,6 +515,7 @@
         </div>
         <div class="pbsh-linha">
           <label><input type="checkbox" data-a="aviso" ${cfg.aviso ? 'checked' : ''}> avisar na tela quando aparecer um shiny</label>
+          <label title="o jogo usa as bolas pela ordem de seleção: com a do shiny em 2º ela não gasta, e no shiny basta tirar a comum"><input type="checkbox" data-a="duas" ${cfg.duasAtivas ? 'checked' : ''}> deixar a ${cfg.bola} ativa em 2º (depois da ${cfg.reserva || 'comum'}) — no shiny só tira a comum</label>
         </div>
         <p id="pbsh-status" style="margin:4px 0 0"></p>
       </section>
@@ -524,6 +559,7 @@
     if (a === 'fechar') return fechar();
     if (a === 'ativo') { cfg.ativo = !cfg.ativo; if (!cfg.ativo) for (const s of [...alvos.keys()]) encerrar(s, 'caçador desligado'); }
     else if (a === 'aviso') cfg.aviso = b.checked;
+    else if (a === 'duas') { cfg.duasAtivas = b.checked; ordemConferidaEm = 0; }
     else if (a === 'limparHist') { hist = []; salvarHist(); }
     salvarCfg();
     pintar();
