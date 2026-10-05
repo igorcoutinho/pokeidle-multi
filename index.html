@@ -18,6 +18,8 @@
   #grade{position:absolute;top:38px;left:0;right:0;bottom:0;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;gap:4px;padding:4px}
   #grade.solo{grid-template-columns:1fr;grid-template-rows:1fr}
   #grade.solo .conta:not(.foco){display:none}
+  #abas-1x1{display:none;gap:4px}#abas-1x1.on{display:flex}
+  #abas-1x1 button.on{background:var(--roxo);border-color:var(--ouro);color:#fff}
   .conta{position:relative;display:flex;flex-direction:column;border:2px solid #5a3232;border-radius:8px;overflow:hidden;background:#000;min-width:0;min-height:0}
   .conta.foco{border-color:var(--borda)}
   .cab{height:28px;flex:none;display:flex;align-items:center;gap:6px;padding:0 6px;background:var(--barra)}
@@ -52,6 +54,8 @@
 <div id="topo">
   <b>🤖 PokeIdle Multi</b>
   <button id="bt-grade" class="prim" title="Mostrar as 4 contas">Grade 2×2</button>
+  <button id="bt-1x1" title="Uma conta por vez, ocupando a janela toda — troque pelas abas">1×1</button>
+  <span id="abas-1x1"></span>
   <span class="esp"></span>
   <span class="info" id="info-bot">bot: carregando…</span>
   <button id="bt-twitch" title="Quando uma live oficial do jogo entra no ar (bônus de XP), abre no seu Chrome — uma vez por live">📺 Lives → Chrome</button>
@@ -108,6 +112,8 @@
     catch (e) { console.warn('lógica não entrou na conta', c.n, e); }
   }
 
+  const lite = cfg.variante === 'lite';
+  if (lite) document.title = `${document.title} Lite`;
   for (let n = 1; n <= cfg.nContas; n++) {
     const salvo = cfg.contas?.[n - 1] ?? {};
     const c = { n, nome: salvo.nome ?? `Conta ${n}`, zoom: salvo.zoom ?? 0.6, mudo: salvo.mudo ?? (n !== 1) };
@@ -120,10 +126,10 @@
         <span class="estado carregando" title="conexão"></span>
         <input class="nome" value="${c.nome.replace(/"/g, '&quot;')}" spellcheck="false" title="Clique para renomear">
         <span class="esp"></span>
-        <button data-a="shiny" class="eco" title="Caçador de shiny: registra os bichos do mapa e arremessa Great Ball quando um shiny cai">✨ Shiny</button>
+        ${lite ? '' : '<button data-a="shiny" class="eco" title="Caçador de shiny: registra os bichos do mapa e arremessa Great Ball quando um shiny cai">✨ Shiny</button>'}
         <button data-a="itens" title="Itens principais (Boss Token, peças de TM, fragmentos) e histórico de drops por boss">📦 Itens</button>
         <button data-a="vendas" title="Relatório de compras e vendas no Mercado: preço médio, taxa, lucro e preço de venda">💰 Vendas</button>
-        <button data-a="pvp" class="eco" title="PvP: ordem que cada rival usou e trava da fila automática">⚔ PvP</button>
+        ${lite ? '' : '<button data-a="pvp" class="eco" title="PvP: ordem que cada rival usou e trava da fila automática">⚔ PvP</button>'}
         <button data-a="time" title="Análise do time para PvP: quem colocar no lugar de quem">📊 Time</button>
         <button data-a="eco" class="eco" title="Ligar/desligar o Modo Economia do jogo nesta conta">🍃 Eco</button>
         ${cfg.rotom ? '<button data-a="rotom" title="Abrir o Cockpit do Rotom Sniper desta conta">🎯 Rotom</button>' : ''}
@@ -158,11 +164,11 @@
       elEco.textContent = ligado ? '🍃 Eco ON' : '🍃 Eco';
     };
     const elShiny = caixa.querySelector('[data-a="shiny"]');
-    const lerShiny = () => wv.executeJavaScript('!!window.__pokeShiny?.ativo')
+    const lerShiny = () => !elShiny ? Promise.resolve() : wv.executeJavaScript('!!window.__pokeShiny?.ativo')
       .then((on) => { elShiny.classList.toggle('on', on); elShiny.textContent = on ? '✨ Shiny ON' : '✨ Shiny'; })
       .catch(() => {});
     const elPvp = caixa.querySelector('[data-a="pvp"]');
-    const lerPvp = () => wv.executeJavaScript('!!window.__pokePvp?.trava')
+    const lerPvp = () => !elPvp ? Promise.resolve() : wv.executeJavaScript('!!window.__pokePvp?.trava')
       .then((on) => { elPvp.classList.toggle('on', on); elPvp.title = on ? 'PvP: trava da fila automática ligada' : 'PvP: ordem que cada rival usou e trava da fila automática'; })
       .catch(() => {});
     const lerEco = () => { lerShiny(); lerPvp(); return wv.executeJavaScript(JS_ECO_ESTADO).then(pintarEco).catch(() => {}); };
@@ -228,8 +234,29 @@
     grade.classList.toggle('solo', !!c);
     if (c) c.wv.setZoomFactor(Math.min(1, c.zoom * 1.6));
     else for (const x of contas) x.wv.setZoomFactor(x.zoom);
+    pintarLayout();
   }
-  document.getElementById('bt-grade').onclick = () => focar(null);
+  // Grade 1×1: uma conta por vez na janela toda, trocada pelas abas da barra de cima. Fica gravada.
+  let modo1x1 = cfg.layout === '1x1';
+  const abas1x1 = document.getElementById('abas-1x1');
+  const bt1x1 = document.getElementById('bt-1x1');
+  const btGrade = document.getElementById('bt-grade');
+  function pintarLayout() {
+    const atual = contas.find((x) => x.caixa.classList.contains('foco'));
+    btGrade.classList.toggle('prim', !modo1x1 && !atual);
+    bt1x1.classList.toggle('prim', modo1x1);
+    abas1x1.classList.toggle('on', modo1x1);
+    abas1x1.innerHTML = modo1x1 ? contas.map((x) => `<button data-n="${x.n}" class="${x === atual ? 'on' : ''}" title="${escH(x.nome)}">${x.n} ${escH(x.nome).slice(0, 10)}</button>`).join('') : '';
+  }
+  function usar1x1(n) {
+    modo1x1 = true;
+    window.multi.salvar({ layout: '1x1', conta1x1: n });
+    focar(contas.find((x) => x.n === n) ?? contas[0]);
+  }
+  abas1x1.onclick = (e) => { const b = e.target.closest('button[data-n]'); if (b) usar1x1(Number(b.dataset.n)); };
+  bt1x1.onclick = () => usar1x1(contas.find((x) => x.caixa.classList.contains('foco'))?.n ?? cfg.conta1x1 ?? 1);
+  btGrade.onclick = () => { modo1x1 = false; window.multi.salvar({ layout: '2x2' }); focar(null); };
+  if (modo1x1) usar1x1(cfg.conta1x1 ?? 1); else pintarLayout();
   document.getElementById('bt-pasta').onclick = () => window.multi.abrirPastaBot();
 
   // ---------------------------------------------------------------- pedra abaixo do mercado, em todas as contas

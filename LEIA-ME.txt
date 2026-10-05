@@ -65,6 +65,12 @@ LIVES DA TWITCH → CHROME — botão 📺 na barra de cima (ligado por padrão)
     Fechou a aba? Só abre de novo numa live nova (canal 15 min fora do ar). Esteja logado na
     Twitch no Chrome com o login vinculado ao jogo.
 
+GRADE 1×1 — botão "1×1" na barra de cima: uma conta por vez na janela toda, trocada pelas abas
+  1–4 ao lado. "Grade 2×2" volta às quatro. O modo escolhido fica gravado.
+
+VERSÃO LITE — npm run build:lite gera "PokeIdle Multi Lite <versão>.exe": igual à normal, mas sem
+  os botões ✨ Shiny e ⚔ PvP. Tem pasta de dados própria (logins separados da versão normal).
+
 PEDRA ABAIXO DO MERCADO — botão 📉 na barra de cima do app (você dá a ordem, roda em todas)
   - Escolha a pedra (as que as contas alternativas têm), a quantidade por conta (1 ou 2) e o
     desconto (vazio = automático entre 5% e 10%, maior quanto mais anúncios houver).

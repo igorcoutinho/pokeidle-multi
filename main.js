@@ -14,6 +14,9 @@ const vm = require('vm');
 const { spawn } = require('child_process');
 
 const URL_JOGO = 'https://pokeidle.io/app';
+// A variante do .exe (o `npm run build:lite` grava "lite" no package.json empacotado): a Lite não
+// mostra os botões de PvP e Shiny. Tem outro nome de produto, então outra pasta de dados e trava.
+const VARIANTE = (() => { try { return require('./package.json').variante ?? ''; } catch { return ''; } })();
 const N_CONTAS = 4;
 
 // Electron se anuncia como "Electron/x.y" no User-Agent; aqui fica igual ao Chrome da mesma
@@ -257,7 +260,7 @@ app.on('web-contents-created', (_ev, wc) => {
 // ------------------------------------------------------------------ IPC
 ipcMain.on('pb:core', (ev) => { ev.returnValue = lerBot('core.js'); });
 ipcMain.handle('pb:logica', () => lerLogica());
-ipcMain.handle('multi:cfg', () => ({ ...lerCfg(), nContas: N_CONTAS, urlJogo: URL_JOGO, pastaBot: PASTA_BOT, rotom }));
+ipcMain.handle('multi:cfg', () => ({ ...lerCfg(), nContas: N_CONTAS, urlJogo: URL_JOGO, pastaBot: PASTA_BOT, rotom, variante: VARIANTE }));
 ipcMain.handle('multi:abrirCockpit', (_e, n) => abrirCockpit(n));
 ipcMain.handle('multi:rotomRegras', (_e, n) => lerRegrasRotom(n));
 ipcMain.handle('multi:twitchLives', (_e, lives) => abrirLivesNovas(lives));
