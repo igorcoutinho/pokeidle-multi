@@ -262,7 +262,7 @@ ipcMain.on('pb:core', (ev) => { ev.returnValue = lerBot('core.js'); });
 ipcMain.handle('pb:logica', () => lerLogica());
 ipcMain.handle('multi:cfg', () => ({ ...lerCfg(), ia: iaConfig(), nContas: N_CONTAS, urlJogo: URL_JOGO, pastaBot: PASTA_BOT, rotom, variante: VARIANTE }));
 ipcMain.handle('multi:iaConfig', (_e, novo) => { try { return novo ? iaSalvar(novo) : iaConfig(); } catch (e) { return { erro: e.message, ...iaConfig() }; } });
-ipcMain.handle('multi:iaTestar', () => iaPerguntar({ sistema: 'Responda só JSON.', usuario: 'Responda {"ok": true, "msg": "<uma frase curta em português>"}', maxTokens: 60, timeoutMs: 20_000 }));
+ipcMain.handle('multi:iaTestar', () => iaPerguntar({ teste: true, sistema: 'Responda só JSON.', usuario: 'Responda {"ok": true, "msg": "<uma frase curta em português>"}', maxTokens: 60, timeoutMs: 20_000 }));
 ipcMain.handle('pb:ia', (_e, pedido) => iaPerguntar(pedido ?? {}));
 ipcMain.handle('multi:abrirCockpit', (_e, n) => abrirCockpit(n));
 ipcMain.handle('multi:rotomRegras', (_e, n) => lerRegrasRotom(n));
@@ -300,7 +300,7 @@ const MODELO_PADRAO = { openai: 'gpt-4.1-mini', anthropic: 'claude-sonnet-5-5' }
 /** Uma pergunta ao modelo; devolve o JSON que ele responder. `pedido` = { sistema, usuario, maxTokens }. */
 async function iaPerguntar(pedido) {
   const c = iaConfig();
-  if (!c.ligado) return { ok: false, erro: 'agente desligado (🤖 Agente IA na barra de cima)' };
+  if (!c.ligado && !pedido.teste) return { ok: false, erro: 'agente desligado (🤖 Agente IA na barra de cima)' };
   const chave = iaChave();
   if (!chave) return { ok: false, erro: 'sem chave de API configurada' };
   const modelo = c.modelo || MODELO_PADRAO[c.provedor];
