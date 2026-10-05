@@ -531,8 +531,12 @@
   });
   document.getElementById('bt-rankxp').onclick = gxRanking;
   // ---------------------------------------------------------------- agente de IA: configuração
+  let iaUltimoMsg = '';
   async function abrirIA(msg = '') {
+    if (msg) iaUltimoMsg = `${msg} <span class="ajuda">(${new Date().toLocaleTimeString('pt-BR')})</span>`;
     const c = await window.multi.iaConfig();
+    // As últimas decisões do agente em cada conta (do Registro do ⚔ PvP) e se ela está com "agente decide".
+    const porConta = await Promise.all(contas.map(async (x) => ({ x, r: await naConta(x, `(() => { try { const c = JSON.parse(localStorage.getItem('pokepvp.v1') || '{}'); return { liga: !!c.auto?.agente, nick: window.__pokebotCore?.eu?.nick ?? null, linhas: (c.log ?? []).filter((l) => l.includes('🤖')).slice(0, 6) }; } catch { return null; } })()`) })));
     gxFundo.classList.add('aberto');
     gxModal.innerHTML = `<header><span>🤖 Agente de IA do PvP</span><button data-gx="fechar">×</button></header>
       <section id="ia-modal">
@@ -542,7 +546,11 @@
         <div class="linha">Chave de API <input data-ia="chave" type="password" placeholder="${c.temChave ? '•••••••• (salva — cole outra para trocar)' : 'cole aqui a sua chave'}" style="width:340px" autocomplete="off">
           <button data-ia="salvar">💾 salvar</button>${c.temChave ? '<button data-ia="apagar">apagar chave</button>' : ''}<button data-ia="testar" ${c.temChave ? '' : 'disabled'}>⚡ testar</button></div>
         <div class="linha ajuda">${c.temChave ? '<span class="ok">✓ chave salva neste PC</span>' : 'sem chave'} · a chave fica criptografada pelo Windows no seu PC, só o processo principal do app a usa (nunca vai para as páginas do jogo nem para o GitHub).</div>
-        ${msg ? `<div class="linha">${msg}</div>` : ''}
+        ${iaUltimoMsg ? `<div class="linha"><b>Último teste/ação:</b>&nbsp;${iaUltimoMsg}</div>` : ''}
+        <div style="margin-top:6px"><b>Decisões do agente por conta</b> <button data-ia="atualizar">⟳</button>
+          ${porConta.map(({ x, r }) => `<div style="margin-top:4px"><b>${escH(x.nome)}</b>${r?.nick ? ` (${escH(r.nick)})` : ''} — ${r?.liga ? '<span class="ok">🤖 agente decide: LIGADO</span>' : '<span class="ajuda">agente decide: desligado (⚔ PvP → Formações)</span>'}
+            ${r?.linhas?.length ? `<pre class="ajuda" style="white-space:pre-wrap;margin:2px 0 0">${escH(r.linhas.join(String.fromCharCode(10)))}</pre>` : '<div class="ajuda">nenhuma decisão do agente ainda</div>'}</div>`).join('')}
+        </div>
         <p class="ajuda">Como funciona: depois de cada partida e antes de cada bloqueio de revanche acabar, o app manda ao modelo um resumo (quem está livre, a previsão da IA estatística, suas formações com o placar contra cada rival, hábitos e as suas regras) e ele escolhe a formação. Depois de cada partida ele reescreve um <b>caderno de lições</b> que vai junto nas próximas decisões. Se ele demorar, errar ou escolher algo que não existe, vale a escolha do modelo estatístico. Cada decisão custa uma chamada de API (frações de centavo num modelo "mini").</p>
       </section>`;
   }
@@ -553,6 +561,8 @@
     if (a === 'salvar') {
       const r = await window.multi.iaConfig({ provedor: val('provedor').value, modelo: val('modelo').value, chave: val('chave').value || null, ligado: val('ligado').checked });
       abrirIA(r.erro ? `<span class="ruim">${escH(r.erro)}</span>` : '<span class="ok">salvo</span>');
+    } else if (a === 'atualizar') {
+      abrirIA();
     } else if (a === 'apagar') {
       await window.multi.iaConfig({ apagarChave: true });
       abrirIA('chave apagada');
