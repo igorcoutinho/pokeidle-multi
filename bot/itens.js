@@ -17,7 +17,7 @@
 // pelo mesmo preço. Só junta evidência para VOCÊ reportar — não faz nada com as contas.
 (() => {
   'use strict';
-  const VERSAO_ITENS = '1.3.1';
+  const VERSAO_ITENS = '1.3.2';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -57,7 +57,7 @@
   const ler = (k, padrao) => { try { return JSON.parse(localStorage.getItem(k)) ?? padrao; } catch { return padrao; } };
   const gravar = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
   const NICKS_INICIAIS = ['wingmenLegate4B', 'emeraldLogouts2q', 'KantoHeart857', 'BlazeRider497', 'AceWave299'];
-  const cfg = { aba: 'principais', periodo: '7d', boss: '', tokensPadrao: 1, custoBoss: {}, moedaLucro: 'orb', monitor: false, cadaMin: 10, conhecidos: NICKS_INICIAIS.join('\n'), ...ler(CHAVE_CFG, {}) };
+  const cfg = { aba: 'principais', periodo: '7d', boss: '', tokensPadrao: 1, custoBoss: {}, moedaLucro: 'orb', tokenGemas: 5, monitor: false, cadaMin: 10, conhecidos: NICKS_INICIAIS.join('\n'), ...ler(CHAVE_CFG, {}) };
   const salvarCfg = () => gravar(CHAVE_CFG, cfg);
   let drops = ler(CHAVE_DROPS, {});
   let bosses = ler(CHAVE_BOSS, []);
@@ -128,6 +128,11 @@
 
   /** Preço de UMA unidade para o custo, na moeda do lucro: média do que você PAGOU; sem compra, o mercado. */
   function custoUnitario(id) {
+    // O preço que VOCÊ informou para o Boss Token (em Gemas) vale acima de tudo.
+    if (Number(id) === BOSS_TOKEN && Number(cfg.tokenGemas) > 0) {
+      const v = conv(Number(cfg.tokenGemas), 'orb');
+      if (v != null) return { v, fonte: `você pagou ${fmt(cfg.tokenGemas)} 💎 cada` };
+    }
     const dados = window.__pokeVendasDados;
     const pago = { gold: { q: 0, t: 0 }, orb: { q: 0, t: 0 } };
     for (const l of dados?.compras ?? []) if (casaItem(l, id)) { const k = l.moeda === 'orb' ? 'orb' : 'gold'; pago[k].q += l.qtd; pago[k].t += l.bruto; }
@@ -224,7 +229,8 @@
           Moeda: <button class="pit-bt ${M === 'orb' ? 'on' : ''}" data-a="moedaLucro" data-v="orb">💎 Gemas</button><button class="pit-bt ${M === 'gold' ? 'on' : ''}" data-a="moedaLucro" data-v="gold">🪙 Coins</button>
           <span class="pit-ajuda">${L.temVendas ? `extrato lido${L.ate ? ` desde ${quando(L.ate)}` : ''}` : '⚠ extrato ainda não lido — clique em "ler compras e vendas"'}${mercado ? ` · preços de ${quando(mercado.em)}` : ' · sem preços'}</span>
           <span style="flex:1"></span>
-          <span class="pit-ajuda">sem dado de entrada, cada luta custa</span> <input type="number" class="pit-in" data-c="tokensPadrao" min="0" max="20" value="${esc(cfg.tokensPadrao)}" style="width:54px"> <span class="pit-ajuda">Boss Token</span>
+          <span class="pit-ajuda">Boss Token custou</span> <input type="number" class="pit-in" data-c="tokenGemas" min="0" step="0.5" value="${esc(cfg.tokenGemas ?? '')}" placeholder="extrato" style="width:60px"> <span class="pit-ajuda">💎 cada (vazio = média do extrato)</span>
+          <span class="pit-ajuda">· sem dado de entrada, cada luta custa</span> <input type="number" class="pit-in" data-c="tokensPadrao" min="0" max="20" value="${esc(cfg.tokensPadrao)}" style="width:54px"> <span class="pit-ajuda">Boss Token</span>
         </div>
         <div class="pit-cards">
           <div class="pit-card"><small>Custo (${fmt(L.lutas)} lutas)</small><b>${preco(L.custoTotal, M)}</b>
@@ -699,6 +705,7 @@
     fundo.addEventListener('change', (e) => {
       const c = e.target.dataset.c;
       if (c === 'boss') { cfg.boss = e.target.value; pagina = 0; salvarCfg(); pintar(); }
+      if (c === 'tokenGemas') { cfg.tokenGemas = e.target.value === '' ? null : Math.max(0, Number(e.target.value) || 0); salvarCfg(); pintar(); }
       if (c === 'tokensPadrao') { cfg.tokensPadrao = Math.max(0, Math.min(20, Number(e.target.value) || 0)); salvarCfg(); pintar(); }
       if (c === 'cadaMin') { cfg.cadaMin = Math.max(5, Math.min(120, Number(e.target.value) || 10)); salvarCfg(); pintar(); }
       if (c === 'conhecidos') { cfg.conhecidos = e.target.value; salvarCfg(); pintar(); }
