@@ -41,6 +41,11 @@ ITENS E BOSS — botão 📦 Itens
     anunciado agora (Coins e Gemas), média de venda de 7 dias, quanto a bolsa vale líquida da
     taxa, quanto você já vendeu (usa o extrato do 💰 Vendas) e quanto caiu na hunt e no boss
     (no período e na sessão, com média por hora).
+  - Aba 🕵 Multi-acc: vigia quem vende Boss Token, fragmentos (Chave, Shiny, Mega Shiny) e chaves de
+    casa no Mercado e destaca nicks com cara de gerados (ex.: KantoHeart857, wingmenLegate4B),
+    com o perfil público (nível, capturas, Pokédex, guild) e quem anuncia pelo mesmo preço.
+    "Monitorar nesta conta" varre a cada N min (ligue em UMA conta). Lista própria de nicks
+    suspeitos, ☑ para escolher e "📋 copiar relatório" com o texto pronto para a moderação.
   - Aba Boss: cada luta contra boss é gravada sozinha — vitória com os drops, ou derrota.
     Resumo por boss (lutas, V/D, % de vitórias com peça de TM, drops por vitória) e histórico
     paginado, com filtro por boss e por período.

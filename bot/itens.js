@@ -8,9 +8,15 @@
 // Aba "Boss": cada luta contra boss fica gravada — o evento `bossMorto` traz o nome e os drops,
 // `bossPerdeu` marca a derrota. Resumo por boss (lutas, vitórias, drops por luta, % com peça de
 // TM) e o histórico paginado. Tudo salvo por conta.
+//
+// Aba "Multi-acc": vigia quem VENDE Boss Token, fragmentos (Chave, Shiny, Mega Shiny) e chaves de
+// casa no Mercado (`market.item` traz o nick de cada vendedor) e marca os nicks com cara de
+// gerados (PalavraPalavra + números, ex.: KantoHeart857, wingmenLegate4B). Para os suspeitos,
+// lê o perfil público (`ranking.perfil`: nível, capturas, Pokédex, guild) e junta quem anuncia
+// pelo mesmo preço. Só junta evidência para VOCÊ reportar — não faz nada com as contas.
 (() => {
   'use strict';
-  const VERSAO_ITENS = '1.0.0';
+  const VERSAO_ITENS = '1.1.0';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -49,7 +55,8 @@
 
   const ler = (k, padrao) => { try { return JSON.parse(localStorage.getItem(k)) ?? padrao; } catch { return padrao; } };
   const gravar = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
-  const cfg = { aba: 'principais', periodo: '7d', boss: '', ...ler(CHAVE_CFG, {}) };
+  const NICKS_INICIAIS = ['wingmenLegate4B', 'emeraldLogouts2q', 'KantoHeart857', 'BlazeRider497', 'AceWave299'];
+  const cfg = { aba: 'principais', periodo: '7d', boss: '', monitor: false, cadaMin: 10, conhecidos: NICKS_INICIAIS.join('\n'), ...ler(CHAVE_CFG, {}) };
   const salvarCfg = () => gravar(CHAVE_CFG, cfg);
   let drops = ler(CHAVE_DROPS, {});
   let bosses = ler(CHAVE_BOSS, []);
@@ -122,6 +129,14 @@
         }
       }
       if (mudou) { podarDias(); gravar(CHAVE_DROPS, drops); if (estaAberto()) pintar(); }
+    } else if (esperas.size && d.includes('"t":"market"') && d.includes('"aba":"item"')) {
+      let m;
+      try { m = JSON.parse(d); } catch { return; }
+      esperas.get(`item:${m.itemId}:${m.moeda}`)?.(m);
+    } else if (esperas.size && d.includes('"t":"perfil"')) {
+      let m;
+      try { m = JSON.parse(d); } catch { return; }
+      esperas.get(`perfil:${String(m.perfil?.nick ?? '').toLowerCase()}`)?.(m);
     } else if (d.includes('"t":"market"') && d.includes('"aba":"itens"')) {
       let m;
       try { m = JSON.parse(d); } catch { return; }
@@ -196,6 +211,9 @@
   .pit-bt{background:#5a3232;border:1px solid #8a5a4a;color:#f6e7d4;border-radius:6px;padding:4px 9px;cursor:pointer;font:inherit}
   .pit-bt:hover{background:#6e3d3d}.pit-bt.on{background:#b04ad0;border-color:#f3c77a;color:#fff}.pit-bt:disabled{opacity:.5;cursor:default}
   .pit-in{background:#2a1515;border:1px solid #8a5a4a;color:#f6e7d4;border-radius:6px;padding:4px 8px;font:inherit}
+  .pit-sw{position:relative;width:44px;height:24px;border-radius:12px;background:#6a4a4a;cursor:pointer;border:none;flex:none}
+  .pit-sw::after{content:'';position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#fff;transition:left .15s}
+  .pit-sw.on{background:#2f9a4a}.pit-sw.on::after{left:23px}
   .pit-tab{width:100%;border-collapse:collapse;font-size:12px}
   .pit-tab th{text-align:right;color:#f3c77a;padding:5px 6px;font-weight:700;white-space:nowrap}
   .pit-tab td{padding:6px;border-top:1px solid #4a2a2a;text-align:right;white-space:nowrap;vertical-align:top}
@@ -212,6 +230,183 @@
   .pit-ajuda{opacity:.65;font-size:11px}
   .pit-pags{display:flex;gap:8px;align-items:center;justify-content:center;margin-top:8px}`;
 
+  // ---------------------------------------------------------------- multi-acc (vendedores suspeitos)
+  const CHAVE_VEND = 'pokeitens.vendedores.v1'; // { nick minúsculo: { nick, primeiro, ultimo, varreduras, itens, perfil, marcado } }
+  const VIGIADOS = [
+    { id: 70000, nome: 'Bronze Boss Token' }, { id: 70011, nome: 'Key Fragment' }, { id: 70012, nome: 'Shiny Stone Fragment' },
+    { id: 70015, nome: 'Mega Shiny Fragment' }, { id: 70040, nome: 'Chave (comum)' }, { id: 70041, nome: 'Chave (incomum)' },
+    { id: 70042, nome: 'Chave (rara)' }, { id: 70043, nome: 'Chave (mítica)' }, { id: 70044, nome: 'Chave (lendária)' },
+  ];
+  const nomeVigiado = (id) => nomeItem(id, VIGIADOS.find((x) => x.id === Number(id))?.nome);
+  let vend = ler(CHAVE_VEND, {});
+  const salvarVend = () => gravar(CHAVE_VEND, vend);
+  const varre = { rodando: false, msg: '', ultima: Number(ler('pokeitens.varredura.em', 0)) || 0 };
+  const esperas = new Map(); // 'item:ID:moeda' | 'perfil:nick' → resolve
+
+  /** Cara de nick gerado: duas palavras coladas + 1–4 números (às vezes com uma letra no fim). */
+  function nickEstranho(n) {
+    const s = String(n ?? '');
+    const motivos = [];
+    if (/^[a-z]+[A-Z][a-z]+\d{1,3}[A-Za-z]$/.test(s)) motivos.push('palavra+Palavra+número+letra');
+    else if (/^[A-Za-z][a-z]+[A-Z][a-z]+\d{2,4}$/.test(s)) motivos.push('PalavraPalavra+número');
+    else if (/^[A-Za-z]{4,}\d{3,4}$/.test(s)) motivos.push('nome+3-4 números');
+    return motivos;
+  }
+  const conhecidos = () => new Set(String(cfg.conhecidos ?? '').split(/[\s,;]+/).map((x) => x.trim().toLowerCase()).filter(Boolean));
+
+  /** Pontos de suspeita e os porquês (para o relatório). */
+  function suspeita(v) {
+    const motivos = [...nickEstranho(v.nick)];
+    let pts = !motivos.length ? 0 : motivos[0] === 'nome+3-4 números' ? 1 : 2; // "Pedro123" é comum: pesa menos
+    if (conhecidos().has(v.nick.toLowerCase())) { pts += 3; motivos.push('na sua lista'); }
+    const itens = Object.keys(v.itens ?? {}).length;
+    if (itens >= 2) { pts += 1; motivos.push(`vende ${itens} dos itens vigiados`); }
+    const pf = v.perfil;
+    if (pf && !pf.erro) {
+      if ((pf.dex ?? 0) <= 30) { pts += 1; motivos.push(`Pokédex ${pf.dex ?? 0}`); }
+      if (!pf.guild) { pts += 1; motivos.push('sem guild'); }
+      if ((pf.conquistas ?? 0) <= 3) { pts += 1; motivos.push(`${pf.conquistas ?? 0} conquistas`); }
+    }
+    const mesmos = mesmoPreco(v);
+    if (mesmos.length) { pts += 2; motivos.push(`mesmo preço que ${mesmos.slice(0, 3).join(', ')}`); }
+    return { pts, motivos };
+  }
+
+  /** Outros vendedores com nick estranho anunciando o MESMO item pelo MESMO preço. */
+  function mesmoPreco(v) {
+    const out = new Set();
+    for (const [id, it] of Object.entries(v.itens ?? {})) {
+      for (const o of Object.values(vend)) {
+        if (o === v || !nickEstranho(o.nick).length && !conhecidos().has(o.nick.toLowerCase())) continue;
+        const x = o.itens?.[id];
+        if (x && x.precos?.some((pr) => it.precos?.includes(pr))) out.add(o.nick);
+      }
+    }
+    return [...out];
+  }
+
+  function esperar(chave, ms = 7000) {
+    return new Promise((res) => {
+      const t = setTimeout(() => { esperas.delete(chave); res(null); }, ms);
+      esperas.set(chave, (m) => { clearTimeout(t); esperas.delete(chave); res(m); });
+    });
+  }
+  const dormir = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  function anotarAnuncio(itemId, moeda, a) {
+    const nick = String(a.vendedor ?? '').trim();
+    if (!nick || nick.toLowerCase() === String(core.eu?.nick ?? '').toLowerCase()) return;
+    const k = nick.toLowerCase();
+    const v = (vend[k] ??= { nick, primeiro: Date.now(), ultimo: 0, varreduras: 0, itens: {}, perfil: null, marcado: false });
+    v.nick = nick;
+    v.ultimo = Date.now();
+    const it = (v.itens[itemId] ??= { anuncios: 0, qtdMax: 0, precos: [], moedas: [] });
+    it.anuncios++;
+    it.qtdMax = Math.max(it.qtdMax, Number(a.qtd) || 0);
+    const pr = `${moeda === 'orb' ? '💎' : '🪙'}${Number(a.preco) || 0}`;
+    if (!it.precos.includes(pr)) it.precos = [pr, ...it.precos].slice(0, 6);
+  }
+
+  async function lerPerfil(v) {
+    if (!core.send({ t: 'ranking.perfil', nick: v.nick })) return;
+    const m = await esperar(`perfil:${v.nick.toLowerCase()}`);
+    setTimeout(() => document.getElementById('perfil')?.classList.add('hidden'), 0);
+    const p = m?.perfil;
+    v.perfil = p
+      ? { em: Date.now(), level: p.level ?? null, capturas: p.capturas ?? null, dex: p.capturasEsp ?? null, guild: p.guildTag || p.guildNome || '',
+          conquistas: Array.isArray(p.conquistas) ? p.conquistas.length : (Number(p.conquistas) || 0), pvp: p.pvpRank ?? null, shinys: p.shinysVistos ?? null }
+      : { em: Date.now(), erro: 'perfil não respondeu' };
+  }
+
+  async function varrer() {
+    if (varre.rodando || !core.logado) return;
+    varre.rodando = true;
+    try {
+      const vistosAgora = new Set();
+      for (const it of VIGIADOS) {
+        for (const moeda of ['gold', 'orb']) {
+          varre.msg = `lendo ${nomeItem(it.id, it.nome)} (${moeda === 'orb' ? 'Gemas' : 'Coins'})…`;
+          if (estaAberto() && cfg.aba === 'multi') pintar();
+          if (!core.send({ t: 'market.item', itemId: it.id, moeda })) continue;
+          const m = await esperar(`item:${it.id}:${moeda}`);
+          for (const a of m?.linhas ?? []) { anotarAnuncio(it.id, moeda, a); vistosAgora.add(String(a.vendedor ?? '').toLowerCase()); }
+          await dormir(1200);
+        }
+      }
+      for (const k of vistosAgora) if (vend[k]) vend[k].varreduras++;
+      // Perfil dos suspeitos (nick estranho ou da sua lista), no máximo 1 vez por dia cada.
+      const fila = Object.values(vend).filter((v) => (nickEstranho(v.nick).length || conhecidos().has(v.nick.toLowerCase()))
+        && (!v.perfil || Date.now() - v.perfil.em > DIA)).slice(0, 15);
+      for (const v of fila) {
+        varre.msg = `perfil de ${v.nick}…`;
+        if (estaAberto() && cfg.aba === 'multi') pintar();
+        await lerPerfil(v);
+        await dormir(2500);
+      }
+      // Os nicks da sua lista que não estão vendendo agora: lê o perfil mesmo assim (uma vez por dia).
+      for (const k of conhecidos()) {
+        if (vend[k]?.perfil && Date.now() - vend[k].perfil.em < DIA) continue;
+        const v = (vend[k] ??= { nick: String(cfg.conhecidos).split(/[\s,;]+/).find((x) => x.toLowerCase() === k) ?? k, primeiro: Date.now(), ultimo: 0, varreduras: 0, itens: {}, perfil: null, marcado: false });
+        varre.msg = `perfil de ${v.nick}…`;
+        await lerPerfil(v);
+        await dormir(2500);
+      }
+      varre.ultima = Date.now();
+      gravar('pokeitens.varredura.em', varre.ultima);
+      varre.msg = `varredura feita: ${vistosAgora.size} vendedores nos itens vigiados`;
+      salvarVend();
+    } finally {
+      varre.rodando = false;
+      if (estaAberto()) pintar();
+    }
+  }
+  // Monitor: com ele ligado NESTA conta, varre a cada N minutos.
+  const relogio = setInterval(() => {
+    if (cfg.monitor && !varre.rodando && Date.now() - varre.ultima > Math.max(5, Number(cfg.cadaMin) || 10) * 60_000) varrer();
+  }, 30_000);
+  limpezas.push(() => clearInterval(relogio));
+
+  function relatorio(lista) {
+    const linhas = lista.map(({ v, s: sp }) => {
+      const pf = v.perfil && !v.perfil.erro ? `Nv ${v.perfil.level ?? '?'}, ${fmt(v.perfil.capturas ?? 0)} capturas, Pokédex ${v.perfil.dex ?? '?'}, guild: ${v.perfil.guild || 'nenhuma'}` : 'perfil não lido';
+      const itens = Object.entries(v.itens).map(([id, it]) => `${nomeVigiado(id)} (até ${it.qtdMax} un., ${it.precos.join(' / ')})`).join('; ') || 'nenhum anúncio visto';
+      return `• ${v.nick} — ${pf}\n  Vendendo: ${itens}\n  Visto de ${quando(v.primeiro)} a ${quando(v.ultimo || v.primeiro)} · indícios: ${sp.motivos.join(', ') || '—'}`;
+    });
+    return `Possíveis multi-contas vendendo itens raros no Mercado (levantamento automático, ${quando(Date.now())}):\n\n${linhas.join('\n\n')}\n\nObs.: indícios, não prova — peço que a moderação confira IP/dispositivo.`;
+  }
+
+  function htmlMulti() {
+    const todos = Object.values(vend).map((v) => ({ v, s: suspeita(v) }))
+      .filter((x) => x.s.pts >= 2 || x.v.marcado)
+      .sort((a, b) => Number(b.v.marcado) - Number(a.v.marcado) || b.s.pts - a.s.pts || (b.v.ultimo - a.v.ultimo));
+    const total = Object.keys(vend).length;
+    return `<section>
+        <div class="pit-linha">
+          <button class="pit-sw ${cfg.monitor ? 'on' : ''}" data-a="monitor"></button>
+          <b>Monitorar nesta conta</b> · a cada <input type="number" class="pit-in" data-c="cadaMin" min="5" max="120" value="${esc(cfg.cadaMin)}"> min
+          <button class="pit-bt" data-a="varrer" ${varre.rodando ? 'disabled' : ''}>${varre.rodando ? 'varrendo…' : '🔎 varrer agora'}</button>
+          <button class="pit-bt" data-a="copiarRel" ${todos.length ? '' : 'disabled'}>📋 copiar relatório</button>
+          <span class="pit-ajuda">${esc(varre.msg)}${varre.ultima ? ` · última: ${quando(varre.ultima)}` : ''} · ${total} vendedores vistos</span>
+        </div>
+        <p class="pit-ajuda" style="margin:2px 0">Vigia: ${VIGIADOS.map((x) => esc(nomeItem(x.id, x.nome))).join(', ')}. Ligue o monitor em UMA conta só (cada varredura faz ~${VIGIADOS.length * 2} consultas ao Mercado).</p>
+        <details><summary class="pit-ajuda">Nicks que você já desconfia (um por linha)</summary>
+          <textarea class="pit-in" data-c="conhecidos" rows="5" style="width:100%;font-family:monospace">${esc(cfg.conhecidos)}</textarea></details>
+      </section>
+      <section>
+        ${todos.length ? `<table class="pit-tab"><tr><th></th><th>Vendedor</th><th>Pontos</th><th>Indícios</th><th>Vendendo</th><th>Perfil</th><th>Visto</th></tr>
+          ${todos.map(({ v, s: sp }) => `<tr>
+            <td><input type="checkbox" data-a="marcar" data-v="${esc(v.nick.toLowerCase())}" ${v.marcado ? 'checked' : ''} title="incluir no relatório"></td>
+            <td><b>${esc(v.nick)}</b></td>
+            <td><b style="color:${sp.pts >= 5 ? '#ff8a8a' : sp.pts >= 3 ? '#f3c77a' : '#ddd'}">${sp.pts}</b></td>
+            <td style="white-space:normal;max-width:220px">${esc(sp.motivos.join(' · '))}</td>
+            <td style="white-space:normal;max-width:240px">${Object.entries(v.itens).map(([id, it]) => `${esc(nomeVigiado(id))}: ${it.qtdMax} un. ${esc(it.precos.join(' / '))}`).join('<br>') || '<span class="pit-ajuda">—</span>'}</td>
+            <td>${v.perfil ? (v.perfil.erro ? `<span class="pit-ajuda">${esc(v.perfil.erro)}</span>` : `Nv ${esc(v.perfil.level ?? '?')} · ${fmt(v.perfil.capturas ?? 0)} capt. · dex ${esc(v.perfil.dex ?? '?')} · ${v.perfil.guild ? esc(v.perfil.guild) : 'sem guild'}`) : '<span class="pit-ajuda">—</span>'}</td>
+            <td><small>${quando(v.primeiro)}<br>${v.ultimo ? quando(v.ultimo) : 'não vendendo'} · ${v.varreduras}×</small></td></tr>`).join('')}</table>`
+          : '<span class="pit-ajuda">Nenhum suspeito ainda — clique em "varrer agora".</span>'}
+        <p class="pit-ajuda">Pontos: nick com cara de gerado (+2), na sua lista (+3), vende 2+ itens vigiados (+1), Pokédex ≤ 30 (+1), sem guild (+1), ≤ 3 conquistas (+1), mesmo preço de outro suspeito no mesmo item (+2). São INDÍCIOS para a moderação conferir — não prova.</p>
+      </section>`;
+  }
+
   function montarUI() {
     const css = document.createElement('style');
     css.textContent = CSS;
@@ -221,7 +416,12 @@
     fundo.innerHTML = '<div id="pit-modal"></div>';
     document.body.appendChild(fundo);
     fundo.addEventListener('click', aoClicar);
-    fundo.addEventListener('change', (e) => { if (e.target.dataset.c === 'boss') { cfg.boss = e.target.value; pagina = 0; salvarCfg(); pintar(); } });
+    fundo.addEventListener('change', (e) => {
+      const c = e.target.dataset.c;
+      if (c === 'boss') { cfg.boss = e.target.value; pagina = 0; salvarCfg(); pintar(); }
+      if (c === 'cadaMin') { cfg.cadaMin = Math.max(5, Math.min(120, Number(e.target.value) || 10)); salvarCfg(); pintar(); }
+      if (c === 'conhecidos') { cfg.conhecidos = e.target.value; salvarCfg(); pintar(); }
+    });
     const aoEsc = (e) => { if (e.key === 'Escape' && fundo.classList.contains('aberto')) fechar(); };
     document.addEventListener('keydown', aoEsc);
     limpezas.push(() => { css.remove(); fundo.remove(); document.removeEventListener('keydown', aoEsc); });
@@ -346,8 +546,9 @@
         <span class="pit-linha" style="margin:0">
           <button class="pit-bt ${cfg.aba === 'principais' ? 'on' : ''}" data-a="aba" data-v="principais">Principais</button>
           <button class="pit-bt ${cfg.aba === 'boss' ? 'on' : ''}" data-a="aba" data-v="boss">Boss</button>
+          <button class="pit-bt ${cfg.aba === 'multi' ? 'on' : ''}" data-a="aba" data-v="multi">🕵 Multi-acc</button>
           <button class="pit-x" data-a="fechar" title="Fechar">×</button></span></header>
-      ${cfg.aba === 'boss' ? htmlBoss() : htmlPrincipais()}`;
+      ${cfg.aba === 'boss' ? htmlBoss() : cfg.aba === 'multi' ? htmlMulti() : htmlPrincipais()}`;
   }
 
   function aoClicar(e) {
@@ -361,6 +562,15 @@
     else if (a === 'mercado') pedirMercado();
     else if (a === 'pag') pagina = Math.max(0, pagina + Number(b.dataset.v));
     else if (a === 'limparBoss') { bosses = []; gravar(CHAVE_BOSS, bosses); }
+    else if (a === 'monitor') { cfg.monitor = !cfg.monitor; if (cfg.monitor && Date.now() - varre.ultima > 5 * 60_000) varrer(); }
+    else if (a === 'varrer') varrer();
+    else if (a === 'marcar') { const v = vend[b.dataset.v]; if (v) { v.marcado = b.checked; salvarVend(); } }
+    else if (a === 'copiarRel') {
+      const todos = Object.values(vend).map((v) => ({ v, s: suspeita(v) })).filter((x) => x.s.pts >= 2 || x.v.marcado);
+      const marcados = todos.filter((x) => x.v.marcado);
+      const txt = relatorio((marcados.length ? marcados : todos.filter((x) => x.s.pts >= 4)).sort((x, y) => y.s.pts - x.s.pts));
+      navigator.clipboard?.writeText(txt).then(() => { varre.msg = '📋 relatório copiado'; pintar(); }).catch(() => { varre.msg = 'não deu para copiar'; pintar(); });
+    }
     salvarCfg();
     pintar();
   }
