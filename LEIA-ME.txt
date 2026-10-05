@@ -42,7 +42,9 @@ ITENS E BOSS — botão 📦 Itens
     taxa, quanto você já vendeu (usa o extrato do 💰 Vendas) e quanto caiu na hunt e no boss
     (no período e na sessão, com média por hora).
   - Aba 🕵 Multi-acc: vigia quem vende Boss Token, fragmentos (Chave, Shiny, Mega Shiny) e chaves de
-    casa no Mercado e destaca nicks com cara de gerados (ex.: KantoHeart857, wingmenLegate4B),
+    casa — as TRANSAÇÕES (tabela de preços global: vendedor, comprador, valor) e os anúncios
+    abertos — e destaca TODOS os nicks com cara de gerados (ex.: KantoHeart857, wingmenLegate4B).
+    🔗 Grupos: a conta que negocia com 2+ contas de nick gerado (a provável conta principal).
     com o perfil público (nível, capturas, Pokédex, guild) e quem anuncia pelo mesmo preço.
     "Monitorar nesta conta" varre a cada N min (ligue em UMA conta). Lista própria de nicks
     suspeitos, ☑ para escolher e "📋 copiar relatório" com o texto pronto para a moderação.

@@ -9,14 +9,15 @@
 // `bossPerdeu` marca a derrota. Resumo por boss (lutas, vitórias, drops por luta, % com peça de
 // TM) e o histórico paginado. Tudo salvo por conta.
 //
-// Aba "Multi-acc": vigia quem VENDE Boss Token, fragmentos (Chave, Shiny, Mega Shiny) e chaves de
-// casa no Mercado (`market.item` traz o nick de cada vendedor) e marca os nicks com cara de
+// Aba "Multi-acc": lê as TRANSAÇÕES desses itens na tabela de preços global do Mercado
+// (`market.historicoGlobal`: vendedor, comprador, valor, hora) e os anúncios abertos
+// (`market.item`), e marca TODOS os nicks com cara de
 // gerados (PalavraPalavra + números, ex.: KantoHeart857, wingmenLegate4B). Para os suspeitos,
 // lê o perfil público (`ranking.perfil`: nível, capturas, Pokédex, guild) e junta quem anuncia
 // pelo mesmo preço. Só junta evidência para VOCÊ reportar — não faz nada com as contas.
 (() => {
   'use strict';
-  const VERSAO_ITENS = '1.1.0';
+  const VERSAO_ITENS = '1.2.0';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -133,6 +134,10 @@
       let m;
       try { m = JSON.parse(d); } catch { return; }
       esperas.get(`item:${m.itemId}:${m.moeda}`)?.(m);
+    } else if (esperas.size && d.includes('"t":"market"') && d.includes('"aba":"historicoGlobal"')) {
+      let m;
+      try { m = JSON.parse(d); } catch { return; }
+      esperas.get('hist')?.(m);
     } else if (esperas.size && d.includes('"t":"perfil"')) {
       let m;
       try { m = JSON.parse(d); } catch { return; }
@@ -239,6 +244,11 @@
   ];
   const nomeVigiado = (id) => nomeItem(id, VIGIADOS.find((x) => x.id === Number(id))?.nome);
   let vend = ler(CHAVE_VEND, {});
+  // As transações lidas: [{ k, em, item, desc, vendedor, comprador, valor, moeda }] (as mais novas primeiro).
+  const CHAVE_TRANS = 'pokeitens.transacoes.v1';
+  const TRANS_MAX = 4000;
+  let trans = ler(CHAVE_TRANS, []);
+  const chaveTrans = (l) => `${l.em}|${l.vendedor}|${l.comprador}|${l.bruto}|${l.descricao}`;
   const salvarVend = () => gravar(CHAVE_VEND, vend);
   const varre = { rodando: false, msg: '', ultima: Number(ler('pokeitens.varredura.em', 0)) || 0 };
   const esperas = new Map(); // 'item:ID:moeda' | 'perfil:nick' → resolve
@@ -269,6 +279,10 @@
     }
     const mesmos = mesmoPreco(v);
     if (mesmos.length) { pts += 2; motivos.push(`mesmo preço que ${mesmos.slice(0, 3).join(', ')}`); }
+    const t = v.trans;
+    if (t?.vendas + t?.compras >= 3) { pts += 1; motivos.push(`${t.vendas} vendas / ${t.compras} compras desses itens`); }
+    const g = grupoDe(v.nick);
+    if (g) { pts += 3; motivos.push(`ligado a ${g.estranhos.filter((n) => !mesmoNickI(n, v.nick)).slice(0, 3).join(', ')} via ${g.hub}`); }
     return { pts, motivos };
   }
 
@@ -283,6 +297,55 @@
       }
     }
     return [...out];
+  }
+
+  const mesmoNickI = (a, b) => String(a ?? '').toLowerCase() === String(b ?? '').toLowerCase();
+  const suspeitoNick = (n) => nickEstranho(n).length > 0 && nickEstranho(n)[0] !== 'nome+3-4 números' || conhecidos().has(String(n).toLowerCase());
+
+  /**
+   * GRUPOS: quem negocia com 2+ contas de nick estranho (o "hub" — a conta principal que recebe
+   * os itens, ou a que abastece as outras). Cada grupo: o hub, as contas estranhas ligadas a ele e
+   * as transações entre eles.
+   */
+  let gruposCache = null;
+  function grupos() {
+    if (gruposCache) return gruposCache;
+    const lig = new Map(); // hub → Map(estranho → { n, valor, vende, compra })
+    for (const t of trans) {
+      for (const [a, b, papel] of [[t.vendedor, t.comprador, 'vende'], [t.comprador, t.vendedor, 'compra']]) {
+        if (!a || !b || !suspeitoNick(a)) continue;
+        const m = lig.get(b.toLowerCase()) ?? new Map();
+        const x = m.get(a.toLowerCase()) ?? { nick: a, n: 0, valor: 0, vende: 0, compra: 0 };
+        x.n++; x.valor += Number(t.valor) || 0; x[papel]++;
+        m.set(a.toLowerCase(), x);
+        lig.set(b.toLowerCase(), m);
+      }
+    }
+    const nickReal = (k) => trans.find((t) => mesmoNickI(t.vendedor, k))?.vendedor ?? trans.find((t) => mesmoNickI(t.comprador, k))?.comprador ?? k;
+    gruposCache = [...lig.entries()].filter(([, m]) => m.size >= 2)
+      .map(([hub, m]) => ({ hub: nickReal(hub), hubEstranho: suspeitoNick(nickReal(hub)), estranhos: [...m.values()].map((x) => x.nick), lig: [...m.values()].sort((a, b) => b.n - a.n),
+        n: [...m.values()].reduce((t, x) => t + x.n, 0) }))
+      .sort((a, b) => b.estranhos.length - a.estranhos.length || b.n - a.n);
+    return gruposCache;
+  }
+  const grupoDe = (nick) => grupos().find((g) => mesmoNickI(g.hub, nick) || g.estranhos.some((n) => mesmoNickI(n, nick))) ?? null;
+
+  /** Recalcula o resumo de transações de cada nick (e cria a ficha de quem só aparece nelas). */
+  function resumirTransacoes() {
+    gruposCache = null;
+    for (const v of Object.values(vend)) v.trans = { vendas: 0, compras: 0, com: [] };
+    for (const t of trans) {
+      for (const [nick, papel, outro] of [[t.vendedor, 'vendas', t.comprador], [t.comprador, 'compras', t.vendedor]]) {
+        if (!nick) continue;
+        const k = nick.toLowerCase();
+        if (!vend[k] && !suspeitoNick(nick) && !grupoDe(nick)) continue; // gente normal sem ligação: não guarda ficha
+        const v = (vend[k] ??= { nick, primeiro: t.em, ultimo: 0, varreduras: 0, itens: {}, perfil: null, marcado: false });
+        v.trans ??= { vendas: 0, compras: 0, com: [] };
+        v.trans[papel]++;
+        v.primeiro = Math.min(v.primeiro, t.em);
+        if (outro && !v.trans.com.includes(outro) && v.trans.com.length < 8) v.trans.com.push(outro);
+      }
+    }
   }
 
   function esperar(chave, ms = 7000) {
@@ -322,6 +385,32 @@
     if (varre.rodando || !core.logado) return;
     varre.rodando = true;
     try {
+      // 1) TRANSAÇÕES: a tabela de preços global, filtrada por item, até achar o que já foi lido.
+      const conhecidas = new Set(trans.map((t) => t.k));
+      const novas = [];
+      for (const it of VIGIADOS) {
+        const paginasMax = trans.length ? 4 : 10; // a primeira varredura vai mais fundo
+        for (let pg = 0; pg < paginasMax; pg++) {
+          varre.msg = `transações de ${nomeVigiado(it.id)} (página ${pg + 1})…`;
+          if (estaAberto() && cfg.aba === 'multi') pintar();
+          if (!core.send({ t: 'market.historicoGlobal', pagina: pg, tipo: 'item', itemId: it.id })) break;
+          const m = await esperar('hist');
+          const linhas = m?.linhas ?? [];
+          let repetidas = 0;
+          for (const l of linhas) {
+            const k = chaveTrans(l);
+            if (conhecidas.has(k)) { repetidas++; continue; }
+            conhecidas.add(k);
+            novas.push({ k, em: Number(l.em) || Date.now(), item: it.id, desc: l.descricao ?? '', vendedor: l.vendedor ?? '', comprador: l.comprador ?? '', valor: Number(l.bruto) || 0, moeda: l.moeda ?? 'gold' });
+          }
+          await dormir(1200);
+          if (!m?.temMais || !linhas.length || repetidas === linhas.length) break;
+        }
+      }
+      trans = [...novas, ...trans].sort((a, b) => b.em - a.em).slice(0, TRANS_MAX);
+      gravar(CHAVE_TRANS, trans);
+      resumirTransacoes();
+      // 2) ANÚNCIOS abertos agora.
       const vistosAgora = new Set();
       for (const it of VIGIADOS) {
         for (const moeda of ['gold', 'orb']) {
@@ -353,7 +442,7 @@
       }
       varre.ultima = Date.now();
       gravar('pokeitens.varredura.em', varre.ultima);
-      varre.msg = `varredura feita: ${vistosAgora.size} vendedores nos itens vigiados`;
+      varre.msg = `varredura feita: ${novas.length} transações novas (${trans.length} guardadas) · ${vistosAgora.size} vendedores com anúncio aberto`;
       salvarVend();
     } finally {
       varre.rodando = false;
@@ -370,9 +459,12 @@
     const linhas = lista.map(({ v, s: sp }) => {
       const pf = v.perfil && !v.perfil.erro ? `Nv ${v.perfil.level ?? '?'}, ${fmt(v.perfil.capturas ?? 0)} capturas, Pokédex ${v.perfil.dex ?? '?'}, guild: ${v.perfil.guild || 'nenhuma'}` : 'perfil não lido';
       const itens = Object.entries(v.itens).map(([id, it]) => `${nomeVigiado(id)} (até ${it.qtdMax} un., ${it.precos.join(' / ')})`).join('; ') || 'nenhum anúncio visto';
-      return `• ${v.nick} — ${pf}\n  Vendendo: ${itens}\n  Visto de ${quando(v.primeiro)} a ${quando(v.ultimo || v.primeiro)} · indícios: ${sp.motivos.join(', ') || '—'}`;
+      const tr = v.trans ? `${v.trans.vendas} vendas e ${v.trans.compras} compras desses itens${v.trans.com.length ? ` (com: ${v.trans.com.join(', ')})` : ''}` : 'sem transações lidas';
+      return `• ${v.nick} — ${pf}\n  Anúncios: ${itens}\n  Transações: ${tr}\n  Visto de ${quando(v.primeiro)} a ${quando(v.ultimo || v.primeiro)} · indícios: ${sp.motivos.join(', ') || '—'}`;
     });
-    return `Possíveis multi-contas vendendo itens raros no Mercado (levantamento automático, ${quando(Date.now())}):\n\n${linhas.join('\n\n')}\n\nObs.: indícios, não prova — peço que a moderação confira IP/dispositivo.`;
+    const gs = grupos().filter((g) => lista.some(({ v }) => grupoDe(v.nick) === g)).slice(0, 8);
+    const txtGrupos = gs.length ? `\n\nGrupos (contas de nick gerado que negociam com a mesma conta):\n${gs.map((g) => `• ${g.hub} ⇄ ${g.lig.map((x) => `${x.nick} (${x.vende ? `vendeu ${x.vende}× para ele` : ''}${x.vende && x.compra ? ', ' : ''}${x.compra ? `comprou ${x.compra}× dele` : ''})`).join(', ')}`).join('\n')}` : '';
+    return `Possíveis multi-contas negociando itens raros no Mercado (levantamento automático, ${quando(Date.now())}):\n\n${linhas.join('\n\n')}${txtGrupos}\n\nObs.: indícios, não prova — peço que a moderação confira IP/dispositivo.`;
   }
 
   function htmlMulti() {
@@ -386,24 +478,30 @@
           <b>Monitorar nesta conta</b> · a cada <input type="number" class="pit-in" data-c="cadaMin" min="5" max="120" value="${esc(cfg.cadaMin)}"> min
           <button class="pit-bt" data-a="varrer" ${varre.rodando ? 'disabled' : ''}>${varre.rodando ? 'varrendo…' : '🔎 varrer agora'}</button>
           <button class="pit-bt" data-a="copiarRel" ${todos.length ? '' : 'disabled'}>📋 copiar relatório</button>
-          <span class="pit-ajuda">${esc(varre.msg)}${varre.ultima ? ` · última: ${quando(varre.ultima)}` : ''} · ${total} vendedores vistos</span>
+          <span class="pit-ajuda">${esc(varre.msg)}${varre.ultima ? ` · última: ${quando(varre.ultima)}` : ''} · ${total} contas com ficha · ${trans.length} transações</span>
         </div>
-        <p class="pit-ajuda" style="margin:2px 0">Vigia: ${VIGIADOS.map((x) => esc(nomeItem(x.id, x.nome))).join(', ')}. Ligue o monitor em UMA conta só (cada varredura faz ~${VIGIADOS.length * 2} consultas ao Mercado).</p>
+        <p class="pit-ajuda" style="margin:2px 0">Vigia: ${VIGIADOS.map((x) => esc(nomeItem(x.id, x.nome))).join(', ')}. Ligue o monitor em UMA conta só (cada varredura lê as transações desses itens na tabela de preços global e os anúncios abertos — ~1 a 2 min).</p>
         <details><summary class="pit-ajuda">Nicks que você já desconfia (um por linha)</summary>
           <textarea class="pit-in" data-c="conhecidos" rows="5" style="width:100%;font-family:monospace">${esc(cfg.conhecidos)}</textarea></details>
       </section>
+      ${(() => { const gs = grupos().slice(0, 10); return gs.length ? `<section><h4 style="margin:0 0 4px;color:#f3c77a">🔗 Grupos — contas de nick gerado que negociam com a mesma conta</h4>
+        <table class="pit-tab"><tr><th>Conta central</th><th>Contas ligadas</th><th>Transações</th></tr>
+        ${gs.map((g) => `<tr><td><b>${esc(g.hub)}</b>${g.hubEstranho ? ' <small style="color:#ff8a8a">(nick gerado)</small>' : ''}</td>
+          <td style="white-space:normal;text-align:left">${g.lig.map((x) => `${esc(x.nick)} <small>(${x.vende ? `vendeu ${x.vende}×` : ''}${x.vende && x.compra ? ' · ' : ''}${x.compra ? `comprou ${x.compra}×` : ''})</small>`).join(', ')}</td>
+          <td>${g.n}</td></tr>`).join('')}</table></section>` : ''; })()}
       <section>
-        ${todos.length ? `<table class="pit-tab"><tr><th></th><th>Vendedor</th><th>Pontos</th><th>Indícios</th><th>Vendendo</th><th>Perfil</th><th>Visto</th></tr>
+        ${todos.length ? `<table class="pit-tab"><tr><th></th><th>Vendedor</th><th>Pontos</th><th>Indícios</th><th>Anúncios</th><th>Transações</th><th>Perfil</th><th>Visto</th></tr>
           ${todos.map(({ v, s: sp }) => `<tr>
             <td><input type="checkbox" data-a="marcar" data-v="${esc(v.nick.toLowerCase())}" ${v.marcado ? 'checked' : ''} title="incluir no relatório"></td>
             <td><b>${esc(v.nick)}</b></td>
             <td><b style="color:${sp.pts >= 5 ? '#ff8a8a' : sp.pts >= 3 ? '#f3c77a' : '#ddd'}">${sp.pts}</b></td>
             <td style="white-space:normal;max-width:220px">${esc(sp.motivos.join(' · '))}</td>
             <td style="white-space:normal;max-width:240px">${Object.entries(v.itens).map(([id, it]) => `${esc(nomeVigiado(id))}: ${it.qtdMax} un. ${esc(it.precos.join(' / '))}`).join('<br>') || '<span class="pit-ajuda">—</span>'}</td>
+            <td style="white-space:normal;max-width:200px">${v.trans && (v.trans.vendas || v.trans.compras) ? `${v.trans.vendas} vendas · ${v.trans.compras} compras${v.trans.com.length ? `<br><small>com: ${esc(v.trans.com.slice(0, 4).join(', '))}</small>` : ''}` : '<span class="pit-ajuda">—</span>'}</td>
             <td>${v.perfil ? (v.perfil.erro ? `<span class="pit-ajuda">${esc(v.perfil.erro)}</span>` : `Nv ${esc(v.perfil.level ?? '?')} · ${fmt(v.perfil.capturas ?? 0)} capt. · dex ${esc(v.perfil.dex ?? '?')} · ${v.perfil.guild ? esc(v.perfil.guild) : 'sem guild'}`) : '<span class="pit-ajuda">—</span>'}</td>
             <td><small>${quando(v.primeiro)}<br>${v.ultimo ? quando(v.ultimo) : 'não vendendo'} · ${v.varreduras}×</small></td></tr>`).join('')}</table>`
           : '<span class="pit-ajuda">Nenhum suspeito ainda — clique em "varrer agora".</span>'}
-        <p class="pit-ajuda">Pontos: nick com cara de gerado (+2), na sua lista (+3), vende 2+ itens vigiados (+1), Pokédex ≤ 30 (+1), sem guild (+1), ≤ 3 conquistas (+1), mesmo preço de outro suspeito no mesmo item (+2). São INDÍCIOS para a moderação conferir — não prova.</p>
+        <p class="pit-ajuda">Pontos: ligado a outras contas de nick gerado pela mesma conta central (+3), 3+ transações desses itens (+1), nick com cara de gerado (+2), na sua lista (+3), vende 2+ itens vigiados (+1), Pokédex ≤ 30 (+1), sem guild (+1), ≤ 3 conquistas (+1), mesmo preço de outro suspeito no mesmo item (+2). São INDÍCIOS para a moderação conferir — não prova.</p>
       </section>`;
   }
 
