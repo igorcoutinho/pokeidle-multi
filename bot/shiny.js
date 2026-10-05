@@ -15,7 +15,7 @@
 // conta caçando, o app SAI do Modo Economia sozinho.
 (() => {
   'use strict';
-  const VERSAO_SHINY = '1.9.0';
+  const VERSAO_SHINY = '1.9.1';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -295,7 +295,7 @@
           em: Date.now(), mapa: core.eu?.huntSlug ?? '', nome: e.nome ?? '?', nivel: e.level ?? '?', bolas: 1, bola: nome,
           resultado: emEco()
             ? `⚠ não visto: a conta estava no 🍃 Eco (o jogo não mostra os bichos) — levou ${nome}${e.sucesso ? ' e foi capturado' : ' e escapou'}`
-            : `⚠ detecção perdida (o jogo contou o shiny na bola)${e.sucesso ? ' — capturado' : ''} · ${diag}`,
+            : `shiny revelado só na bola (o servidor não marca shiny selvagem no mapa) — levou ${nome}${e.sucesso ? ' e foi capturado ✅' : ' e escapou'} · ${diag}`,
         });
       }
       return;
