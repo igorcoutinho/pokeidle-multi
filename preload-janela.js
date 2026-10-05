@@ -10,6 +10,8 @@ contextBridge.exposeInMainWorld('multi', {
   abrirCockpit: (n) => ipcRenderer.invoke('multi:abrirCockpit', n),
   rotomRegras: (n) => ipcRenderer.invoke('multi:rotomRegras', n),
   twitchLives: (lives) => ipcRenderer.invoke('multi:twitchLives', lives),
+  guiaHunts: (ficha) => ipcRenderer.invoke('multi:guiaHunts', ficha),
+  guiaRankingXp: (nicks) => ipcRenderer.invoke('multi:guiaRankingXp', nicks),
   aoMudarLogica: (fn) => ipcRenderer.on('pb:logicaMudou', (_e, codigo) => fn(codigo)),
   aoMudarCore: (fn) => ipcRenderer.on('pb:coreMudou', () => fn()),
 });

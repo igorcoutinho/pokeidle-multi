@@ -71,6 +71,16 @@ GRADE 1×1 — botão "1×1" na barra de cima: uma conta por vez na janela toda,
 VERSÃO LITE — npm run build:lite gera "PokeIdle Multi Lite <versão>.exe": igual à normal, mas sem
   os botões ✨ Shiny e ⚔ PvP. Tem pasta de dados própria (logins separados da versão normal).
 
+ONDE CAÇAR — botão 🗺 Hunts no cabeçalho de cada conta
+  - Pega a ficha do pokémon ATIVO da conta (espécie, nível, potência, qualidade, shiny, IVs, refino,
+    TM, VIP), joga no "Onde caçar" do guiapokeidlehardtocapture.site (aberto escondido) e mostra a
+    tabela "Melhores hunts para ele": XP/h, dinheiro/h, tempo de abate, cura e selo. Filtros de
+    região, ordenação (XP/h, dinheiro/h, nível) e risco (segura/apertada/arriscada).
+
+RANKING DE XP — botão 🏆 Ranking XP na barra de cima
+  - Top 10 do XP ganho no dia (dados do guia, coleta 2× ao dia), a posição das suas contas (mesmo
+    fora do top 10), o XP total com a posição geral e a sua posição dia a dia.
+
 PEDRA ABAIXO DO MERCADO — botão 📉 na barra de cima do app (você dá a ordem, roda em todas)
   - Escolha a pedra (as que as contas alternativas têm), a quantidade por conta (1 ou 2) e o
     desconto (vazio = automático entre 5% e 10%, maior quanto mais anúncios houver).

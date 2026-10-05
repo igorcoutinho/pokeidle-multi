@@ -47,6 +47,18 @@
   #reb-modal td{padding:5px 6px;border-top:1px solid #4a2a2a}
   #reb-modal .ok{color:#7fdc8f;font-weight:700}#reb-modal .ruim{color:#ff8a8a;font-weight:700}#reb-modal .ajuda{opacity:.7;font-size:12px}
   #reb-modal button.on{background:var(--roxo);border-color:var(--ouro);color:#fff}
+  #gx-fundo{position:fixed;inset:0;z-index:20;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center}
+  #gx-fundo.aberto{display:flex}
+  #gx-modal{width:min(1150px,97vw);max-height:92vh;overflow:auto;background:#3a2020;border:3px solid var(--borda);border-radius:14px;padding:0 0 12px}
+  #gx-modal header{position:sticky;top:0;display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:#c9754a;color:#2a1212;font-weight:800}
+  #gx-modal section{padding:10px 14px;border-bottom:1px solid #5a3232}
+  #gx-modal .linha{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:6px}
+  #gx-modal select{background:#2a1515;border:1px solid #8a5a4a;color:var(--texto);border-radius:6px;padding:4px 8px;font:inherit}
+  #gx-modal table{width:100%;border-collapse:collapse;font-size:12px}
+  #gx-modal th{text-align:left;color:var(--ouro);padding:4px 6px;white-space:nowrap}
+  #gx-modal td{padding:5px 6px;border-top:1px solid #4a2a2a;vertical-align:top}
+  #gx-modal tr.eu td{background:#4a2a5a;font-weight:700}
+  #gx-modal .ajuda{opacity:.7;font-size:12px}#gx-modal .ok{color:#7fdc8f;font-weight:700}#gx-modal .ruim{color:#ff8a8a;font-weight:700}
   #aviso{position:fixed;left:50%;top:48px;transform:translateX(-50%);z-index:10;background:#2a1515;border:2px solid var(--ouro);border-radius:10px;padding:8px 14px;font-weight:600;display:none}
 </style>
 </head>
@@ -58,6 +70,7 @@
   <span id="abas-1x1"></span>
   <span class="esp"></span>
   <span class="info" id="info-bot">bot: carregando…</span>
+  <button id="bt-rankxp" title="Top 10 do ranking de XP do dia (dados do guiapokeidlehardtocapture.site) e a posição das suas contas">🏆 Ranking XP</button>
   <button id="bt-twitch" title="Quando uma live oficial do jogo entra no ar (bônus de XP), abre no seu Chrome — uma vez por live">📺 Lives → Chrome</button>
   <button id="bt-rebaixar" title="Anunciar uma pedra abaixo do mercado em todas as contas alternativas, de uma vez">📉 Pedra abaixo do mercado</button>
   <button id="bt-pasta" title="Abre a pasta onde ficam core.js e logica.js">Pasta do bot</button>
@@ -65,6 +78,7 @@
 <div id="grade"></div>
 <div id="aviso"></div>
 <div id="reb-fundo"><div id="reb-modal"></div></div>
+<div id="gx-fundo"><div id="gx-modal"></div></div>
 
 <script>
 (async () => {
@@ -127,6 +141,7 @@
         <input class="nome" value="${c.nome.replace(/"/g, '&quot;')}" spellcheck="false" title="Clique para renomear">
         <span class="esp"></span>
         ${lite ? '' : '<button data-a="shiny" class="eco" title="Caçador de shiny: registra os bichos do mapa e arremessa Great Ball quando um shiny cai">✨ Shiny</button>'}
+        <button data-a="hunts" title="Onde caçar com o pokémon ativo desta conta — calculado pelo guiapokeidlehardtocapture.site">🗺 Hunts</button>
         <button data-a="itens" title="Itens principais (Boss Token, peças de TM, fragmentos) e histórico de drops por boss">📦 Itens</button>
         <button data-a="vendas" title="Relatório de compras e vendas no Mercado: preço médio, taxa, lucro e preço de venda">💰 Vendas</button>
         ${lite ? '' : '<button data-a="pvp" class="eco" title="PvP: ordem que cada rival usou e trava da fila automática">⚔ PvP</button>'}
@@ -194,6 +209,8 @@
         wv.setZoomFactor(c.zoom); pintar(); salvar();
       } else if (a === 'shiny') {
         wv.executeJavaScript('window.__pokeShiny?.abrir()').catch(() => aviso('Shiny: a conta ainda está carregando.'));
+      } else if (a === 'hunts') {
+        gxHunts(c);
       } else if (a === 'itens') {
         wv.executeJavaScript('window.__pokeItens?.abrir()').catch(() => aviso('Itens: a conta ainda está carregando.'));
       } else if (a === 'vendas') {
@@ -441,6 +458,77 @@
   }
 
   document.getElementById('bt-rebaixar').onclick = abrirReb;
+  // ---------------------------------------------------------------- Guia: onde caçar e ranking de XP
+  const gxFundo = document.getElementById('gx-fundo');
+  const gxModal = document.getElementById('gx-modal');
+  const gx = { conta: null, area: '', ordem: 'xp', min: '5', r: null, carregando: false, ficha: null };
+  const fmtGrande = (n) => { const a = Math.abs(n); return a >= 1e9 ? `${(n / 1e9).toFixed(2)} bi` : a >= 1e6 ? `${(n / 1e6).toFixed(1)} mi` : fmtN(n); };
+  const JS_FICHA_ATIVO = `(() => { const e = window.__pokebotCore?.eu; if (!e) return null;
+    const p = (e.pokemons ?? []).find((x) => x.id === e.activeId); if (!p) return null;
+    return { nome: p.nome, nivel: p.level, q: Number(p.quality) || 1, pot: Number(p.potencia) || 1, shiny: !!p.shiny, ivs: p.ivs ?? {}, refino: p.refino ?? {},
+      tm: !!p.tmElemental, aoe: !!(p.tmAoe || p.tmArea), vip: !!e.loja?.vip, treinador: e.nick }; })()`;
+
+  async function gxHunts(c) {
+    gx.conta = c; gx.carregando = true; gx.r = null;
+    gxFundo.classList.add('aberto');
+    gxPintarHunts();
+    gx.ficha = await naConta(c, JS_FICHA_ATIVO);
+    if (!gx.ficha) { gx.carregando = false; gx.r = { erro: 'não achei o pokémon ativo — a conta está logada?' }; return gxPintarHunts(); }
+    gx.r = await window.multi.guiaHunts({ ...gx.ficha, area: gx.area, ordem: gx.ordem, min: gx.min });
+    gx.carregando = false;
+    gxPintarHunts();
+  }
+  function gxPintarHunts() {
+    const f = gx.ficha, r = gx.r;
+    const opt = (lista, v) => lista.map(([k, t]) => `<option value="${k}" ${String(v) === k ? 'selected' : ''}>${t}</option>`).join('');
+    gxModal.innerHTML = `<header><span>🗺 Onde caçar — ${escH(gx.conta?.nome ?? '')}${f ? ` · ${escH(f.nome)} Nv ${fmtN(f.nivel)}` : ''}</span><button data-gx="fechar">×</button></header>
+      <section><div class="linha">
+        <select data-gxc="area">${opt([['', 'Todas as regiões'], ['kanto', 'Kanto'], ['johto', 'Johto'], ['outland', 'Outland'], ['hoenn', 'Hoenn (500–850)'], ['sinnoh', 'Sinnoh (1000–3500)'], ['unova', 'Unova (5000–8600)'], ['kalos', 'Kalos (10k–21k)'], ['alola', 'Alola (25k–160k)']], gx.area)}</select>
+        <select data-gxc="ordem">${opt([['xp', 'Ordenar: XP/h'], ['ouro', 'Ordenar: dinheiro/h'], ['nivel', 'Ordenar: nível']], gx.ordem)}</select>
+        <select data-gxc="min">${opt([['5', 'Mínimo: segura'], ['1', 'Mínimo: apertada'], ['0.5', 'Mínimo: arriscada']], gx.min)}</select>
+        <button data-gx="recalc" ${gx.carregando ? 'disabled' : ''}>${gx.carregando ? 'calculando no guia…' : '⟳ recalcular'}</button>
+        <span class="ajuda">${f ? `P${f.pot} · Q ${f.q.toFixed(3).replace('.', ',')}${f.shiny ? ' · ✨' : ''} · IVs ${['hp', 'atk', 'def', 'spAtk', 'spDef', 'speed'].map((k) => f.ivs[k] ?? '?').join('/')}${f.tm ? ' · TM elemental' : ''}${f.vip ? ' · VIP' : ''}` : ''}</span>
+      </div>
+      ${r?.veredito ? `<div class="ajuda">⚖ ${escH(r.veredito)}</div>` : ''}</section>
+      <section>${!r ? '<span class="ajuda">Abrindo o guia e calculando…</span>'
+        : r.erro ? `<span class="ruim">${escH(r.erro)}</span>`
+        : r.linhas?.length ? `<table><tr>${r.cab.map((h) => `<th>${escH(h)}</th>`).join('')}</tr>${r.linhas.map((l) => `<tr>${l.map((c) => `<td>${escH(c)}</td>`).join('')}</tr>`).join('')}</table>`
+        : '<span class="ajuda">O guia não devolveu hunts para esse pokémon (filtro muito restrito?).</span>'}
+        <p class="ajuda">Cálculo do <b>guiapokeidlehardtocapture.site</b> (aba "Onde caçar"), com a ficha do pokémon ATIVO desta conta: espécie, nível, potência, qualidade, shiny, IVs, refino, TM e VIP. ${r?.coleta ? escH(r.coleta) : ''}</p></section>`;
+  }
+
+  async function gxRanking() {
+    gxFundo.classList.add('aberto');
+    gxModal.innerHTML = '<header><span>🏆 Ranking de XP do dia</span><button data-gx="fechar">×</button></header><section><span class="ajuda">Lendo o ranking do guia…</span></section>';
+    const nicks = (await Promise.all(contas.map((c) => naConta(c, 'window.__pokebotCore?.eu?.nick ?? null')))).filter(Boolean);
+    const r = await window.multi.guiaRankingXp(nicks.length ? nicks : ['Bekazin']);
+    if (r?.erro) { gxModal.querySelector('section').innerHTML = `<span class="ruim">${escH(r.erro)}</span>`; return; }
+    const meusSet = new Set(r.meus.map((m) => m.nick.toLowerCase()));
+    const linha = (l) => `<tr class="${meusSet.has(l.nick.toLowerCase()) ? 'eu' : ''}"><td>#${l.pos}</td><td>${escH(l.nick)}</td><td>+${fmtGrande(l.ganho)}</td><td>${fmtGrande(l.total)}<span class="ajuda"> (#${l.posTotal ?? '?'} geral)</span></td></tr>`;
+    const foraTop = r.meus.filter((m) => m.pos > 10);
+    gxModal.innerHTML = `<header><span>🏆 Ranking de XP do dia — ${r.dia.slice(8, 10)}/${r.dia.slice(5, 7)}</span><button data-gx="fechar">×</button></header>
+      <section><div class="linha">${r.meus.map((m) => `<b>${escH(m.nick)}</b>: <span class="ok">#${m.pos}</span> de ${fmtN(r.jogadores)} (+${fmtGrande(m.ganho)} XP)`).join(' · ') || '<span class="ajuda">Suas contas não aparecem no ranking de hoje.</span>'}</div>
+        <span class="ajuda">XP ganho de ${r.diaAnt.slice(8, 10)}/${r.diaAnt.slice(5, 7)} para ${r.dia.slice(8, 10)}/${r.dia.slice(5, 7)} · dados do guia (coleta 2× ao dia${r.geradoEm ? `, última ${new Date(r.geradoEm).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}` : ''})</span></section>
+      <section><table><tr><th>Pos.</th><th>Jogador</th><th>XP do dia</th><th>XP total</th></tr>${r.top.map(linha).join('')}
+        ${foraTop.length ? `<tr><td colspan="4" class="ajuda">…</td></tr>${foraTop.map(linha).join('')}` : ''}</table></section>
+      ${Object.keys(r.historico).length ? `<section><b>Sua posição por dia</b><table><tr><th>Jogador</th>${(Object.values(r.historico)[0] ?? []).map((h) => `<th>${h.dia.slice(8, 10)}/${h.dia.slice(5, 7)}</th>`).join('')}</tr>
+        ${Object.entries(r.historico).map(([n, hs]) => `<tr><td>${escH(n)}</td>${hs.map((h) => `<td>#${h.pos}<span class="ajuda"> +${fmtGrande(h.ganho)}</span></td>`).join('')}</tr>`).join('')}</table></section>` : ''}`;
+  }
+
+  gxFundo.addEventListener('click', (e) => {
+    if (e.target === gxFundo) return gxFundo.classList.remove('aberto');
+    const a = e.target.closest('[data-gx]')?.dataset.gx;
+    if (a === 'fechar') gxFundo.classList.remove('aberto');
+    else if (a === 'recalc' && gx.conta) gxHunts(gx.conta);
+  });
+  gxFundo.addEventListener('change', (e) => {
+    const k = e.target.dataset.gxc;
+    if (!k) return;
+    gx[k] = e.target.value;
+    if (gx.conta) gxHunts(gx.conta);
+  });
+  document.getElementById('bt-rankxp').onclick = gxRanking;
+
 
   // ---------------------------------------------------------------- lives da Twitch → Chrome
   // O bloco `twitch` do estado do jogo (o mesmo do modal da Twitch): `lives` no ar, `oficiais` (com

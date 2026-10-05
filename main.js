@@ -264,6 +264,91 @@ ipcMain.handle('multi:cfg', () => ({ ...lerCfg(), nContas: N_CONTAS, urlJogo: UR
 ipcMain.handle('multi:abrirCockpit', (_e, n) => abrirCockpit(n));
 ipcMain.handle('multi:rotomRegras', (_e, n) => lerRegrasRotom(n));
 ipcMain.handle('multi:twitchLives', (_e, lives) => abrirLivesNovas(lives));
+ipcMain.handle('multi:guiaHunts', (_e, ficha) => guiaHunts(ficha).catch((e) => ({ erro: e.message })));
+ipcMain.handle('multi:guiaRankingXp', (_e, nicks) => guiaRankingXp(nicks).catch((e) => ({ erro: e.message })));
+
+// ---------------------------------------------------------------- Guia HardToCapture
+// "Onde caçar": o site calcula as melhores hunts no navegador. Uma janela ESCONDIDA abre o site
+// (partição própria), recebe a ficha do pokémon ativo, preenche os campos, clica em importar e
+// devolve a tabela. "Ranking XP": o `xp-historico.json` público do site (XP total por jogador e
+// por dia, coletado 2× ao dia) — o ganho do dia é a diferença para o dia anterior.
+const URL_GUIA = 'https://guiapokeidlehardtocapture.site/';
+let janelaGuia = null;
+let guiaPronto = null;
+
+function abrirGuia() {
+  if (janelaGuia && !janelaGuia.isDestroyed() && guiaPronto) return guiaPronto;
+  janelaGuia = new BrowserWindow({ show: false, width: 1300, height: 900, webPreferences: { partition: 'persist:guia', contextIsolation: true, nodeIntegration: false } });
+  janelaGuia.webContents.setUserAgent(UA);
+  guiaPronto = janelaGuia.loadURL(URL_GUIA).then(() => true).catch((e) => { guiaPronto = null; throw e; });
+  janelaGuia.on('closed', () => { janelaGuia = null; guiaPronto = null; });
+  return guiaPronto;
+}
+
+async function guiaHunts(ficha) {
+  await abrirGuia();
+  const js = `(async (f) => {
+    const $ = (s) => document.querySelector(s);
+    const espera = (ms) => new Promise((r) => setTimeout(r, ms));
+    for (let i = 0; i < 40 && !$('#in-colar'); i++) await espera(250);
+    if (!$('#in-colar')) return { erro: 'o site não carregou a aba Onde caçar' };
+    const txt = [f.nome, 'Nv ' + f.nivel, 'Potência P' + f.pot, 'qualidade ' + f.q.toFixed(3).replace('.', ','), f.shiny ? 'Shiny' : '',
+      'STATS ATUAIS', ...['hp', 'atk', 'def', 'spAtk', 'spDef', 'speed'].map((k) => k + ' 0 IV ' + (f.ivs[k] ?? 1)), 'STATS-BASE'].join('\\n');
+    $('#in-colar').value = txt;
+    $('#btn-colar').click();
+    await espera(300);
+    // Refino e extras direto nos campos (o refino do texto dependeria da base da espécie).
+    const por = (sel, v) => { const el = $(sel); if (!el) return; if (el.type === 'checkbox') el.checked = !!v; else el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); };
+    for (const k of ['hp', 'atk', 'def', 'spAtk', 'spDef']) por('#card-pokemon [data-ref="' + k + '"]', f.refino?.[k] ?? 0);
+    por('#in-tm', f.tm); por('#in-aoe', f.aoe); por('#in-vip', f.vip);
+    if (f.area != null) por('#f-area', f.area);
+    if (f.ordem) por('#f-ordem', f.ordem);
+    if (f.min) por('#f-min', f.min);
+    [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Onde caçar')?.click();
+    await espera(1500);
+    const tab = [...document.querySelectorAll('table')].find((t) => t.textContent.includes('Kills/vida'));
+    const cab = [...(tab?.querySelectorAll('thead th') ?? [])].map((t) => t.textContent.trim());
+    const linhas = [...(tab?.querySelectorAll('tbody tr') ?? [])].slice(0, 40).map((r) => [...r.cells].map((c) => c.textContent.trim().replace(/\\s+/g, ' ')));
+    return { cab, linhas, veredito: ($('#veredito') ?? document.querySelector('[id*=veredito]'))?.textContent.trim().replace(/\\s+/g, ' ').slice(0, 400) ?? '',
+      msg: $('#colar-msg')?.textContent.trim() ?? '', coleta: [...document.querySelectorAll('*')].find((e) => e.children.length === 0 && /Última coleta/.test(e.textContent))?.textContent.trim() ?? '' };
+  })(${JSON.stringify(ficha)})`;
+  return janelaGuia.webContents.executeJavaScript(js);
+}
+
+let xpCache = null;
+async function guiaRankingXp(nicks = []) {
+  if (!xpCache || Date.now() - xpCache.em > 10 * 60 * 1000) {
+    const r = await fetch(new URL('xp-historico.json', URL_GUIA), { headers: { 'User-Agent': UA } });
+    if (!r.ok) throw new Error(`xp-historico.json: HTTP ${r.status}`);
+    xpCache = { em: Date.now(), j: await r.json() };
+  }
+  const j = xpCache.j;
+  const dias = Object.keys(j.dias ?? {}).sort();
+  if (dias.length < 2) return { erro: 'o guia ainda não tem dois dias de coleta' };
+  const meus = new Set(nicks.map((n) => String(n).toLowerCase()));
+  const rankingDo = (dia, ant) => {
+    const x = j.dias[dia]?.x ?? {}, xa = j.dias[ant]?.x ?? {};
+    return Object.keys(x).filter((n) => n in xa).map((n) => ({ nick: n, ganho: x[n] - xa[n], total: x[n] }))
+      .sort((a, b) => b.ganho - a.ganho).map((l, i) => ({ ...l, pos: i + 1 }));
+  };
+  const hoje = dias.at(-1), ontem = dias.at(-2);
+  const rk = rankingDo(hoje, ontem);
+  const totais = Object.entries(j.dias[hoje].x).sort((a, b) => b[1] - a[1]);
+  const posTotal = new Map(totais.map(([n], i) => [n.toLowerCase(), i + 1]));
+  // Histórico dos seus nicks: posição e ganho em cada dia.
+  const historico = {};
+  for (let i = 1; i < dias.length; i++) {
+    const r = rankingDo(dias[i], dias[i - 1]);
+    for (const l of r) if (meus.has(l.nick.toLowerCase())) (historico[l.nick] ??= []).push({ dia: dias[i], pos: l.pos, ganho: l.ganho });
+  }
+  return {
+    dia: hoje, diaAnt: ontem, geradoEm: j.geradoEm ?? null, jogadores: rk.length,
+    top: rk.slice(0, 10).map((l) => ({ ...l, posTotal: posTotal.get(l.nick.toLowerCase()) })),
+    meus: rk.filter((l) => meus.has(l.nick.toLowerCase())).map((l) => ({ ...l, posTotal: posTotal.get(l.nick.toLowerCase()) })),
+    historico,
+  };
+}
+
 
 // ---------------------------------------------------------------- lives da Twitch → Chrome
 // O jogo dá bônus de XP a quem assiste as lives oficiais (o vigia acha o login da Twitch no chat).
