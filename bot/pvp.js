@@ -18,7 +18,7 @@
 //    (vitórias > derrotas), encerra de vez. Enquanto a sessão roda, ela substitui a trava do item 2.
 (() => {
   'use strict';
-  const VERSAO_PVP = '1.16.0';
+  const VERSAO_PVP = '1.16.1';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -1109,7 +1109,7 @@
       const porque = `${forcar ? `${sempre ? `jogou contra ${reg.nick} (${reg.venci ? 'venceu' : 'perdeu'}) — ele vai counterar, o time saiu` : `perdeu para ${reg.nick} — a formação que perdeu saiu`} · ` : ''}${melhor.det.join(' · ')}`;
       registrar(`🔮 auto-switch: próximo provável ${quem} → "${melhor.f.nome}" (${porque})`);
       anotarTroca(reg, { acao: 'trocou', previstos, de: atual?.nome, para: melhor.f.nome, paraK: melhor.f.k, motivo: porque });
-      avisar(`🔮 Próximo deve ser ${previstos[0].nick}${anti ? ' (contra o counter dele)' : ''}: troquei para "${melhor.f.nome}"`);
+      avisar(doAgente ? `🤖 Agente trocou para "${melhor.f.nome}" (vem ${previstos[0].nick}) — ${doAgente.motivo}` : `🔮 Próximo deve ser ${previstos[0].nick}${anti ? ' (contra o counter dele)' : ''}: troquei para "${melhor.f.nome}"`);
     }
   }
 
