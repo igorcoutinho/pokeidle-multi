@@ -17,7 +17,7 @@
 // pelo mesmo preço. Só junta evidência para VOCÊ reportar — não faz nada com as contas.
 (() => {
   'use strict';
-  const VERSAO_ITENS = '1.3.0';
+  const VERSAO_ITENS = '1.3.1';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -57,7 +57,7 @@
   const ler = (k, padrao) => { try { return JSON.parse(localStorage.getItem(k)) ?? padrao; } catch { return padrao; } };
   const gravar = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
   const NICKS_INICIAIS = ['wingmenLegate4B', 'emeraldLogouts2q', 'KantoHeart857', 'BlazeRider497', 'AceWave299'];
-  const cfg = { aba: 'principais', periodo: '7d', boss: '', tokensPadrao: 1, custoBoss: {}, monitor: false, cadaMin: 10, conhecidos: NICKS_INICIAIS.join('\n'), ...ler(CHAVE_CFG, {}) };
+  const cfg = { aba: 'principais', periodo: '7d', boss: '', tokensPadrao: 1, custoBoss: {}, moedaLucro: 'orb', monitor: false, cadaMin: 10, conhecidos: NICKS_INICIAIS.join('\n'), ...ler(CHAVE_CFG, {}) };
   const salvarCfg = () => gravar(CHAVE_CFG, cfg);
   let drops = ler(CHAVE_DROPS, {});
   let bosses = ler(CHAVE_BOSS, []);
@@ -101,26 +101,58 @@
   }
   const custoDaLuta = (b) => b.entrada ?? [{ id: BOSS_TOKEN, qtd: Math.max(0, Number(cfg.tokensPadrao) || 1), fonte: 'padrão' }];
 
-  /** Preço de UMA unidade para o custo: média do que você PAGOU (extrato de compras); sem compra, o mercado. */
+  // A moeda do lucro (Gemas por padrão — é nela que esses itens se vendem). O que vier na outra
+  // moeda é convertido pela cotação do próprio Mercado: a mediana de (média em Coins ÷ média em
+  // Gemas) dos itens que têm venda nas duas.
+  const ML = () => (cfg.moedaLucro === 'gold' ? 'gold' : 'orb');
+  const outra = (m) => (m === 'orb' ? 'gold' : 'orb');
+  function coinsPorGema() {
+    const r = [];
+    for (const md of Object.values(mercado?.medias ?? {})) {
+      const g = Number(md?.gold?.media), o = Number(md?.orb?.media);
+      if (g > 0 && o > 0) r.push(g / o);
+    }
+    if (!r.length) return null;
+    r.sort((a, b) => a - b);
+    return r[Math.floor(r.length / 2)];
+  }
+  /** Converte `v` da moeda `de` para a moeda do lucro (null se não há cotação). */
+  function conv(v, de) {
+    if (!v) return 0;
+    if (de === ML()) return v;
+    const c = coinsPorGema();
+    if (!c) return null;
+    return de === 'gold' ? v / c : v * c;
+  }
+  const casaItem = (l, id) => l.chave?.includes(`|i${id}|`) || l.nome?.toLowerCase() === nomeItem(id).toLowerCase();
+
+  /** Preço de UMA unidade para o custo, na moeda do lucro: média do que você PAGOU; sem compra, o mercado. */
   function custoUnitario(id) {
     const dados = window.__pokeVendasDados;
-    let qtd = 0, total = 0;
-    for (const l of dados?.compras ?? []) {
-      if (l.moeda === 'orb') continue;
-      if (l.chave?.includes(`|i${id}|`) || l.nome?.toLowerCase() === nomeItem(id).toLowerCase()) { qtd += l.qtd; total += l.bruto; }
+    const pago = { gold: { q: 0, t: 0 }, orb: { q: 0, t: 0 } };
+    for (const l of dados?.compras ?? []) if (casaItem(l, id)) { const k = l.moeda === 'orb' ? 'orb' : 'gold'; pago[k].q += l.qtd; pago[k].t += l.bruto; }
+    const q = pago.gold.q + pago.orb.q;
+    if (q) {
+      const t = (pago[ML()].t) + (conv(pago[outra(ML())].t, outra(ML())) ?? 0);
+      const misturou = pago[outra(ML())].q > 0;
+      const rot = !misturou ? '' : pago[ML()].q ? ', parte convertida' : `, pagos em ${outra(ML()) === 'gold' ? 'Coins' : 'Gemas'} e convertidos`;
+      return { v: t / q, fonte: `média paga (${fmt(q)} comprados${rot})` };
     }
-    if (qtd) return { v: total / qtd, fonte: `média paga (${fmt(qtd)} comprados)` };
-    const md = mercado?.medias?.[id]?.gold?.media;
-    if (md) return { v: md, fonte: 'média de venda 7 dias' };
-    const r = mercado?.resumo?.[id];
-    if (r?.anuncios && r.minGold) return { v: r.minGold, fonte: 'menor anúncio' };
+    for (const m of [ML(), outra(ML())]) {
+      const md = Number(mercado?.medias?.[id]?.[m]?.media);
+      if (md) { const v = conv(md, m); if (v != null) return { v, fonte: `média de venda 7 dias${m !== ML() ? ' (convertida)' : ''}` }; }
+    }
     return { v: 0, fonte: 'sem preço' };
   }
-  /** Preço de venda HOJE (para o que ainda não vendeu): menor anúncio em Coins; sem anúncio, a média de 7 dias. */
+  /** Preço de venda HOJE, na moeda do lucro: menor anúncio; sem anúncio, a média de 7 dias; senão a outra moeda convertida. */
   function precoHoje(id) {
     const r = mercado?.resumo?.[id];
-    if (r?.anuncios && r.minGold) return Number(r.minGold);
-    return Number(mercado?.medias?.[id]?.gold?.media) || 0;
+    for (const m of [ML(), outra(ML())]) {
+      const min = r?.anuncios ? Number(m === 'orb' ? r.minOrb : r.minGold) : 0;
+      const v = min || Number(mercado?.medias?.[id]?.[m]?.media) || 0;
+      if (v) { const c = conv(v, m); if (c != null) return c; }
+    }
+    return 0;
   }
 
   function lucroBoss() {
@@ -163,8 +195,10 @@
       const vendG = v ? v.vendas.gold : { qtd: 0, total: 0 };
       const vendO = v ? v.vendas.orb : { qtd: 0, total: 0 };
       const qtdVendida = Math.min(c.qtd, (vendG.qtd + vendO.qtd) * parte);
-      const liqG = liquido(vendG.total) * parte;
-      const liqO = liquido(vendO.total) * parte;
+      const naMoeda = { gold: liquido(vendG.total) * parte, orb: liquido(vendO.total) * parte };
+      const convOutra = conv(naMoeda[outra(ML())], outra(ML()));
+      const liqG = naMoeda[ML()] + (convOutra ?? 0);          // tudo na moeda do lucro
+      const liqO = convOutra == null ? naMoeda[outra(ML())] : 0; // sem cotação: fica à parte
       const sobra = Math.max(0, c.qtd - qtdVendida);
       const ph = precoHoje(id);
       const pres = liquido(sobra * ph);
@@ -178,7 +212,8 @@
   function htmlLucro() {
     const L = lucroBoss();
     if (!L.lutas) return '';
-    const sinal = (n) => `<b class="${n >= 0 ? 'pit-v' : 'pit-d'}">${n >= 0 ? '+' : '−'}${preco(Math.abs(n), 'gold')}</b>`;
+    const M = ML();
+    const sinal = (n) => `<b class="${n >= 0 ? 'pit-v' : 'pit-d'}">${n >= 0 ? '+' : '−'}${preco(Math.abs(n), M)}</b>`;
     const lucroReal = L.realizado - L.custoTotal;
     const lucroTotal = L.realizado + L.presumido - L.custoTotal;
     return `<section>
@@ -186,29 +221,30 @@
         <div class="pit-linha">
           <button class="pit-bt" data-a="extrato">⟳ ler compras e vendas (extrato)</button>
           <button class="pit-bt" data-a="mercado">⟳ preços de hoje</button>
+          Moeda: <button class="pit-bt ${M === 'orb' ? 'on' : ''}" data-a="moedaLucro" data-v="orb">💎 Gemas</button><button class="pit-bt ${M === 'gold' ? 'on' : ''}" data-a="moedaLucro" data-v="gold">🪙 Coins</button>
           <span class="pit-ajuda">${L.temVendas ? `extrato lido${L.ate ? ` desde ${quando(L.ate)}` : ''}` : '⚠ extrato ainda não lido — clique em "ler compras e vendas"'}${mercado ? ` · preços de ${quando(mercado.em)}` : ' · sem preços'}</span>
           <span style="flex:1"></span>
           <span class="pit-ajuda">sem dado de entrada, cada luta custa</span> <input type="number" class="pit-in" data-c="tokensPadrao" min="0" max="20" value="${esc(cfg.tokensPadrao)}" style="width:54px"> <span class="pit-ajuda">Boss Token</span>
         </div>
         <div class="pit-cards">
-          <div class="pit-card"><small>Custo (${fmt(L.lutas)} lutas)</small><b>${preco(L.custoTotal, 'gold')}</b>
-            <small style="text-transform:none">${L.custoLinhas.map((c) => `${fmt(c.qtd)}× ${esc(nomeItem(c.id))} a ${preco(c.unit, 'gold')} — ${esc(c.fonte)}`).join('<br>')}</small></div>
-          <div class="pit-card"><small>Vendido (líquido −15%)</small><b>${preco(L.realizado, 'gold')}</b>${L.realizadoOrb ? `<small style="text-transform:none">+ ${preco(L.realizadoOrb, 'orb')}</small>` : ''}</div>
+          <div class="pit-card"><small>Custo (${fmt(L.lutas)} lutas)</small><b>${preco(L.custoTotal, M)}</b>
+            <small style="text-transform:none">${L.custoLinhas.map((c) => `${fmt(c.qtd)}× ${esc(nomeItem(c.id))} a ${preco(c.unit, M)} — ${esc(c.fonte)}`).join('<br>')}</small></div>
+          <div class="pit-card"><small>Vendido (líquido −15%)</small><b>${preco(L.realizado, M)}</b>${L.realizadoOrb ? `<small style="text-transform:none">+ ${preco(L.realizadoOrb, outra(M))}</small>` : ''}</div>
           <div class="pit-card"><small>Lucro realizado</small>${sinal(lucroReal)}<small style="text-transform:none">vendido − custo</small></div>
-          <div class="pit-card"><small>A vender (preço de hoje −15%)</small><b>${preco(L.presumido, 'gold')}</b><small style="text-transform:none">o que caiu e ainda não vendeu</small></div>
+          <div class="pit-card"><small>A vender (preço de hoje −15%)</small><b>${preco(L.presumido, M)}</b><small style="text-transform:none">o que caiu e ainda não vendeu</small></div>
           <div class="pit-card"><small>Lucro presumido</small>${sinal(lucroTotal)}<small style="text-transform:none">vendido + a vender − custo</small></div>
         </div>
         <table class="pit-tab" style="margin-top:8px"><tr><th>Item que caiu no boss</th><th>Caiu</th><th title="das vendas desse item no período, a parte que veio do boss (o resto caiu na hunt)">Vendido (do boss)</th><th>Líquido recebido</th><th>Sobrando</th><th>Preço hoje</th><th>A vender (líq.)</th></tr>
           ${L.itens.map((x) => `<tr><td><b>${esc(x.nome)}</b></td><td>${fmt(x.caiu)}</td>
             <td>${fmt(x.qtdVendida)}${x.parte < 1 ? `<small>${Math.round(x.parte * 100)}% das vendas</small>` : ''}</td>
-            <td>${x.liqG ? preco(x.liqG, 'gold') : '—'}${x.liqO ? `<small>${preco(x.liqO, 'orb')}</small>` : ''}</td>
-            <td>${fmt(x.sobra)}</td><td>${x.ph ? preco(x.ph, 'gold') : '—'}</td><td>${x.pres ? preco(x.pres, 'gold') : '—'}</td></tr>`).join('')}
+            <td>${x.liqG ? preco(x.liqG, M) : '—'}${x.liqO ? `<small>${preco(x.liqO, outra(M))}</small>` : ''}</td>
+            <td>${fmt(x.sobra)}</td><td>${x.ph ? preco(x.ph, M) : '—'}</td><td>${x.pres ? preco(x.pres, M) : '—'}</td></tr>`).join('')}
         </table>
         <table class="pit-tab" style="margin-top:8px"><tr><th>Por boss</th><th>Lutas</th><th>Custo</th><th>Drops a preço de hoje (líq.)</th><th>Lucro presumido</th><th>Por luta</th></tr>
-          ${L.porBoss.map((r) => `<tr><td><b>${esc(r.nome)}</b><small>custo: ${esc(r.fonteCusto ?? 'padrão')}</small></td><td>${fmt(r.lutas)}</td><td>${preco(r.custo, 'gold')}</td><td>${preco(r.valor, 'gold')}</td>
+          ${L.porBoss.map((r) => `<tr><td><b>${esc(r.nome)}</b><small>custo: ${esc(r.fonteCusto ?? 'padrão')}</small></td><td>${fmt(r.lutas)}</td><td>${preco(r.custo, M)}</td><td>${preco(r.valor, M)}</td>
             <td>${sinal(r.valor - r.custo)}</td><td>${sinal((r.valor - r.custo) / r.lutas)}</td></tr>`).join('')}
         </table>
-        <p class="pit-ajuda">Custo = itens de entrada × o que você pagou neles (média do extrato de compras; sem compra, o preço do mercado). Vendido = suas vendas desses itens no período, só a parte que caiu no boss (o resto é da hunt), já sem a taxa de 15%. A vender = o que caiu e ainda não vendeu × o menor anúncio de hoje, −15%. Lucro presumido = vendido + a vender − custo.</p>
+        <p class="pit-ajuda">${(() => { const c = coinsPorGema(); return c ? `Cotação do Mercado: 1 💎 ≈ ${fmt(c)} 🪙 (o que foi na outra moeda entra convertido). ` : 'Sem cotação Coins/Gemas — o que foi na outra moeda aparece à parte. '; })()}Custo = itens de entrada × o que você pagou neles (média do extrato de compras; sem compra, o preço do mercado). Vendido = suas vendas desses itens no período, só a parte que caiu no boss (o resto é da hunt), já sem a taxa de 15%. A vender = o que caiu e ainda não vendeu × o menor anúncio de hoje, −15%. Lucro presumido = vendido + a vender − custo.</p>
       </section>`;
   }
 
@@ -808,6 +844,7 @@
     if (a === 'aba') { cfg.aba = b.dataset.v; pagina = 0; if ((cfg.aba === 'principais' || cfg.aba === 'boss') && !mercado) pedirMercado(); }
     else if (a === 'periodo') { cfg.periodo = b.dataset.v; pagina = 0; }
     else if (a === 'mercado') pedirMercado();
+    else if (a === 'moedaLucro') cfg.moedaLucro = b.dataset.v;
     else if (a === 'extrato') {
       if (!window.__pokeVendas?.garantirDados) { alert('Abra o 💰 Vendas uma vez nesta conta (o módulo ainda não carregou).'); return; }
       b.disabled = true; b.textContent = 'lendo o extrato…';
