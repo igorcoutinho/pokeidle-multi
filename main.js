@@ -7,7 +7,7 @@
 //   - NÚCLEO (bot/core.js): injetado antes do jogo carregar, escuta o WebSocket.
 //   - LÓGICA (bot/logica.js): injetada depois e TROCADA A QUENTE quando o arquivo muda no disco,
 //     sem recarregar o jogo (recarregar no meio de uma hunt conta como derrota).
-const { app, BrowserWindow, ipcMain, shell, dialog, session } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, dialog, session, safeStorage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const vm = require('vm');
@@ -260,10 +260,84 @@ app.on('web-contents-created', (_ev, wc) => {
 // ------------------------------------------------------------------ IPC
 ipcMain.on('pb:core', (ev) => { ev.returnValue = lerBot('core.js'); });
 ipcMain.handle('pb:logica', () => lerLogica());
-ipcMain.handle('multi:cfg', () => ({ ...lerCfg(), nContas: N_CONTAS, urlJogo: URL_JOGO, pastaBot: PASTA_BOT, rotom, variante: VARIANTE }));
+ipcMain.handle('multi:cfg', () => ({ ...lerCfg(), ia: iaConfig(), nContas: N_CONTAS, urlJogo: URL_JOGO, pastaBot: PASTA_BOT, rotom, variante: VARIANTE }));
+ipcMain.handle('multi:iaConfig', (_e, novo) => { try { return novo ? iaSalvar(novo) : iaConfig(); } catch (e) { return { erro: e.message, ...iaConfig() }; } });
+ipcMain.handle('multi:iaTestar', () => iaPerguntar({ sistema: 'Responda só JSON.', usuario: 'Responda {"ok": true, "msg": "<uma frase curta em português>"}', maxTokens: 60, timeoutMs: 20_000 }));
+ipcMain.handle('pb:ia', (_e, pedido) => iaPerguntar(pedido ?? {}));
 ipcMain.handle('multi:abrirCockpit', (_e, n) => abrirCockpit(n));
 ipcMain.handle('multi:rotomRegras', (_e, n) => lerRegrasRotom(n));
 ipcMain.handle('multi:twitchLives', (_e, lives) => abrirLivesNovas(lives));
+
+// ---------------------------------------------------------------- agente de IA (OpenAI / Anthropic)
+// A chave fica SÓ aqui no processo principal, criptografada pelo Windows (safeStorage) no
+// multi.json — nunca vai para as páginas do jogo nem para o GitHub. As contas pedem uma decisão
+// por `pb:ia` (via preload) e recebem só a resposta.
+function iaConfig() {
+  const c = lerCfg().ia ?? {};
+  return { provedor: c.provedor ?? 'openai', modelo: c.modelo ?? '', temChave: !!c.chaveEnc, ligado: !!c.ligado };
+}
+function iaChave() {
+  const enc = lerCfg().ia?.chaveEnc;
+  if (!enc) return null;
+  try { return safeStorage.decryptString(Buffer.from(enc, 'base64')); } catch { return null; }
+}
+function iaSalvar({ provedor, modelo, chave, ligado, apagarChave }) {
+  const cfg = lerCfg();
+  const ia = { ...(cfg.ia ?? {}) };
+  if (provedor) ia.provedor = provedor === 'anthropic' ? 'anthropic' : 'openai';
+  if (modelo != null) ia.modelo = String(modelo).trim();
+  if (ligado != null) ia.ligado = !!ligado;
+  if (apagarChave) delete ia.chaveEnc;
+  if (chave) {
+    if (!safeStorage.isEncryptionAvailable()) throw new Error('o Windows não liberou a criptografia para guardar a chave');
+    ia.chaveEnc = safeStorage.encryptString(String(chave).trim()).toString('base64');
+  }
+  salvarCfg({ ...cfg, ia });
+  return iaConfig();
+}
+const MODELO_PADRAO = { openai: 'gpt-4.1-mini', anthropic: 'claude-sonnet-5-5' };
+
+/** Uma pergunta ao modelo; devolve o JSON que ele responder. `pedido` = { sistema, usuario, maxTokens }. */
+async function iaPerguntar(pedido) {
+  const c = iaConfig();
+  if (!c.ligado) return { ok: false, erro: 'agente desligado (🤖 Agente IA na barra de cima)' };
+  const chave = iaChave();
+  if (!chave) return { ok: false, erro: 'sem chave de API configurada' };
+  const modelo = c.modelo || MODELO_PADRAO[c.provedor];
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), Math.min(30_000, pedido.timeoutMs ?? 15_000));
+  try {
+    let texto;
+    if (c.provedor === 'anthropic') {
+      const r = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST', signal: ctl.signal,
+        headers: { 'content-type': 'application/json', 'x-api-key': chave, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify({ model: modelo, max_tokens: pedido.maxTokens ?? 600, system: pedido.sistema, messages: [{ role: 'user', content: pedido.usuario }] }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j?.error?.message ?? `HTTP ${r.status}`);
+      texto = (j.content ?? []).map((b) => b.text ?? '').join('');
+    } else {
+      const r = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST', signal: ctl.signal,
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${chave}` },
+        body: JSON.stringify({ model: modelo, temperature: 0.3, response_format: { type: 'json_object' },
+          messages: [{ role: 'system', content: pedido.sistema }, { role: 'user', content: pedido.usuario }] }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j?.error?.message ?? `HTTP ${r.status}`);
+      texto = j.choices?.[0]?.message?.content ?? '';
+    }
+    const m = texto.match(/\{[\s\S]*\}/);
+    if (!m) throw new Error('a IA não respondeu em JSON');
+    return { ok: true, modelo, resposta: JSON.parse(m[0]) };
+  } catch (e) {
+    return { ok: false, erro: e.name === 'AbortError' ? 'a IA demorou demais' : e.message };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 ipcMain.handle('multi:guiaHunts', (_e, ficha) => guiaHunts(ficha).catch((e) => ({ erro: e.message })));
 ipcMain.handle('multi:guiaRankingXp', (_e, nicks) => guiaRankingXp(nicks).catch((e) => ({ erro: e.message })));
 

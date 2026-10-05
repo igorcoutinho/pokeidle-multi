@@ -152,6 +152,12 @@ PvP — botão ⚔ PvP
     já usou contra esse seu time (ou logo depois de enfrentá-lo) e o melhor counter simulado com
     os pokémon dele — e escolhe a sua formação que vence ESSE counter (60% da nota; 40% placar
     real). O counter previsto aparece na aba Formações e no Registro.
+    🤖 Agente de IA (opcional): botão "🤖 Agente IA" na barra de cima — escolha OpenAI ou Anthropic,
+    o modelo, e cole a SUA chave de API (fica criptografada pelo Windows no seu PC; só o processo
+    principal a usa). Na aba Formações ligue "🤖 agente de IA decide": depois de cada partida e antes
+    de cada bloqueio acabar, ele recebe um resumo (próximos prováveis, hábitos, suas formações com o
+    placar real, suas regras) e escolhe a formação; depois de cada partida reescreve um caderno de
+    lições que vai junto nas próximas decisões. Falhou/demorou/inventou: vale o modelo estatístico.
     🤖 IA de previsão (padrão): o jogo nunca repete o adversário antes de 10 min (bloqueio medido no
     seu histórico) e junta de novo assim que o bloqueio acaba. A IA prevê quem vem pelo que está
     LIVRE (bloqueio vencido), ATIVO (jogou com você há pouco / V-D subindo na ladder, lida a cada

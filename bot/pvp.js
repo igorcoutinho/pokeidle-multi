@@ -18,7 +18,7 @@
 //    (vitórias > derrotas), encerra de vez. Enquanto a sessão roda, ela substitui a trava do item 2.
 (() => {
   'use strict';
-  const VERSAO_PVP = '1.15.0';
+  const VERSAO_PVP = '1.16.0';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -54,7 +54,7 @@
     // `sessao` = o Auto PvP em andamento: { inicio, v, d, seguidas, estado: rodando|pausada|encerrada, motivo }.
     const padrao = { trava: true, derrotas: 2, seguidas: 0, log: [], sessao: null, autoPvp: { maxSeguidas: 3, checarCada: 10 },
       auto: { ativo: false, modo: 'prever', vitorias: 1, naDerrota: true, focoAmeacas: true, contraCounter: true, ultimoAnti: null, abertura: true, sempreTrocar: 'zator, alan', manterSeVencer: 'erva',
-        regrasRival: 'erva: Blastoise=último; Venusaur≠último', reavaliarFila: true, ia: true, minUso: 2, foraKeys: [], seguidas: 0, usoEm: {} } };
+        regrasRival: 'erva: Blastoise=último; Venusaur≠último', reavaliarFila: true, ia: true, agente: false, minUso: 2, foraKeys: [], seguidas: 0, usoEm: {} } };
     try {
       const s = JSON.parse(localStorage.getItem(CHAVE_CFG)) ?? {};
       return { ...padrao, ...s, auto: { ...padrao.auto, ...(s.auto ?? {}) }, autoPvp: { ...padrao.autoPvp, ...(s.autoPvp ?? {}) } };
@@ -565,6 +565,60 @@
     return n ? { n, ia: ia / n, antiga: antiga / n, bloqMin: bloq / 60_000 } : null;
   }
 
+  // ---------------------------------------------------------------- agente de IA externo
+  // A decisão vai para um modelo (OpenAI/Anthropic) configurado em "🤖 Agente IA" na barra do app.
+  // A página não tem a chave: pede pelo preload (postMessage) e o processo principal chama a API.
+  const CHAVE_CADERNO = 'pokepvp.agente.caderno';
+  let caderno = (() => { try { return localStorage.getItem(CHAVE_CADERNO) ?? ''; } catch { return ''; } })();
+  let agenteStatus = '';
+  function perguntarAgente(pedido, ms = 14_000) {
+    return new Promise((res) => {
+      const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const fim = (r) => { window.removeEventListener('message', ouvir); clearTimeout(t); res(r); };
+      const ouvir = (ev) => { if (ev.source === window && ev.data?.__pbIAResp?.id === id) fim(ev.data.__pbIAResp); };
+      const t = setTimeout(() => fim({ ok: false, erro: 'a IA demorou demais' }), ms + 2000);
+      window.addEventListener('message', ouvir);
+      window.postMessage({ __pbIA: { id, pedido: { ...pedido, timeoutMs: ms } } }, '*');
+    });
+  }
+  const SISTEMA_AGENTE = `Você é o técnico de PvP de um jogador de PokéIdle. Regras do PvP do jogo: duelo 5×5 automático, os pokémon entram em SEQUÊNCIA (quem vence fica em campo com o HP que sobrou e enfrenta o próximo), então a ORDEM é a comp. Tipos e golpes decidem cada 1×1. A fila junta jogadores próximos na ladder (±3 posições); o jogo NUNCA repete o mesmo adversário antes de ~10 min e, quando esse bloqueio acaba e os dois estão buscando, junta de novo na hora. Você recebe: quem deve ser o próximo adversário (com chance e se está livre/bloqueado), o hábito de cada um (repete a comp, usa 2 comps, mesmos pokémon em ordens diferentes, com quem abre), as formações candidatas (ordem exata) com o placar REAL contra cada provável e a nota do modelo estatístico, as regras do próprio jogador (respeite-as) e o seu caderno de lições. Escolha UMA formação entre as candidatas, pensando em quem vem e no que ele costuma usar. Placar real pesa mais que a nota do modelo; poucos jogos = pouca certeza. Responda SÓ JSON: {"formacao":"<id exato da candidata>","motivo":"<1-2 frases em português>","confianca":<0 a 1>}.`;
+
+  function estadoParaAgente(reg, previstos, notas, forcar) {
+    const ultimasDele = (nick) => hist.filter((h) => mesmoNick(h.nick, nick) && h.dele?.length).sort((a, b) => b.em - a.em).slice(0, 3)
+      .map((h) => `${h.venci ? 'V' : 'D'}: ${h.dele.map((x) => x.nome).join(' > ')}`);
+    return {
+      jogador: meuNick(),
+      ultimaPartida: { rival: reg.nick, resultado: reg.venci ? 'vitória' : 'derrota', minhaOrdem: (reg.meu ?? []).map((x) => x.nome), ordemDele: (reg.dele ?? []).map((x) => x.nome) },
+      proximosProvaveis: previstos.slice(0, 4).map((x) => ({ nick: x.nick, chance: `${Math.round(x.p * 100)}%`, situacao: x.base ?? '', voceGanhaDele: `${Math.round((1 - dificuldade(x.nick)) * 100)}%`,
+        habito: habitoDe(x.nick)?.txt ?? 'variado', abreCom: aberturaDe(x.nick)?.nome ?? null, ultimasCompsDele: ultimasDele(x.nick), regras: regrasContra(x.nick).map((r) => `${r.poke} ${r.nao ? '≠' : '='} ${r.pos}`) })),
+      formacaoAtual: chaveAtual(),
+      trocaObrigatoria: !!forcar,
+      candidatas: notas.slice(0, 8).map((n) => ({ id: n.f.k, ordem: nomesDosIds(n.f.ids), geral: `${n.f.v}V ${n.f.n - n.f.v}D`,
+        contraProvaveis: Object.fromEntries(previstos.slice(0, 3).map((x) => { const pv = placarVs(n.f.k, x.nick); return [x.nick, pv.n ? `${pv.v}V ${pv.n - pv.v}D` : 'nunca']; })),
+        notaModelo: Math.round(n.nota * 100), porqueModelo: n.det.slice(0, 3) })),
+      cadernoDeLicoes: caderno || '(vazio — primeira partida com o agente)',
+    };
+  }
+
+  /** Depois de cada partida: o agente reescreve o caderno de lições com o que aconteceu. */
+  async function atualizarCaderno(reg) {
+    if (!cfg.auto.agente) return;
+    const t = trocas.find((x) => !x.pendente && x.veio && mesmoNick(x.veio, reg.nick));
+    const r = await perguntarAgente({
+      sistema: 'Você mantém o caderno de lições de PvP de um jogador de PokéIdle (duelo 5×5 em sequência; a ORDEM é a comp). Reescreva o caderno incorporando a partida nova: lições CONCRETAS por rival (que ordem ganhou/perdeu contra qual comp dele, quem do time dele te derruba, padrões de fila/horário). Mantenha o que continua valendo, corrija o que a partida desmentiu, no máximo 1200 caracteres, em português. Responda SÓ JSON: {"caderno":"<texto>"}.',
+      usuario: JSON.stringify({ cadernoAtual: caderno || '(vazio)', partida: { rival: reg.nick, resultado: reg.venci ? 'vitória' : 'derrota', minhaOrdem: (reg.meu ?? []).map((x) => x.nome), ordemDele: (reg.dele ?? []).map((x) => x.nome), naoEntrouDele: (reg.naoEntrou ?? []).map((x) => x.nome) },
+        decisaoAnterior: t ? { acao: t.acao, previsto: t.previstos?.[0]?.nick ?? null, acertouPrevisao: t.acertou, motivo: t.motivo } : null,
+        placarGeralContraEle: (() => { const d = hist.filter((h) => mesmoNick(h.nick, reg.nick)); return `${d.filter((h) => h.venci).length}V ${d.filter((h) => !h.venci).length}D`; })() }),
+      maxTokens: 700,
+    }, 25_000);
+    if (r.ok && typeof r.resposta?.caderno === 'string') {
+      caderno = r.resposta.caderno.slice(0, 2000);
+      try { localStorage.setItem(CHAVE_CADERNO, caderno); } catch {}
+      registrar('🤖 agente: caderno de lições atualizado');
+    } else if (!r.ok) registrar(`🤖 agente: não atualizou o caderno (${r.erro})`);
+    if (estaAberto()) pintar();
+  }
+
   /** O placar de uma formação contra um jogador, no seu histórico. */
   function placarVs(k, nick) {
     let n = 0, v = 0;
@@ -1011,8 +1065,30 @@
     const forcar = !opc.reavaliando && ((!reg.venci && cfg.auto.naDerrota) || sempre);
     const notas = cand.filter((f) => !forcar || f.k !== chaveAtual())
       .map((f) => ({ f, ...nota(f) })).sort((x, y) => y.nota - x.nota);
-    const melhor = notas[0];
+    let melhor = notas[0];
     const notaAtual = atual ? nota(atual).nota : 0;
+    // 🤖 Agente externo: escolhe entre as candidatas (as regras do jogador já foram aplicadas antes).
+    let doAgente = null;
+    if (cfg.auto.agente && notas.length) {
+      agenteStatus = 'pensando…';
+      const r = await perguntarAgente({ sistema: SISTEMA_AGENTE, usuario: JSON.stringify(estadoParaAgente(reg, previstos, notas, forcar)), maxTokens: 300 });
+      if (minha !== rodadaSwitch) return;
+      const id = String(r.resposta?.formacao ?? '');
+      const esc = r.ok ? notas.find((n) => n.f.k === id) : null;
+      if (esc) {
+        doAgente = { motivo: String(r.resposta.motivo ?? '').slice(0, 240), confianca: Number(r.resposta.confianca) || null, modelo: r.modelo };
+        melhor = { ...esc, det: [`🤖 ${doAgente.motivo}`, ...esc.det] };
+        agenteStatus = `${r.modelo}: escolheu ${esc.f.nome}`;
+      } else if (r.ok && !forcar && id === chaveAtual()) {
+        agenteStatus = `${r.modelo}: manter a atual`;
+        registrar(`🤖 agente: manter a equipe atual — ${String(r.resposta.motivo ?? '').slice(0, 200)}`);
+        anotarTroca(reg, { acao: 'manteve', previstos, de: atual?.nome, para: atual?.nome, motivo: `🤖 agente: ${String(r.resposta.motivo ?? '').slice(0, 200)}` });
+        return;
+      } else {
+        agenteStatus = r.ok ? `respondeu uma formação que não existe (${id}) — vale o modelo` : `falhou: ${r.erro} — vale o modelo`;
+        registrar(`🤖 agente: ${agenteStatus}`);
+      }
+    }
     if (cfg.auto.ultimoAnti && anti) { cfg.auto.ultimoAnti.escolhida = melhor?.f.nome ?? null; salvarCfg(); }
     const quem = previstos.slice(0, 2).map((x) => `${x.nick} (${Math.round(x.p * 100)}%)`).join(', ');
     if (forcar && !melhor) {
@@ -1020,7 +1096,7 @@
       anotarTroca(reg, { acao: 'sem opção', previstos, de: atual?.nome, motivo: `${sempre ? `jogou contra ${reg.nick}` : 'derrota'}, mas sem outra formação` });
       return;
     }
-    if (!forcar && (!melhor || melhor.f.k === chaveAtual() || melhor.nota < notaAtual + 0.02)) {
+    if (!forcar && (!melhor || melhor.f.k === chaveAtual() || (!doAgente && melhor.nota < notaAtual + 0.02))) {
       registrar(`auto-switch: próximo provável ${quem} — a equipe atual já é a melhor para ele${atual ? ` (${nota(atual).det[0] ?? ''})` : ''}`);
       anotarTroca(reg, { acao: 'manteve', previstos, de: atual?.nome, para: atual?.nome, motivo: 'a atual já é a melhor contra eles' });
       return;
@@ -1203,6 +1279,8 @@
           <span ${a.modo === 'prever' ? 'style="display:none"' : ''}>trocar depois de <input type="number" class="ppvp-in" data-c="autoVitorias" min="1" max="10" value="${esc(a.vitorias)}"> vitória(s) seguida(s)</span>
           <label title="depois de VENCER destes, o time fica (eles repetem a comp) — só troca após derrota. Vírgula separa; vale parte do nick.">manter a equipe após vencer: <input class="ppvp-in" data-c="manterSeVencer" value="${esc(a.manterSeVencer ?? '')}" style="width:120px" spellcheck="false"></label>
           <label title="regras da SUA ordem contra um rival. Formato: rival: Pokémon=último; Pokémon≠último; Pokémon=1 — uma linha por rival">regras por rival: <textarea class="ppvp-in" data-c="regrasRival" rows="2" style="width:330px;vertical-align:middle" spellcheck="false">${esc(a.regrasRival ?? '')}</textarea></label>
+          <label title="pede a decisão ao agente de IA configurado em 🤖 Agente IA (barra de cima do app); se ele falhar ou demorar, vale o modelo estatístico"><input type="checkbox" data-a="autoAgente" ${a.agente ? 'checked' : ''}> 🤖 agente de IA decide${agenteStatus ? ` <small>(${esc(agenteStatus)})</small>` : ''}</label>
+          ${a.agente ? `<details style="width:100%"><summary class="ppvp-aviso">📓 caderno de lições do agente (${caderno.length} caracteres)</summary><pre class="ppvp-log" style="max-height:200px">${esc(caderno || 'vazio — ele escreve depois da próxima partida')}</pre><button class="ppvp-bt ppvp-mini" data-a="limparCaderno">limpar caderno</button></details>` : ''}
           <label title="prevê o próximo pelo bloqueio de revanche (medido), por quem está ativo e por quem está perto de você na ladder — e refaz a escolha logo antes de cada bloqueio acabar"><input type="checkbox" data-a="autoIA" ${a.ia ? 'checked' : ''}> 🤖 IA de previsão${(() => { const b = backtestIA(); return b ? ` <small>(acerta ${Math.round(b.ia * 100)}% no seu histórico · regra antiga ${Math.round(b.antiga * 100)}% · bloqueio ${b.bloqMin.toFixed(0)} min)</small>` : ''; })()}</label>
           <label title="refaz a escolha no tempo: com a IA, logo antes de cada bloqueio acabar; sem ela, em 60 s e 120 s de busca"><input type="checkbox" data-a="autoReavaliar" ${a.reavaliarFila ? 'checked' : ''}> reavaliar enquanto busca</label>
           <label title="depois de jogar contra estes (vitória OU derrota), o time sempre troca — eles já viram o seu time e vão counterar. Vírgula separa; vale parte do nick.">sempre trocar depois de jogar contra: <input class="ppvp-in" data-c="sempreTrocar" value="${esc(a.sempreTrocar ?? '')}" style="width:160px" spellcheck="false"></label>
@@ -1261,6 +1339,7 @@
         contarResultado(reg);
         if (reg.dele.length) registrar(`${reg.venci ? 'vitória' : 'derrota'} vs ${reg.nick}: ${reg.dele.map((x) => x.nome).join(' → ')}`);
         conferirTroca(reg);
+        atualizarCaderno(reg).catch(() => {});
         autoSwitch(reg);
       }
     }
@@ -1938,6 +2017,8 @@
     else if (a === 'autoAbertura') cfg.auto.abertura = b.checked;
     else if (a === 'autoReavaliar') cfg.auto.reavaliarFila = b.checked;
     else if (a === 'autoIA') cfg.auto.ia = b.checked;
+    else if (a === 'autoAgente') cfg.auto.agente = b.checked;
+    else if (a === 'limparCaderno') { caderno = ''; try { localStorage.removeItem(CHAVE_CADERNO); } catch {} }
     else if (a === 'calcAtivos') return calcularContraAtivos(b.dataset.v);
     else if (a === 'cruzCalc') return calcularCruz(b.dataset.v);
     else if (a === 'autoFora') {

@@ -11,6 +11,8 @@ contextBridge.exposeInMainWorld('multi', {
   rotomRegras: (n) => ipcRenderer.invoke('multi:rotomRegras', n),
   twitchLives: (lives) => ipcRenderer.invoke('multi:twitchLives', lives),
   guiaHunts: (ficha) => ipcRenderer.invoke('multi:guiaHunts', ficha),
+  iaConfig: (novo) => ipcRenderer.invoke('multi:iaConfig', novo),
+  iaTestar: () => ipcRenderer.invoke('multi:iaTestar'),
   guiaRankingXp: (nicks) => ipcRenderer.invoke('multi:guiaRankingXp', nicks),
   aoMudarLogica: (fn) => ipcRenderer.on('pb:logicaMudou', (_e, codigo) => fn(codigo)),
   aoMudarCore: (fn) => ipcRenderer.on('pb:coreMudou', () => fn()),

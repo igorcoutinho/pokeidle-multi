@@ -58,7 +58,8 @@
   #gx-modal th{text-align:left;color:var(--ouro);padding:4px 6px;white-space:nowrap}
   #gx-modal td{padding:5px 6px;border-top:1px solid #4a2a2a;vertical-align:top}
   #gx-modal tr.eu td{background:#4a2a5a;font-weight:700}
-  #gx-modal .ajuda{opacity:.7;font-size:12px}#gx-modal .ok{color:#7fdc8f;font-weight:700}#gx-modal .ruim{color:#ff8a8a;font-weight:700}
+  #gx-modal .ajuda{opacity:.7;font-size:12px}
+  #ia-modal input,#ia-modal select{background:#2a1515;border:1px solid #8a5a4a;color:var(--texto);border-radius:6px;padding:4px 8px;font:inherit}#gx-modal .ok{color:#7fdc8f;font-weight:700}#gx-modal .ruim{color:#ff8a8a;font-weight:700}
   #aviso{position:fixed;left:50%;top:48px;transform:translateX(-50%);z-index:10;background:#2a1515;border:2px solid var(--ouro);border-radius:10px;padding:8px 14px;font-weight:600;display:none}
 </style>
 </head>
@@ -70,6 +71,7 @@
   <span id="abas-1x1"></span>
   <span class="esp"></span>
   <span class="info" id="info-bot">bot: carregando…</span>
+  <button id="bt-ia" title="Agente de IA (OpenAI/Anthropic) que decide a formação do PvP e aprende com as partidas">🤖 Agente IA</button>
   <button id="bt-rankxp" title="Top 10 do ranking de XP do dia (dados do guiapokeidlehardtocapture.site) e a posição das suas contas">🏆 Ranking XP</button>
   <button id="bt-twitch" title="Quando uma live oficial do jogo entra no ar (bônus de XP), abre no seu Chrome — uma vez por live">📺 Lives → Chrome</button>
   <button id="bt-rebaixar" title="Anunciar uma pedra abaixo do mercado em todas as contas alternativas, de uma vez">📉 Pedra abaixo do mercado</button>
@@ -528,6 +530,45 @@
     if (gx.conta) gxHunts(gx.conta);
   });
   document.getElementById('bt-rankxp').onclick = gxRanking;
+  // ---------------------------------------------------------------- agente de IA: configuração
+  async function abrirIA(msg = '') {
+    const c = await window.multi.iaConfig();
+    gxFundo.classList.add('aberto');
+    gxModal.innerHTML = `<header><span>🤖 Agente de IA do PvP</span><button data-gx="fechar">×</button></header>
+      <section id="ia-modal">
+        <div class="linha"><label><input type="checkbox" data-ia="ligado" ${c.ligado ? 'checked' : ''}> <b>Ligado</b> — as contas com "🤖 agente decide" (aba Formações do ⚔ PvP) pedem a decisão a ele</label></div>
+        <div class="linha">Provedor <select data-ia="provedor"><option value="openai" ${c.provedor === 'openai' ? 'selected' : ''}>OpenAI</option><option value="anthropic" ${c.provedor === 'anthropic' ? 'selected' : ''}>Anthropic (Claude)</option></select>
+          Modelo <input data-ia="modelo" value="${escH(c.modelo)}" placeholder="${c.provedor === 'anthropic' ? 'claude-sonnet-5-5' : 'gpt-4.1-mini'}" style="width:200px"></div>
+        <div class="linha">Chave de API <input data-ia="chave" type="password" placeholder="${c.temChave ? '•••••••• (salva — cole outra para trocar)' : 'cole aqui a sua chave'}" style="width:340px" autocomplete="off">
+          <button data-ia="salvar">💾 salvar</button>${c.temChave ? '<button data-ia="apagar">apagar chave</button>' : ''}<button data-ia="testar" ${c.temChave ? '' : 'disabled'}>⚡ testar</button></div>
+        <div class="linha ajuda">${c.temChave ? '<span class="ok">✓ chave salva neste PC</span>' : 'sem chave'} · a chave fica criptografada pelo Windows no seu PC, só o processo principal do app a usa (nunca vai para as páginas do jogo nem para o GitHub).</div>
+        ${msg ? `<div class="linha">${msg}</div>` : ''}
+        <p class="ajuda">Como funciona: depois de cada partida e antes de cada bloqueio de revanche acabar, o app manda ao modelo um resumo (quem está livre, a previsão da IA estatística, suas formações com o placar contra cada rival, hábitos e as suas regras) e ele escolhe a formação. Depois de cada partida ele reescreve um <b>caderno de lições</b> que vai junto nas próximas decisões. Se ele demorar, errar ou escolher algo que não existe, vale a escolha do modelo estatístico. Cada decisão custa uma chamada de API (frações de centavo num modelo "mini").</p>
+      </section>`;
+  }
+  gxFundo.addEventListener('click', async (e) => {
+    const a = e.target.closest('[data-ia]')?.dataset.ia;
+    if (!a || e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+    const val = (k) => gxModal.querySelector(`[data-ia="${k}"]`);
+    if (a === 'salvar') {
+      const r = await window.multi.iaConfig({ provedor: val('provedor').value, modelo: val('modelo').value, chave: val('chave').value || null, ligado: val('ligado').checked });
+      abrirIA(r.erro ? `<span class="ruim">${escH(r.erro)}</span>` : '<span class="ok">salvo</span>');
+    } else if (a === 'apagar') {
+      await window.multi.iaConfig({ apagarChave: true });
+      abrirIA('chave apagada');
+    } else if (a === 'testar') {
+      e.target.disabled = true; e.target.textContent = 'testando…';
+      const r = await window.multi.iaTestar();
+      abrirIA(r.ok ? `<span class="ok">✓ ${escH(r.modelo)} respondeu: ${escH(r.resposta?.msg ?? 'ok')}</span>` : `<span class="ruim">✗ ${escH(r.erro)}</span>`);
+    }
+  });
+  gxFundo.addEventListener('change', async (e) => {
+    const a = e.target.dataset.ia;
+    if (a === 'ligado') { await window.multi.iaConfig({ ligado: e.target.checked }); }
+    if (a === 'provedor') { await window.multi.iaConfig({ provedor: e.target.value }); abrirIA(); }
+  });
+  document.getElementById('bt-ia').onclick = () => abrirIA();
+
 
 
   // ---------------------------------------------------------------- lives da Twitch → Chrome

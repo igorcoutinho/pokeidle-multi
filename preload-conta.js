@@ -34,6 +34,16 @@ try {
   console.error('[PokeIdle Multi] ajuste do captcha não entrou', e);
 }
 
+// Ponte do agente de IA: a página pede com postMessage({ __pbIA: { id, pedido } }) e recebe
+// { __pbIAResp: { id, ... } }. A chave nunca entra na página — quem chama a API é o processo principal.
+window.addEventListener('message', async (ev) => {
+  if (ev.source !== window || !ev.data?.__pbIA) return;
+  const { id, pedido } = ev.data.__pbIA;
+  let r;
+  try { r = await ipcRenderer.invoke('pb:ia', pedido); } catch (e) { r = { ok: false, erro: e.message }; }
+  window.postMessage({ __pbIAResp: { id, ...r } }, '*');
+});
+
 try {
   const core = ipcRenderer.sendSync('pb:core');
   if (core) webFrame.executeJavaScript(core);
