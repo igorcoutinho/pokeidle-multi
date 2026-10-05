@@ -18,7 +18,7 @@
 //    (vitórias > derrotas), encerra de vez. Enquanto a sessão roda, ela substitui a trava do item 2.
 (() => {
   'use strict';
-  const VERSAO_PVP = '1.13.0';
+  const VERSAO_PVP = '1.14.1';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -53,7 +53,8 @@
     // armário que não entram na rotação; `usoEm` = quando cada slot foi usado por último.
     // `sessao` = o Auto PvP em andamento: { inicio, v, d, seguidas, estado: rodando|pausada|encerrada, motivo }.
     const padrao = { trava: true, derrotas: 2, seguidas: 0, log: [], sessao: null, autoPvp: { maxSeguidas: 3, checarCada: 10 },
-      auto: { ativo: false, modo: 'prever', vitorias: 1, naDerrota: true, focoAmeacas: true, contraCounter: true, ultimoAnti: null, abertura: true, sempreTrocar: 'zator, alan', minUso: 2, foraKeys: [], seguidas: 0, usoEm: {} } };
+      auto: { ativo: false, modo: 'prever', vitorias: 1, naDerrota: true, focoAmeacas: true, contraCounter: true, ultimoAnti: null, abertura: true, sempreTrocar: 'zator, alan', manterSeVencer: 'erva',
+        regrasRival: 'erva: Blastoise=último; Venusaur≠último', reavaliarFila: true, minUso: 2, foraKeys: [], seguidas: 0, usoEm: {} } };
     try {
       const s = JSON.parse(localStorage.getItem(CHAVE_CFG)) ?? {};
       return { ...padrao, ...s, auto: { ...padrao.auto, ...(s.auto ?? {}) }, autoPvp: { ...padrao.autoPvp, ...(s.autoPvp ?? {}) } };
@@ -434,7 +435,7 @@
    * com você pesa menos; os outros ganham peso pela sequência do histórico (depois de A costuma
    * vir B). Devolve [{ nick, p, base }] do mais provável para o menos.
    */
-  function preverProximo(ultimoNick) {
+  function preverProximo(ultimoNick, pesoRepetir = PESO_REPETIR) {
     const agora = Date.now();
     const recentes = [...hist].sort((x, y) => y.em - x.em);
     const ativos = [];
@@ -465,11 +466,11 @@
     // os outros dividem o resto, com peso pela sequência (até 3× para quem sempre vem depois dele).
     const repete = pool.some((n) => mesmoNick(n, ultimoNick));
     const outros = pool.filter((n) => !mesmoNick(n, ultimoNick));
-    const fatiaOutros = repete ? 1 - PESO_REPETIR : 1;
+    const fatiaOutros = repete ? 1 - pesoRepetir : 1;
     const pesos = outros.map((nick) => [nick, 1 + Math.min(2, depois.get(String(nick).toLowerCase()) ?? 0)]);
     const soma = pesos.reduce((t, [, w]) => t + w, 0);
     const lista = pesos.map(([nick, w]) => ({ nick, p: fatiaOutros * (w / soma), base }));
-    if (repete) lista.push({ nick: pool.find((n) => mesmoNick(n, ultimoNick)), p: PESO_REPETIR, base });
+    if (repete) lista.push({ nick: pool.find((n) => mesmoNick(n, ultimoNick)), p: pesoRepetir, base });
     return lista.sort((a, b) => b.p - a.p);
   }
 
@@ -637,6 +638,67 @@
    * o que usou na partida seguinte depois de enfrentar o A e, se ele acabou de te vencer, o time
    * que venceu (ele não muda o que funcionou). O resto é simulado no analise.js.
    */
+  /**
+   * O hábito de comp do rival nos últimos duelos com ordem conhecida: quem REPETE a mesma (60%+ a
+   * mais usada — ex.: Zator, Erva) ou vive de DUAS (75%+ nas duas mais usadas — ex.: Alan). Nesses
+   * casos o que ele vai usar é o que ele já usa, não um counter simulado.
+   */
+  function habitoDe(nick) {
+    const recentes = hist.filter((h) => mesmoNick(h.nick, nick) && !h.deleSemOrdem && (h.dele?.length ?? 0) >= 3)
+      .sort((a, b) => b.em - a.em).slice(0, 12);
+    if (recentes.length < 3) return null;
+    const conta = new Map();
+    for (const h of recentes) {
+      const k = h.dele.map((x) => x.nome).join('>');
+      const c = conta.get(k) ?? { time: timeDoRival(h), n: 0 };
+      c.n++;
+      conta.set(k, c);
+    }
+    const tops = [...conta.values()].sort((a, b) => b.n - a.n);
+    const n = recentes.length;
+    if (tops[0].n / n >= 0.6) return { tipo: 'repete', comps: [tops[0].time], txt: `repete a mesma comp (${tops[0].n}/${n})` };
+    if (tops[1] && (tops[0].n + tops[1].n) / n >= 0.75) return { tipo: 'duas', comps: [tops[0].time, tops[1].time], txt: `usa 2 comps (${tops[0].n + tops[1].n}/${n})` };
+    // Mesmos pokémon em ordens diferentes (ex.: Zator, Alan): conta pelo CONJUNTO e prevê as 3
+    // ordens mais usadas dele.
+    const conj = new Map();
+    for (const h of recentes) {
+      const k = [...new Set(timeDoRival(h).map((x) => x.nome))].sort().join('|');
+      conj.set(k, (conj.get(k) ?? 0) + 1);
+    }
+    const [, nConj] = [...conj.entries()].sort((a, b) => b[1] - a[1])[0];
+    if (nConj / n >= 0.6) return { tipo: 'mesmos', comps: tops.slice(0, 3).map((t) => t.time), txt: `sempre os mesmos pokémon (${nConj}/${n}), ${conta.size} ordens` };
+    return null;
+  }
+
+  /** "erva: Blastoise=último; Venusaur≠último" → regras da SUA ordem contra aquele rival. */
+  function regrasContra(nick) {
+    const out = [];
+    for (const linha of String(cfg.auto.regrasRival ?? '').split(/\n|\|/)) {
+      const [quem, resto] = linha.split(':');
+      if (!resto || !quem.trim() || !String(nick ?? '').toLowerCase().includes(quem.trim().toLowerCase())) continue;
+      for (const r of resto.split(';')) {
+        const m = r.trim().match(/^(.+?)\s*(=|≠|!=)\s*(último|ultimo|primeiro|\d)$/i);
+        if (m) out.push({ poke: m[1].trim().toLowerCase(), nao: m[2] !== '=', pos: m[3].toLowerCase() });
+      }
+    }
+    return out;
+  }
+  /** Quantas regras a formação cumpre (+) ou quebra (−) contra o rival. */
+  function placarRegras(f, nick) {
+    const regras = regrasContra(nick);
+    if (!regras.length) return null;
+    const nomes = nomesDosIds(f.ids).map((x) => String(x).toLowerCase());
+    let ok = 0, ruim = 0;
+    for (const r of regras) {
+      const i = nomes.findIndex((n) => n.includes(r.poke));
+      if (i < 0) continue;
+      const alvo = r.pos.startsWith('ult') ? nomes.length - 1 : r.pos === 'primeiro' ? 0 : Number(r.pos) - 1;
+      const bate = i === alvo;
+      if (bate !== r.nao) ok++; else ruim++;
+    }
+    return { ok, ruim, total: regras.length };
+  }
+
   async function calcularAntiCounter(reg, previstos, cand) {
     const an = window.__pokeAnalise;
     if (!an?.contraDoCounter) return null;
@@ -654,6 +716,9 @@
         if (deles[i + 1]) conhecidos.push(timeDoRival(deles[i + 1])); // a resposta dele depois de ver o A
       });
       if (mesmoNick(reg.nick, x.nick) && !reg.venci) conhecidos.unshift(timeDoRival(reg));
+      // Hábito forte (repete / 2 comps): o que ele vai usar é o que ele já usa.
+      const hab = habitoDe(x.nick);
+      if (hab) return { nick: x.nick, peso: pesoNaEscolha(x), vistos, conhecidos: hab.comps.filter((t) => t.length >= 2), soConhecidos: true };
       return { nick: x.nick, peso: pesoNaEscolha(x), vistos, conhecidos: conhecidos.filter((t) => t.length >= 2).slice(0, 4) };
     });
     try {
@@ -741,18 +806,41 @@
     } catch (e) { registrar(`abertura: não deu (${e.message})`); }
   }
 
+  /** Rivais de "manter se vencer" (ex.: Erva — repete a comp): depois de VENCER dele, não troca. */
+  const manterContra = (nick) => String(cfg.auto.manterSeVencer ?? '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean)
+    .some((x) => String(nick ?? '').toLowerCase().includes(x));
+
+  let reavaliacoes = [];
   async function autoSwitchPrevendo(reg) {
     const minha = ++rodadaSwitch;
+    for (const t of reavaliacoes.splice(0)) clearTimeout(t);
+    if (reg.venci && manterContra(reg.nick)) {
+      registrar(`auto-switch: venceu ${reg.nick} — ele repete a comp, a equipe FICA (só troca contra ele depois de uma derrota)`);
+      anotarTroca(reg, { acao: 'manteve', previstos: preverProximo(reg.nick), motivo: `venceu ${reg.nick}: contra ele só troca após derrota` });
+      return;
+    }
     await escolherFormacao(reg, minha);
     if (minha === rodadaSwitch) await ajustarAbertura(preverProximo(reg.nick), minha);
+    // A busca demorando = pouca gente na fila: o mais provável passa a ser quem você ACABOU de
+    // enfrentar. Reavalia em 60 s e 120 s (se nenhuma partida chegou), com mais peso para ele.
+    if (!cfg.auto.reavaliarFila) return;
+    const idAgora = hist[0]?.id;
+    for (const [ms, peso] of [[60_000, 0.5], [120_000, 0.75]]) {
+      reavaliacoes.push(setTimeout(async () => {
+        if (minha !== rodadaSwitch || hist[0]?.id !== idAgora || !cfg.auto.ativo) return;
+        registrar(`auto-switch: a busca está demorando (${ms / 1000} s) — ${reg.nick} fica com ${Math.round(peso * 100)}% de chance de vir de novo`);
+        await escolherFormacao(reg, minha, { pesoRepetir: peso, reavaliando: true });
+        if (minha === rodadaSwitch) await ajustarAbertura(preverProximo(reg.nick, peso), minha);
+      }, ms));
+    }
   }
 
   /** Rivais de "sempre trocar" (lista separada por vírgula; vale parte do nick: "alan" pega "xAlanx"). */
   const sempreTrocarContra = (nick) => String(cfg.auto.sempreTrocar ?? '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean)
     .some((x) => String(nick ?? '').toLowerCase().includes(x));
 
-  async function escolherFormacao(reg, minha) {
-    const previstos = preverProximo(reg.nick);
+  async function escolherFormacao(reg, minha, opc = {}) {
+    const previstos = preverProximo(reg.nick, opc.pesoRepetir ?? PESO_REPETIR);
     if (!previstos.length) {
       registrar('auto-switch: ainda não há adversários suficientes no histórico para prever o próximo');
       anotarTroca(reg, { acao: 'sem opção', motivo: 'sem adversários ativos no histórico' });
@@ -777,7 +865,14 @@
     const nota = (f) => {
       const r0 = pontuar(f, previstos);
       const ba = bonusAb.get(f.k);
-      const r = ba ? { nota: r0.nota + ba.b, det: [...r0.det, `${ba.lider} responde ao ${ab0.nome} de ${previstos[0].nick}`] } : r0;
+      let r = ba ? { nota: r0.nota + ba.b, det: [...r0.det, `${ba.lider} responde ao ${ab0.nome} de ${previstos[0].nick}`] } : r0;
+      // Regras suas por rival (ex.: contra o Erva, Blastoise em último e Venusaur antes do fim).
+      for (const x of previstos.slice(0, 3)) {
+        const pr = placarRegras(f, x.nick);
+        if (!pr) continue;
+        const delta = 0.1 * x.p * (pr.ok - pr.ruim);
+        if (delta) r = { nota: r.nota + delta, det: [...r.det, `regras vs ${x.nick}: ${pr.ok}/${pr.total}`] };
+      }
       const a = anti?.notas?.[f.k];
       if (!a) return r;
       return { nota: PESO_ANTI * a.nota + (1 - PESO_ANTI) * r.nota,
@@ -789,12 +884,11 @@
     }
     // Troca obrigatória: perdeu (com "trocar após derrota") OU jogou contra um dos rivais de
     // "sempre trocar" (Zator, Alan…), ganhando ou perdendo — ele já viu esse time e vai counterar.
-    // O time que jogou SAI (os mesmos 5 em outra ordem também não contam como troca).
-    const sempre = sempreTrocarContra(reg.nick);
-    const forcar = (!reg.venci && cfg.auto.naDerrota) || sempre;
-    const conjunto = (ids) => [...(ids ?? [])].map(Number).sort((x, y) => x - y).join(',');
-    const jogou = conjunto(meuTimeIds);
-    const notas = cand.filter((f) => !forcar || (f.k !== chaveAtual() && conjunto(f.ids) !== jogou))
+    // A ORDEM que jogou sai. Outra ordem dos mesmos 5 conta como troca: no PvP a ordem é a comp, e
+    // quem usa sempre os mesmos 5 pokémon (o seu caso) ficava sem nenhuma opção.
+    const sempre = !opc.reavaliando && sempreTrocarContra(reg.nick);
+    const forcar = !opc.reavaliando && ((!reg.venci && cfg.auto.naDerrota) || sempre);
+    const notas = cand.filter((f) => !forcar || f.k !== chaveAtual())
       .map((f) => ({ f, ...nota(f) })).sort((x, y) => y.nota - x.nota);
     const melhor = notas[0];
     const notaAtual = atual ? nota(atual).nota : 0;
@@ -899,7 +993,7 @@
     const geral = cand.map((f) => ({ f, ...pontuar(f, previstos) })).sort((x, y) => y.nota - x.nota)[0];
     return `<div class="ppvp-destaque" style="background:#2a2a4a;border-color:#8a8aff">
         🔮 Último adversário: <b>${esc(ultimo.nick)}</b> (${ultimo.venci ? '<span class="ppvp-v">venceu</span>' : '<span class="ppvp-d">perdeu</span>'}) · ativos na fila e chance de vir agora:
-        ${previstos.map((x) => { const d = dificuldade(x.nick); return `<b>${esc(x.nick)}</b> ${Math.round(x.p * 100)}% <small class="${d > 0.55 ? 'ppvp-d' : d < 0.35 ? 'ppvp-v' : ''}">(você ganha ${Math.round((1 - d) * 100)}%${d > 0.55 ? ' · ameaça' : ''}${(() => { const ab = aberturaDe(x.nick); return ab ? ` · abre de ${esc(ab.nome)} ${ab.vezes}/${ab.de}` : ''; })()})</small>`; }).join(' · ')}
+        ${previstos.map((x) => { const d = dificuldade(x.nick); return `<b>${esc(x.nick)}</b> ${Math.round(x.p * 100)}% <small class="${d > 0.55 ? 'ppvp-d' : d < 0.35 ? 'ppvp-v' : ''}">(você ganha ${Math.round((1 - d) * 100)}%${d > 0.55 ? ' · ameaça' : ''}${(() => { const ab = aberturaDe(x.nick); return ab ? ` · abre de ${esc(ab.nome)} ${ab.vezes}/${ab.de}` : ''; })()}${(() => { const h = habitoDe(x.nick); return h ? ` · ${esc(h.txt)}` : ''; })()})</small>`; }).join(' · ')}
         <small class="ppvp-aviso">(${esc(previstos[0].base)}; quem acabou de lutar com você pesa menos)</small>
         <table class="ppvp-tab" style="margin-top:4px"><tr><th>Contra</th><th>Melhor formação</th><th>Por quê</th></tr>
         ${previstos.map((x) => { const m = melhorPara(x.nick); return `<tr><td><b>${esc(x.nick)}</b></td><td>${m ? esc(m.f.nome) + (m.f.simulada ? ' <small class="ppvp-aviso">(simulada)</small>' : '') : '—'}</td><td>${m ? esc(m.r.fonte) : '—'}</td></tr>`; }).join('')}
@@ -986,6 +1080,9 @@
         ${a.modo === 'prever' ? htmlPrevisao(todas) : ''}
         <div class="ppvp-linha">
           <span ${a.modo === 'prever' ? 'style="display:none"' : ''}>trocar depois de <input type="number" class="ppvp-in" data-c="autoVitorias" min="1" max="10" value="${esc(a.vitorias)}"> vitória(s) seguida(s)</span>
+          <label title="depois de VENCER destes, o time fica (eles repetem a comp) — só troca após derrota. Vírgula separa; vale parte do nick.">manter a equipe após vencer: <input class="ppvp-in" data-c="manterSeVencer" value="${esc(a.manterSeVencer ?? '')}" style="width:120px" spellcheck="false"></label>
+          <label title="regras da SUA ordem contra um rival. Formato: rival: Pokémon=último; Pokémon≠último; Pokémon=1 — uma linha por rival">regras por rival: <textarea class="ppvp-in" data-c="regrasRival" rows="2" style="width:330px;vertical-align:middle" spellcheck="false">${esc(a.regrasRival ?? '')}</textarea></label>
+          <label title="se a busca demorar (60 s / 120 s), pouca gente na fila: reavalia dando mais chance de vir o MESMO adversário"><input type="checkbox" data-a="autoReavaliar" ${a.reavaliarFila ? 'checked' : ''}> busca demorando → o último adversário fica mais provável</label>
           <label title="depois de jogar contra estes (vitória OU derrota), o time sempre troca — eles já viram o seu time e vão counterar. Vírgula separa; vale parte do nick.">sempre trocar depois de jogar contra: <input class="ppvp-in" data-c="sempreTrocar" value="${esc(a.sempreTrocar ?? '')}" style="width:160px" spellcheck="false"></label>
           <label title="se o próximo provável sempre abre com o mesmo pokémon, quem vence esse 1×1 vai na frente (o resto mantém a ordem)"><input type="checkbox" data-a="autoAbertura" ${a.abertura ? 'checked' : ''}> abertura (contra quem sempre abre igual, põe na frente quem vence o abridor)</label>
           <label title="quem te enfrentar vai montar um time para bater o que você acabou de jogar; o switch escolhe a formação que vence ESSE time (o counter do counter)"><input type="checkbox" data-a="autoAnti" ${a.contraCounter ? 'checked' : ''}> counter do counter (vencer o time que vão montar contra o que você jogou)</label>
@@ -1124,6 +1221,8 @@
     });
     fundo.addEventListener('change', (e) => {
       if (e.target.dataset.c === 'cruzA' || e.target.dataset.c === 'cruzB') { cruz[e.target.dataset.c === 'cruzA' ? 'a' : 'b'] = e.target.value; cruz.calc = null; pintar(); }
+      if (e.target.dataset.c === 'manterSeVencer') { cfg.auto.manterSeVencer = e.target.value; salvarCfg(); }
+      if (e.target.dataset.c === 'regrasRival') { cfg.auto.regrasRival = e.target.value; salvarCfg(); }
       if (e.target.dataset.c === 'sempreTrocar') { cfg.auto.sempreTrocar = e.target.value; salvarCfg(); }
       if (e.target.dataset.c === 'apSeg') { cfg.autoPvp.maxSeguidas = Math.max(1, Math.min(10, Number(e.target.value) || 3)); salvarCfg(); pintar(); }
       if (e.target.dataset.c === 'apCada') { cfg.autoPvp.checarCada = Math.max(2, Math.min(50, Number(e.target.value) || 10)); salvarCfg(); pintar(); }
@@ -1712,6 +1811,7 @@
     else if (a === 'autoFoco') cfg.auto.focoAmeacas = b.checked;
     else if (a === 'autoAnti') cfg.auto.contraCounter = b.checked;
     else if (a === 'autoAbertura') cfg.auto.abertura = b.checked;
+    else if (a === 'autoReavaliar') cfg.auto.reavaliarFila = b.checked;
     else if (a === 'calcAtivos') return calcularContraAtivos(b.dataset.v);
     else if (a === 'cruzCalc') return calcularCruz(b.dataset.v);
     else if (a === 'autoFora') {

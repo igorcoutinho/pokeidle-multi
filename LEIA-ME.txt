@@ -152,6 +152,12 @@ PvP — botão ⚔ PvP
     já usou contra esse seu time (ou logo depois de enfrentá-lo) e o melhor counter simulado com
     os pokémon dele — e escolhe a sua formação que vence ESSE counter (60% da nota; 40% placar
     real). O counter previsto aparece na aba Formações e no Registro.
+    Manter após vencer (padrão: erva): depois de VENCER desses, a equipe fica — só troca após derrota.
+    Regras por rival (padrão: "erva: Blastoise=último; Venusaur≠último"): formações que cumprem
+    ganham pontos quando ele é o próximo provável. Formato: rival: Pokémon=último|primeiro|N; ...
+    Hábito do rival: quem repete a comp, usa 2 comps ou sempre os mesmos pokémon é previsto com o
+    que ele já usa (em vez do counter simulado). Busca demorando (60 s / 120 s): reavalia dando
+    mais chance de vir de novo o último adversário. Outra ordem dos mesmos 5 conta como troca.
     Sempre trocar (padrão: zator, alan): depois de jogar contra eles — vitória OU derrota — o
     time sempre sai (os mesmos 5 em outra ordem não contam) e entra o que vence o counter do
     time que você acabou de usar. Lista editável na aba Formações (vale parte do nick).

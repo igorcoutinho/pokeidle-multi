@@ -7,7 +7,7 @@
 // fica) do seu time contra os times de outros jogadores, e mede quanto cada candidato melhora.
 (() => {
   'use strict';
-  const VERSAO_ANALISE = '1.2.0';
+  const VERSAO_ANALISE = '1.2.1';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -572,7 +572,8 @@
         if (time.length >= 2) xs.push({ time, fonte: 'real', peso: 2 });
       }
       // (2) simulado: o melhor time de 5 (e a melhor ordem) que ele monta contra o A
-      if (fortes.length >= 2) {
+      // Quem REPETE a comp (ou só usa 2): o counter dele é o que ele já usa — não precisa simular.
+      if (fortes.length >= 2 && !r.soConhecidos) {
         const tops = [];
         let n = 0;
         for (const combo of combinacoes(fortes, Math.min(5, fortes.length))) {
