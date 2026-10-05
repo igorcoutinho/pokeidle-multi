@@ -7,7 +7,7 @@
 // A comissão é a do jogo: `shared/taxa-mercado.mjs`, o mesmo arquivo que o servidor usa.
 (() => {
   'use strict';
-  const VERSAO_VENDAS = '1.1.1';
+  const VERSAO_VENDAS = '1.1.2';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -23,6 +23,8 @@
     infoRebaixar: () => infoRebaixar(),
     previaRebaixar: (o) => previaRebaixar(o),
     rebaixarAgora: (o) => rebaixarAgora(o),
+    /** Baixa o extrato (compras e vendas). `desde` = 0 → tudo. Usado pelo 📦 Itens → Boss (lucro). */
+    garantirDados: (forcar = false, desde = null) => garantirDados(forcar, desde),
     fechar: () => fechar(),
   };
   window.__pokeVendas = V;
@@ -544,8 +546,8 @@
   }
 
   /** Baixa o que falta para cobrir o período pedido (ou tudo, se `forcar`). */
-  async function garantirDados(forcar = false) {
-    const desde = inicioDoPeriodo();
+  async function garantirDados(forcar = false, desdeFixo = null) {
+    const desde = desdeFixo ?? inicioDoPeriodo();
     const cobre = dados.baixadoEm && !forcar && (dados.completo || (desde && desde >= dados.ate));
     if (cobre || ocupado) return pintar();
     if (!core.logado) { msg = 'Faça login nesta conta para ler o extrato.'; return pintar(); }

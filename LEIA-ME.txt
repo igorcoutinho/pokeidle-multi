@@ -48,6 +48,12 @@ ITENS E BOSS — botão 📦 Itens
     com o perfil público (nível, capturas, Pokédex, guild) e quem anuncia pelo mesmo preço.
     "Monitorar nesta conta" varre a cada N min (ligue em UMA conta). Lista própria de nicks
     suspeitos, ☑ para escolher e "📋 copiar relatório" com o texto pronto para a moderação.
+  - Aba Boss → 💰 Lucro do boss (no período): custo = itens de entrada de cada luta (Boss Token;
+    medido na entrada ou pela ficha do boss) × o que você PAGOU neles (média do extrato de
+    compras; sem compra, o mercado). Vendido = suas vendas dos itens que caíram no boss (só a
+    parte do boss, se o item também cai na hunt), −15%. A vender = o que caiu e ainda não vendeu
+    × o menor anúncio de hoje, −15%. Mostra lucro realizado, lucro presumido e lucro por boss e
+    por luta. Botões: "ler compras e vendas (extrato)" e "preços de hoje".
   - Aba Boss: cada luta contra boss é gravada sozinha — vitória com os drops, ou derrota.
     Resumo por boss (lutas, V/D, % de vitórias com peça de TM, drops por vitória) e histórico
     paginado, com filtro por boss e por período.

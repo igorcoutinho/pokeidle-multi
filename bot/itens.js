@@ -17,7 +17,7 @@
 // pelo mesmo preço. Só junta evidência para VOCÊ reportar — não faz nada com as contas.
 (() => {
   'use strict';
-  const VERSAO_ITENS = '1.2.0';
+  const VERSAO_ITENS = '1.3.0';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -57,7 +57,7 @@
   const ler = (k, padrao) => { try { return JSON.parse(localStorage.getItem(k)) ?? padrao; } catch { return padrao; } };
   const gravar = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
   const NICKS_INICIAIS = ['wingmenLegate4B', 'emeraldLogouts2q', 'KantoHeart857', 'BlazeRider497', 'AceWave299'];
-  const cfg = { aba: 'principais', periodo: '7d', boss: '', monitor: false, cadaMin: 10, conhecidos: NICKS_INICIAIS.join('\n'), ...ler(CHAVE_CFG, {}) };
+  const cfg = { aba: 'principais', periodo: '7d', boss: '', tokensPadrao: 1, custoBoss: {}, monitor: false, cadaMin: 10, conhecidos: NICKS_INICIAIS.join('\n'), ...ler(CHAVE_CFG, {}) };
   const salvarCfg = () => gravar(CHAVE_CFG, cfg);
   let drops = ler(CHAVE_DROPS, {});
   let bosses = ler(CHAVE_BOSS, []);
@@ -79,6 +79,138 @@
     const p = PRINCIPAIS.find((x) => x.nome === d.nome || nomeItem(x.id, x.nome) === d.nome);
     return p?.id ?? null;
   };
+
+  // ---------------------------------------------------------------- lucro do boss
+  const BOSS_TOKEN = 70000;
+  let entrada = null; // a entrada em boss em andamento: { em, key, nome, antes, tokens }
+
+  /**
+   * O que a luta custou para entrar: [{ id, qtd }]. Ordem de confiança: a ficha do boss que o jogo
+   * manda no login (`bossesJogaveis[].entrada`), o que sumiu da bolsa ao entrar (medido), o último
+   * custo medido desse boss, e por fim o padrão (1 Boss Token, ajustável).
+   */
+  function entradaDaLuta(e) {
+    const key = e.key ?? entrada?.key ?? null;
+    const ficha = (core.bossesJogaveis ?? []).find((b) => b.key === key)?.entrada;
+    if (ficha?.itemId && ficha.qtd) return [{ id: Number(ficha.itemId), qtd: Number(ficha.qtd), fonte: 'ficha' }];
+    const medido = entrada && (entrada.key === key || entrada.nome === e.nome) && Date.now() - entrada.em < 15 * 60_000 ? entrada.tokens : null;
+    if (medido) return [{ id: BOSS_TOKEN, qtd: medido, fonte: 'medido' }];
+    const salvo = cfg.custoBoss[key ?? e.nome];
+    if (salvo) return [{ id: BOSS_TOKEN, qtd: salvo, fonte: 'medido antes' }];
+    return null; // usa o padrão na conta
+  }
+  const custoDaLuta = (b) => b.entrada ?? [{ id: BOSS_TOKEN, qtd: Math.max(0, Number(cfg.tokensPadrao) || 1), fonte: 'padrão' }];
+
+  /** Preço de UMA unidade para o custo: média do que você PAGOU (extrato de compras); sem compra, o mercado. */
+  function custoUnitario(id) {
+    const dados = window.__pokeVendasDados;
+    let qtd = 0, total = 0;
+    for (const l of dados?.compras ?? []) {
+      if (l.moeda === 'orb') continue;
+      if (l.chave?.includes(`|i${id}|`) || l.nome?.toLowerCase() === nomeItem(id).toLowerCase()) { qtd += l.qtd; total += l.bruto; }
+    }
+    if (qtd) return { v: total / qtd, fonte: `média paga (${fmt(qtd)} comprados)` };
+    const md = mercado?.medias?.[id]?.gold?.media;
+    if (md) return { v: md, fonte: 'média de venda 7 dias' };
+    const r = mercado?.resumo?.[id];
+    if (r?.anuncios && r.minGold) return { v: r.minGold, fonte: 'menor anúncio' };
+    return { v: 0, fonte: 'sem preço' };
+  }
+  /** Preço de venda HOJE (para o que ainda não vendeu): menor anúncio em Coins; sem anúncio, a média de 7 dias. */
+  function precoHoje(id) {
+    const r = mercado?.resumo?.[id];
+    if (r?.anuncios && r.minGold) return Number(r.minGold);
+    return Number(mercado?.medias?.[id]?.gold?.media) || 0;
+  }
+
+  function lucroBoss() {
+    const de = inicioPeriodo();
+    const lutas = bosses.filter((b) => b.em >= de);
+    const custos = new Map(); // id → qtd gasta
+    const caiu = new Map();   // id → { qtd, nome }
+    const porBoss = new Map();
+    for (const b of lutas) {
+      let custoLuta = 0;
+      for (const c of custoDaLuta(b)) {
+        custos.set(c.id, (custos.get(c.id) ?? 0) + c.qtd);
+        custoLuta += c.qtd * custoUnitario(c.id).v;
+      }
+      let valorLuta = 0;
+      for (const x of b.drops) {
+        if (x.id == null) continue;
+        const c = caiu.get(x.id) ?? { qtd: 0, nome: x.nome };
+        c.qtd += x.qtd;
+        caiu.set(x.id, c);
+        valorLuta += liquido(x.qtd * precoHoje(x.id));
+      }
+      const r = porBoss.get(b.nome) ?? { nome: b.nome, lutas: 0, vit: 0, custo: 0, valor: 0, fonteCusto: custoDaLuta(b)[0]?.fonte };
+      r.lutas++; if (b.venceu) r.vit++;
+      r.custo += custoLuta; r.valor += valorLuta;
+      porBoss.set(b.nome, r);
+    }
+    let custoTotal = 0;
+    const custoLinhas = [...custos.entries()].map(([id, qtd]) => {
+      const u = custoUnitario(id);
+      custoTotal += qtd * u.v;
+      return { id, qtd, unit: u.v, fonte: u.fonte, total: qtd * u.v };
+    });
+    // Vendas: a parte do que vendeu que veio do BOSS (o mesmo item também cai na hunt).
+    let realizado = 0, realizadoOrb = 0, presumido = 0;
+    const itens = [...caiu.entries()].map(([id, c]) => {
+      const dp = dropsNoPeriodo(id);
+      const parte = dp.boss + dp.hunt > 0 ? dp.boss / (dp.boss + dp.hunt) : 1;
+      const v = vendasDoItem(id, nomeItem(id, c.nome));
+      const vendG = v ? v.vendas.gold : { qtd: 0, total: 0 };
+      const vendO = v ? v.vendas.orb : { qtd: 0, total: 0 };
+      const qtdVendida = Math.min(c.qtd, (vendG.qtd + vendO.qtd) * parte);
+      const liqG = liquido(vendG.total) * parte;
+      const liqO = liquido(vendO.total) * parte;
+      const sobra = Math.max(0, c.qtd - qtdVendida);
+      const ph = precoHoje(id);
+      const pres = liquido(sobra * ph);
+      realizado += liqG; realizadoOrb += liqO; presumido += pres;
+      return { id, nome: nomeItem(id, c.nome), caiu: c.qtd, parte, qtdVendida, liqG, liqO, sobra, ph, pres };
+    }).sort((a, b) => (b.liqG + b.pres) - (a.liqG + a.pres));
+    return { lutas: lutas.length, custoTotal, custoLinhas, itens, realizado, realizadoOrb, presumido,
+      porBoss: [...porBoss.values()].sort((a, b) => b.lutas - a.lutas), temVendas: !!window.__pokeVendasDados?.baixadoEm, ate: window.__pokeVendasDados?.ate };
+  }
+
+  function htmlLucro() {
+    const L = lucroBoss();
+    if (!L.lutas) return '';
+    const sinal = (n) => `<b class="${n >= 0 ? 'pit-v' : 'pit-d'}">${n >= 0 ? '+' : '−'}${preco(Math.abs(n), 'gold')}</b>`;
+    const lucroReal = L.realizado - L.custoTotal;
+    const lucroTotal = L.realizado + L.presumido - L.custoTotal;
+    return `<section>
+        <h4>💰 Lucro do boss (no período)</h4>
+        <div class="pit-linha">
+          <button class="pit-bt" data-a="extrato">⟳ ler compras e vendas (extrato)</button>
+          <button class="pit-bt" data-a="mercado">⟳ preços de hoje</button>
+          <span class="pit-ajuda">${L.temVendas ? `extrato lido${L.ate ? ` desde ${quando(L.ate)}` : ''}` : '⚠ extrato ainda não lido — clique em "ler compras e vendas"'}${mercado ? ` · preços de ${quando(mercado.em)}` : ' · sem preços'}</span>
+          <span style="flex:1"></span>
+          <span class="pit-ajuda">sem dado de entrada, cada luta custa</span> <input type="number" class="pit-in" data-c="tokensPadrao" min="0" max="20" value="${esc(cfg.tokensPadrao)}" style="width:54px"> <span class="pit-ajuda">Boss Token</span>
+        </div>
+        <div class="pit-cards">
+          <div class="pit-card"><small>Custo (${fmt(L.lutas)} lutas)</small><b>${preco(L.custoTotal, 'gold')}</b>
+            <small style="text-transform:none">${L.custoLinhas.map((c) => `${fmt(c.qtd)}× ${esc(nomeItem(c.id))} a ${preco(c.unit, 'gold')} — ${esc(c.fonte)}`).join('<br>')}</small></div>
+          <div class="pit-card"><small>Vendido (líquido −15%)</small><b>${preco(L.realizado, 'gold')}</b>${L.realizadoOrb ? `<small style="text-transform:none">+ ${preco(L.realizadoOrb, 'orb')}</small>` : ''}</div>
+          <div class="pit-card"><small>Lucro realizado</small>${sinal(lucroReal)}<small style="text-transform:none">vendido − custo</small></div>
+          <div class="pit-card"><small>A vender (preço de hoje −15%)</small><b>${preco(L.presumido, 'gold')}</b><small style="text-transform:none">o que caiu e ainda não vendeu</small></div>
+          <div class="pit-card"><small>Lucro presumido</small>${sinal(lucroTotal)}<small style="text-transform:none">vendido + a vender − custo</small></div>
+        </div>
+        <table class="pit-tab" style="margin-top:8px"><tr><th>Item que caiu no boss</th><th>Caiu</th><th title="das vendas desse item no período, a parte que veio do boss (o resto caiu na hunt)">Vendido (do boss)</th><th>Líquido recebido</th><th>Sobrando</th><th>Preço hoje</th><th>A vender (líq.)</th></tr>
+          ${L.itens.map((x) => `<tr><td><b>${esc(x.nome)}</b></td><td>${fmt(x.caiu)}</td>
+            <td>${fmt(x.qtdVendida)}${x.parte < 1 ? `<small>${Math.round(x.parte * 100)}% das vendas</small>` : ''}</td>
+            <td>${x.liqG ? preco(x.liqG, 'gold') : '—'}${x.liqO ? `<small>${preco(x.liqO, 'orb')}</small>` : ''}</td>
+            <td>${fmt(x.sobra)}</td><td>${x.ph ? preco(x.ph, 'gold') : '—'}</td><td>${x.pres ? preco(x.pres, 'gold') : '—'}</td></tr>`).join('')}
+        </table>
+        <table class="pit-tab" style="margin-top:8px"><tr><th>Por boss</th><th>Lutas</th><th>Custo</th><th>Drops a preço de hoje (líq.)</th><th>Lucro presumido</th><th>Por luta</th></tr>
+          ${L.porBoss.map((r) => `<tr><td><b>${esc(r.nome)}</b><small>custo: ${esc(r.fonteCusto ?? 'padrão')}</small></td><td>${fmt(r.lutas)}</td><td>${preco(r.custo, 'gold')}</td><td>${preco(r.valor, 'gold')}</td>
+            <td>${sinal(r.valor - r.custo)}</td><td>${sinal((r.valor - r.custo) / r.lutas)}</td></tr>`).join('')}
+        </table>
+        <p class="pit-ajuda">Custo = itens de entrada × o que você pagou neles (média do extrato de compras; sem compra, o preço do mercado). Vendido = suas vendas desses itens no período, só a parte que caiu no boss (o resto é da hunt), já sem a taxa de 15%. A vender = o que caiu e ainda não vendeu × o menor anúncio de hoje, −15%. Lucro presumido = vendido + a vender − custo.</p>
+      </section>`;
+  }
 
   function inicioPeriodo() {
     const p = PERIODOS.find((x) => x.id === cfg.periodo) ?? PERIODOS[2];
@@ -107,29 +239,43 @@
     if (typeof ev.data !== 'string') return;
     const d = ev.data;
     if (d.includes('"t":"batalha"')) {
-      if (!d.includes('"morte"') && !d.includes('"bossMorto"') && !d.includes('"bossPerdeu"')) return;
+      if (!d.includes('"morte"') && !d.includes('"bossMorto"') && !d.includes('"bossPerdeu"') && !d.includes('"bossEntrou"')) return;
       let m;
       try { m = JSON.parse(d); } catch { return; }
       let mudou = false;
       for (const e of m.ev ?? []) {
-        if (e.k === 'morte' && e.quem === 'selvagem') {
+        if (e.k === 'bossEntrou') {
+          // A entrada gasta o item na hora: guarda a bolsa de antes e confere no próximo `estado`.
+          entrada = { em: Date.now(), key: e.key ?? null, nome: e.nome ?? '?', antes: naBolsa(BOSS_TOKEN), tokens: null };
+        } else if (e.k === 'morte' && e.quem === 'selvagem') {
           for (const x of e.drops ?? []) { const id = idDoDrop(x); if (id != null) { somarDrop(id, Number(x.qtd) || 1, 'hunt'); mudou = true; } }
         } else if (e.k === 'bossMorto') {
           const lista = (e.drops ?? []).map((x) => ({ id: idDoDrop(x), nome: x.nome ?? nomeItem(x.itemId), qtd: Number(x.qtd) || 1 }));
           for (const x of lista) if (x.id != null) somarDrop(x.id, x.qtd, 'boss');
-          bosses.unshift({ em: Date.now(), nome: e.nome ?? '?', key: e.key ?? null, venceu: true, drops: lista,
+          bosses.unshift({ em: Date.now(), nome: e.nome ?? '?', key: e.key ?? null, venceu: true, drops: lista, entrada: entradaDaLuta(e),
             xp: Number(e.xpTreinador ?? e.xp ?? 0) || 0, valor: Number(e.valor ?? 0) || 0, boost: !!e.lootBoost });
           bosses = bosses.slice(0, BOSS_MAX);
           gravar(CHAVE_BOSS, bosses);
           mudou = true;
         } else if (e.k === 'bossPerdeu') {
-          bosses.unshift({ em: Date.now(), nome: e.nome ?? '?', key: e.key ?? null, venceu: false, drops: [] });
+          bosses.unshift({ em: Date.now(), nome: e.nome ?? '?', key: e.key ?? null, venceu: false, drops: [], entrada: entradaDaLuta(e) });
           bosses = bosses.slice(0, BOSS_MAX);
           gravar(CHAVE_BOSS, bosses);
           mudou = true;
         }
       }
       if (mudou) { podarDias(); gravar(CHAVE_DROPS, drops); if (estaAberto()) pintar(); }
+    } else if (entrada && entrada.tokens == null && d.includes('"t":"estado"')) {
+      // O core mescla o estado no mesmo evento: lê a bolsa logo depois.
+      setTimeout(() => {
+        if (!entrada || entrada.tokens != null) return;
+        const gastou = entrada.antes - naBolsa(BOSS_TOKEN);
+        if (gastou > 0) {
+          entrada.tokens = gastou;
+          cfg.custoBoss[entrada.key ?? entrada.nome] = gastou;
+          salvarCfg();
+        }
+      }, 0);
     } else if (esperas.size && d.includes('"t":"market"') && d.includes('"aba":"item"')) {
       let m;
       try { m = JSON.parse(d); } catch { return; }
@@ -517,6 +663,7 @@
     fundo.addEventListener('change', (e) => {
       const c = e.target.dataset.c;
       if (c === 'boss') { cfg.boss = e.target.value; pagina = 0; salvarCfg(); pintar(); }
+      if (c === 'tokensPadrao') { cfg.tokensPadrao = Math.max(0, Math.min(20, Number(e.target.value) || 0)); salvarCfg(); pintar(); }
       if (c === 'cadaMin') { cfg.cadaMin = Math.max(5, Math.min(120, Number(e.target.value) || 10)); salvarCfg(); pintar(); }
       if (c === 'conhecidos') { cfg.conhecidos = e.target.value; salvarCfg(); pintar(); }
     });
@@ -617,6 +764,9 @@
     return `
       <section>
         ${htmlPeriodo()}
+      </section>
+      ${htmlLucro()}
+      <section>
         <div class="pit-linha">Boss: <select class="pit-in" data-c="boss"><option value="">todos</option>${nomes.map((n) => `<option ${n === cfg.boss ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select>
           <span class="pit-ajuda">cada luta contra boss fica gravada aqui sozinha (vitórias com os drops, e as derrotas)</span>
           <span style="flex:1"></span>${bosses.length ? '<button class="pit-bt" data-a="limparBoss">limpar histórico</button>' : ''}</div>
@@ -655,9 +805,15 @@
     if (!b || b.disabled) return;
     const a = b.dataset.a;
     if (a === 'fechar') return fechar();
-    if (a === 'aba') { cfg.aba = b.dataset.v; pagina = 0; if (cfg.aba === 'principais' && !mercado) pedirMercado(); }
+    if (a === 'aba') { cfg.aba = b.dataset.v; pagina = 0; if ((cfg.aba === 'principais' || cfg.aba === 'boss') && !mercado) pedirMercado(); }
     else if (a === 'periodo') { cfg.periodo = b.dataset.v; pagina = 0; }
     else if (a === 'mercado') pedirMercado();
+    else if (a === 'extrato') {
+      if (!window.__pokeVendas?.garantirDados) { alert('Abra o 💰 Vendas uma vez nesta conta (o módulo ainda não carregou).'); return; }
+      b.disabled = true; b.textContent = 'lendo o extrato…';
+      window.__pokeVendas.garantirDados(true, 0).finally(() => pintar());
+      return;
+    }
     else if (a === 'pag') pagina = Math.max(0, pagina + Number(b.dataset.v));
     else if (a === 'limparBoss') { bosses = []; gravar(CHAVE_BOSS, bosses); }
     else if (a === 'monitor') { cfg.monitor = !cfg.monitor; if (cfg.monitor && Date.now() - varre.ultima > 5 * 60_000) varrer(); }
@@ -675,7 +831,7 @@
 
   function abrir() {
     document.getElementById('pit-fundo').classList.add('aberto');
-    if (cfg.aba === 'principais' && (!mercado || Date.now() - mercado.em > 5 * 60 * 1000)) pedirMercado();
+    if ((cfg.aba === 'principais' || cfg.aba === 'boss') && (!mercado || Date.now() - mercado.em > 5 * 60 * 1000)) pedirMercado();
     pintar();
   }
   function fechar() { document.getElementById('pit-fundo')?.classList.remove('aberto'); }

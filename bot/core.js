@@ -94,6 +94,7 @@
         core.catalogoBolas = m.catalogoBolas ?? core.catalogoBolas;
         if (m.tabelaTipos && Object.keys(m.tabelaTipos).length) core.tabelaTipos = m.tabelaTipos;
         if (Array.isArray(m.hunts)) core.hunts = m.hunts;
+        if (Array.isArray(m.bossesJogaveis)) core.bossesJogaveis = m.bossesJogaveis; // a entrada de cada boss (item × qtd)
         for (const i of m.itensNossos ?? []) core.itens.set(i.id, i);
         core.eu = mesclar(m.estado);
       } else if (m.t === 'estado') {
