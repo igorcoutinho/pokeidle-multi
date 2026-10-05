@@ -152,7 +152,13 @@ PvP — botão ⚔ PvP
     já usou contra esse seu time (ou logo depois de enfrentá-lo) e o melhor counter simulado com
     os pokémon dele — e escolhe a sua formação que vence ESSE counter (60% da nota; 40% placar
     real). O counter previsto aparece na aba Formações e no Registro.
-    Manter após vencer (padrão: erva): depois de VENCER desses, a equipe fica — só troca após derrota.
+    🤖 IA de previsão (padrão): o jogo nunca repete o adversário antes de 10 min (bloqueio medido no
+    seu histórico) e junta de novo assim que o bloqueio acaba. A IA prevê quem vem pelo que está
+    LIVRE (bloqueio vencido), ATIVO (jogou com você há pouco / V-D subindo na ladder, lida a cada
+    2 min) e PERTO de você na ladder (±3), e refaz a escolha 25 s antes de cada bloqueio acabar.
+    O painel mostra o acerto no seu histórico (ex.: 76% contra 21% da regra antiga).
+    Manter após vencer (padrão: erva): quando ele é o próximo provável e a última contra ele foi
+    vitória, joga a comp que venceu (fica nela ou volta para ela) — só troca após derrota.
     Regras por rival (padrão: "erva: Blastoise=último; Venusaur≠último"): formações que cumprem
     ganham pontos quando ele é o próximo provável. Formato: rival: Pokémon=último|primeiro|N; ...
     Hábito do rival: quem repete a comp, usa 2 comps ou sempre os mesmos pokémon é previsto com o

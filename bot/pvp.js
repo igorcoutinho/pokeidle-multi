@@ -18,7 +18,7 @@
 //    (vitórias > derrotas), encerra de vez. Enquanto a sessão roda, ela substitui a trava do item 2.
 (() => {
   'use strict';
-  const VERSAO_PVP = '1.14.1';
+  const VERSAO_PVP = '1.15.0';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -54,7 +54,7 @@
     // `sessao` = o Auto PvP em andamento: { inicio, v, d, seguidas, estado: rodando|pausada|encerrada, motivo }.
     const padrao = { trava: true, derrotas: 2, seguidas: 0, log: [], sessao: null, autoPvp: { maxSeguidas: 3, checarCada: 10 },
       auto: { ativo: false, modo: 'prever', vitorias: 1, naDerrota: true, focoAmeacas: true, contraCounter: true, ultimoAnti: null, abertura: true, sempreTrocar: 'zator, alan', manterSeVencer: 'erva',
-        regrasRival: 'erva: Blastoise=último; Venusaur≠último', reavaliarFila: true, minUso: 2, foraKeys: [], seguidas: 0, usoEm: {} } };
+        regrasRival: 'erva: Blastoise=último; Venusaur≠último', reavaliarFila: true, ia: true, minUso: 2, foraKeys: [], seguidas: 0, usoEm: {} } };
     try {
       const s = JSON.parse(localStorage.getItem(CHAVE_CFG)) ?? {};
       return { ...padrao, ...s, auto: { ...padrao.auto, ...(s.auto ?? {}) }, autoPvp: { ...padrao.autoPvp, ...(s.autoPvp ?? {}) } };
@@ -435,7 +435,11 @@
    * com você pesa menos; os outros ganham peso pela sequência do histórico (depois de A costuma
    * vir B). Devolve [{ nick, p, base }] do mais provável para o menos.
    */
-  function preverProximo(ultimoNick, pesoRepetir = PESO_REPETIR) {
+  function preverProximo(ultimoNick, pesoRepetir = PESO_REPETIR, t = null) {
+    if (cfg.auto.ia) {
+      const r = preverIA(t ?? Date.now() + 25_000);
+      if (r.length) return r;
+    }
     const agora = Date.now();
     const recentes = [...hist].sort((x, y) => y.em - x.em);
     const ativos = [];
@@ -472,6 +476,93 @@
     const lista = pesos.map(([nick, w]) => ({ nick, p: fatiaOutros * (w / soma), base }));
     if (repete) lista.push({ nick: pool.find((n) => mesmoNick(n, ultimoNick)), p: pesoRepetir, base });
     return lista.sort((a, b) => b.p - a.p);
+  }
+
+  // ---------------------------------------------------------------- IA: quem vem agora
+  // Medido no seu histórico: o jogo NUNCA repete o adversário antes de 10 min (bloqueio da fila) e,
+  // quando o bloqueio acaba e os dois estão buscando, junta de novo na hora (181 revanches com 10
+  // min cravados). Então quem pode vir é quem está ATIVO e LIVRE (bloqueio vencido). O modelo:
+  //   peso = livre? × recência (quem jogou com você há pouco está buscando) × ativo na ladder
+  //          (V/D subiu há pouco) × perto de você na ladder (±3 posições)
+  // e a decisão é refeita no TEMPO: logo antes de cada bloqueio acabar. Backtest no histórico:
+  // ~76% de acerto no 1º palpite (a regra antiga acertava ~19%).
+  const ladderVivo = new Map(); // nick minúsculo → { pos, jogos, mudouEm, vistoEm }
+  function anotarLadder(lista) {
+    const agora = Date.now();
+    for (const l of lista) {
+      const k = String(l.nick ?? l.nome ?? '').toLowerCase();
+      if (!k) continue;
+      const jogos = (Number(l.vitorias) || 0) + (Number(l.derrotas) || 0);
+      const a = ladderVivo.get(k);
+      ladderVivo.set(k, { pos: Number(l.pos) || null, jogos, mudouEm: a && jogos > a.jogos ? agora : (a?.mudouEm ?? 0), vistoEm: agora, desde: a?.desde ?? agora });
+    }
+  }
+  /** O bloqueio de revanche, medido: o menor intervalo entre dois duelos seguidos contra o mesmo (5–20 min). */
+  function bloqueioMs() {
+    const ultimo = new Map();
+    let menor = Infinity;
+    for (const h of [...hist].sort((a, b) => a.em - b.em)) {
+      const k = String(h.nick).toLowerCase();
+      if (ultimo.has(k)) menor = Math.min(menor, h.em - ultimo.get(k));
+      ultimo.set(k, h.em);
+    }
+    return Number.isFinite(menor) ? Math.max(5 * 60_000, Math.min(20 * 60_000, menor - 5_000)) : 10 * 60_000;
+  }
+  /**
+   * A distribuição de quem vem num instante `t` (padrão: daqui a 25 s). Candidatos: quem jogou com
+   * você na última hora e quem está mexendo na ladder perto de você.
+   */
+  function preverIA(t = Date.now() + 25_000) {
+    const bloq = bloqueioMs();
+    const meu = ladderVivo.get(meuNick().toLowerCase());
+    const cand = new Map(); // k → { nick, ultimoEm }
+    for (const h of hist) {
+      if (t - h.em > 60 * 60_000) continue;
+      const k = String(h.nick).toLowerCase();
+      if (!cand.has(k) || cand.get(k).ultimoEm < h.em) cand.set(k, { nick: h.nick, ultimoEm: h.em });
+    }
+    for (const [k, l] of ladderVivo) {
+      if (cand.has(k) || k === meuNick().toLowerCase() || !l.mudouEm || t - l.mudouEm > 15 * 60_000) continue;
+      if (meu?.pos && l.pos && Math.abs(meu.pos - l.pos) > 3) continue;
+      const nick = ladder.find((x) => String(x.nick ?? '').toLowerCase() === k)?.nick ?? k;
+      const ultimo = [...hist].filter((h) => String(h.nick).toLowerCase() === k).sort((a, b) => b.em - a.em)[0];
+      cand.set(k, { nick, ultimoEm: ultimo?.em ?? 0 });
+    }
+    const lista = [];
+    for (const [k, c] of cand) {
+      const desde = t - c.ultimoEm;
+      const livre = desde >= bloq;
+      let w = (livre ? 1 : 0.01) * (1 + 0.5 * Math.exp(-desde / (30 * 60_000)));
+      const l = ladderVivo.get(k);
+      if (l?.mudouEm && t - l.mudouEm < 15 * 60_000) w *= 1.5;          // está jogando agora
+      else if (l && Date.now() - l.desde > 30 * 60_000 && !l.mudouEm) w *= 0.6; // olhamos 30 min e ele não jogou
+      if (meu?.pos && l?.pos) w *= Math.abs(meu.pos - l.pos) <= 3 ? 1.4 : 0.5;
+      lista.push({ nick: c.nick, w, livreEm: c.ultimoEm + bloq, livre, base: livre ? 'livre' : `bloqueado até ${new Date(c.ultimoEm + bloq).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}` });
+    }
+    const soma = lista.reduce((a, x) => a + x.w, 0);
+    if (!soma) return [];
+    return lista.map((x) => ({ ...x, p: x.w / soma })).sort((a, b) => b.p - a.p);
+  }
+  /** Backtest no seu histórico: % de acerto no 1º palpite (IA no instante da partida) e da regra antiga. */
+  function backtestIA() {
+    const asc = [...hist].sort((a, b) => a.em - b.em);
+    const bloq = bloqueioMs();
+    let n = 0, ia = 0, antiga = 0;
+    for (let i = 5; i < asc.length; i++) {
+      const t = asc[i].em;
+      if (t - asc[i - 1].em > 30 * 60_000) continue;
+      const vistos = new Map();
+      for (let j = i - 1; j >= 0 && t - asc[j].em <= 60 * 60_000; j--) { const k = String(asc[j].nick).toLowerCase(); if (!vistos.has(k)) vistos.set(k, asc[j].em); }
+      if (!vistos.size) continue;
+      n++;
+      const real = String(asc[i].nick).toLowerCase();
+      const top = [...vistos].map(([k, em]) => [k, ((t - em) >= bloq ? 1 : 0.01) * (1 + 0.5 * Math.exp(-(t - em) / (30 * 60_000)))]).sort((a, b) => b[1] - a[1])[0][0];
+      if (top === real) ia++;
+      const ult = String(asc[i - 1].nick).toLowerCase();
+      const outros = [...vistos.keys()].filter((k) => k !== ult);
+      if ((outros.length ? outros[0] : ult) === real) antiga++;
+    }
+    return n ? { n, ia: ia / n, antiga: antiga / n, bloqMin: bloq / 60_000 } : null;
   }
 
   /** O placar de uma formação contra um jogador, no seu histórico. */
@@ -814,17 +905,28 @@
   async function autoSwitchPrevendo(reg) {
     const minha = ++rodadaSwitch;
     for (const t of reavaliacoes.splice(0)) clearTimeout(t);
-    if (reg.venci && manterContra(reg.nick)) {
-      registrar(`auto-switch: venceu ${reg.nick} — ele repete a comp, a equipe FICA (só troca contra ele depois de uma derrota)`);
-      anotarTroca(reg, { acao: 'manteve', previstos: preverProximo(reg.nick), motivo: `venceu ${reg.nick}: contra ele só troca após derrota` });
-      return;
-    }
-    await escolherFormacao(reg, minha);
-    if (minha === rodadaSwitch) await ajustarAbertura(preverProximo(reg.nick), minha);
-    // A busca demorando = pouca gente na fila: o mais provável passa a ser quem você ACABOU de
-    // enfrentar. Reavalia em 60 s e 120 s (se nenhuma partida chegou), com mais peso para ele.
+    const r0 = await escolherFormacao(reg, minha);
+    if (minha === rodadaSwitch && r0 !== 'manter') await ajustarAbertura(preverProximo(reg.nick), minha);
     if (!cfg.auto.reavaliarFila) return;
     const idAgora = hist[0]?.id;
+    if (cfg.auto.ia) {
+      // IA: refaz a escolha 25 s antes de cada bloqueio de revanche acabar (é quando aquele
+      // adversário passa a poder vir — e o jogo junta na hora se os dois estiverem buscando).
+      const agora = Date.now();
+      const vencendo = preverIA(agora + 20 * 60_000).filter((x) => x.livreEm > agora).map((x) => x.livreEm).sort((a, b) => a - b).slice(0, 4);
+      for (const em of vencendo) {
+        reavaliacoes.push(setTimeout(async () => {
+          if (minha !== rodadaSwitch || hist[0]?.id !== idAgora || !cfg.auto.ativo) return;
+          const t = em + 5_000;
+          const prev = preverProximo(reg.nick, PESO_REPETIR, t);
+          registrar(`🤖 IA: bloqueio de revanche acabando — previsão para ${new Date(t).toLocaleTimeString('pt-BR')}: ${prev.slice(0, 3).map((x) => `${x.nick} ${Math.round(x.p * 100)}%`).join(', ')}`);
+          const r1 = await escolherFormacao(reg, minha, { reavaliando: true, t });
+          if (minha === rodadaSwitch && r1 !== 'manter') await ajustarAbertura(preverProximo(reg.nick, PESO_REPETIR, t), minha);
+        }, Math.max(0, em - 25_000 - agora)));
+      }
+      return;
+    }
+    // Sem IA: a busca demorando = pouca gente na fila → reavalia em 60 s e 120 s com mais peso no último.
     for (const [ms, peso] of [[60_000, 0.5], [120_000, 0.75]]) {
       reavaliacoes.push(setTimeout(async () => {
         if (minha !== rodadaSwitch || hist[0]?.id !== idAgora || !cfg.auto.ativo) return;
@@ -840,11 +942,30 @@
     .some((x) => String(nick ?? '').toLowerCase().includes(x));
 
   async function escolherFormacao(reg, minha, opc = {}) {
-    const previstos = preverProximo(reg.nick, opc.pesoRepetir ?? PESO_REPETIR);
+    const previstos = preverProximo(reg.nick, opc.pesoRepetir ?? PESO_REPETIR, opc.t ?? null);
     if (!previstos.length) {
       registrar('auto-switch: ainda não há adversários suficientes no histórico para prever o próximo');
       anotarTroca(reg, { acao: 'sem opção', motivo: 'sem adversários ativos no histórico' });
       return;
+    }
+    // "Manter após vencer" (ex.: Erva, que repete a comp): se ELE é o próximo provável e a última
+    // contra ele foi vitória, joga a comp que venceu — fica nela ou volta para ela.
+    const topo = previstos[0];
+    if (topo && topo.p >= 0.5 && manterContra(topo.nick)) {
+      const ultimaVs = hist.filter((h) => mesmoNick(h.nick, topo.nick)).sort((a, b) => b.em - a.em)[0];
+      const ids = ultimaVs?.venci ? idsDoDuelo(ultimaVs) : null;
+      if (ids?.length >= Math.min(TIME_PVP, (core.eu?.pokemons ?? []).length)) {
+        if (ids.join(',') === chaveAtual()) {
+          registrar(`auto-switch: próximo deve ser ${topo.nick} (${Math.round(topo.p * 100)}%) — a equipe atual venceu ele na última, FICA`);
+          anotarTroca(reg, { acao: 'manteve', previstos, motivo: `${topo.nick}: a comp que venceu ele fica` });
+        } else if (aplicarEquipe(ids, `${topo.nick} vem aí — volta a comp que venceu ele`)) {
+          reg.trocouDepois = true; salvarHist();
+          registrar(`🔁 auto-switch: próximo deve ser ${topo.nick} — voltei para a comp que venceu ele na última: ${nomesDosIds(ids).join(' → ')}`);
+          anotarTroca(reg, { acao: 'trocou', previstos, para: nomesDosIds(ids).join(' → '), paraK: ids.join(','), motivo: `${topo.nick} repete a comp: volta a que venceu` });
+          avisar(`🔁 ${topo.nick} vem aí: voltei para a comp que venceu ele`);
+        }
+        return 'manter';
+      }
     }
     const cand = candidatasPara(previstos);
     const atual = cand.find((f) => f.k === chaveAtual()) ?? minhasFormacoes().find((f) => f.k === chaveAtual());
@@ -994,7 +1115,7 @@
     return `<div class="ppvp-destaque" style="background:#2a2a4a;border-color:#8a8aff">
         🔮 Último adversário: <b>${esc(ultimo.nick)}</b> (${ultimo.venci ? '<span class="ppvp-v">venceu</span>' : '<span class="ppvp-d">perdeu</span>'}) · ativos na fila e chance de vir agora:
         ${previstos.map((x) => { const d = dificuldade(x.nick); return `<b>${esc(x.nick)}</b> ${Math.round(x.p * 100)}% <small class="${d > 0.55 ? 'ppvp-d' : d < 0.35 ? 'ppvp-v' : ''}">(você ganha ${Math.round((1 - d) * 100)}%${d > 0.55 ? ' · ameaça' : ''}${(() => { const ab = aberturaDe(x.nick); return ab ? ` · abre de ${esc(ab.nome)} ${ab.vezes}/${ab.de}` : ''; })()}${(() => { const h = habitoDe(x.nick); return h ? ` · ${esc(h.txt)}` : ''; })()})</small>`; }).join(' · ')}
-        <small class="ppvp-aviso">(${esc(previstos[0].base)}; quem acabou de lutar com você pesa menos)</small>
+        <small class="ppvp-aviso">(${cfg.auto.ia ? `🤖 IA: ${previstos.slice(0, 4).map((x) => `${esc(x.nick)} ${esc(x.base)}`).join(' · ')}` : `${esc(previstos[0].base)}; quem acabou de lutar com você pesa menos`})</small>
         <table class="ppvp-tab" style="margin-top:4px"><tr><th>Contra</th><th>Melhor formação</th><th>Por quê</th></tr>
         ${previstos.map((x) => { const m = melhorPara(x.nick); return `<tr><td><b>${esc(x.nick)}</b></td><td>${m ? esc(m.f.nome) + (m.f.simulada ? ' <small class="ppvp-aviso">(simulada)</small>' : '') : '—'}</td><td>${m ? esc(m.r.fonte) : '—'}</td></tr>`; }).join('')}
         </table>
@@ -1082,7 +1203,8 @@
           <span ${a.modo === 'prever' ? 'style="display:none"' : ''}>trocar depois de <input type="number" class="ppvp-in" data-c="autoVitorias" min="1" max="10" value="${esc(a.vitorias)}"> vitória(s) seguida(s)</span>
           <label title="depois de VENCER destes, o time fica (eles repetem a comp) — só troca após derrota. Vírgula separa; vale parte do nick.">manter a equipe após vencer: <input class="ppvp-in" data-c="manterSeVencer" value="${esc(a.manterSeVencer ?? '')}" style="width:120px" spellcheck="false"></label>
           <label title="regras da SUA ordem contra um rival. Formato: rival: Pokémon=último; Pokémon≠último; Pokémon=1 — uma linha por rival">regras por rival: <textarea class="ppvp-in" data-c="regrasRival" rows="2" style="width:330px;vertical-align:middle" spellcheck="false">${esc(a.regrasRival ?? '')}</textarea></label>
-          <label title="se a busca demorar (60 s / 120 s), pouca gente na fila: reavalia dando mais chance de vir o MESMO adversário"><input type="checkbox" data-a="autoReavaliar" ${a.reavaliarFila ? 'checked' : ''}> busca demorando → o último adversário fica mais provável</label>
+          <label title="prevê o próximo pelo bloqueio de revanche (medido), por quem está ativo e por quem está perto de você na ladder — e refaz a escolha logo antes de cada bloqueio acabar"><input type="checkbox" data-a="autoIA" ${a.ia ? 'checked' : ''}> 🤖 IA de previsão${(() => { const b = backtestIA(); return b ? ` <small>(acerta ${Math.round(b.ia * 100)}% no seu histórico · regra antiga ${Math.round(b.antiga * 100)}% · bloqueio ${b.bloqMin.toFixed(0)} min)</small>` : ''; })()}</label>
+          <label title="refaz a escolha no tempo: com a IA, logo antes de cada bloqueio acabar; sem ela, em 60 s e 120 s de busca"><input type="checkbox" data-a="autoReavaliar" ${a.reavaliarFila ? 'checked' : ''}> reavaliar enquanto busca</label>
           <label title="depois de jogar contra estes (vitória OU derrota), o time sempre troca — eles já viram o seu time e vão counterar. Vírgula separa; vale parte do nick.">sempre trocar depois de jogar contra: <input class="ppvp-in" data-c="sempreTrocar" value="${esc(a.sempreTrocar ?? '')}" style="width:160px" spellcheck="false"></label>
           <label title="se o próximo provável sempre abre com o mesmo pokémon, quem vence esse 1×1 vai na frente (o resto mantém a ordem)"><input type="checkbox" data-a="autoAbertura" ${a.abertura ? 'checked' : ''}> abertura (contra quem sempre abre igual, põe na frente quem vence o abridor)</label>
           <label title="quem te enfrentar vai montar um time para bater o que você acabou de jogar; o switch escolhe a formação que vence ESSE time (o counter do counter)"><input type="checkbox" data-a="autoAnti" ${a.contraCounter ? 'checked' : ''}> counter do counter (vencer o time que vão montar contra o que você jogou)</label>
@@ -1114,7 +1236,7 @@
     if (m.t !== 'pvp') return;
     const ids = (x) => (x ?? []).map((v) => (typeof v === 'object' ? v?.id : v)).filter((v) => v != null);
     if (m.time !== undefined) meuTimeIds = ids(m.time);
-    if (Array.isArray(m.ladder)) { ladder = m.ladder; if (aba === 'rivais') pintar(); }
+    if (Array.isArray(m.ladder)) { ladder = m.ladder; anotarLadder(m.ladder); if (aba === 'rivais') pintar(); }
     if (m.formacoes !== undefined) formacoes = m.formacoes ?? [];
     if (m.fila?.tamanho != null) filaInfo = { n: Number(m.fila.tamanho) || 0, em: Date.now() };
     if (m.formacaoOk) registrar(`armário: ${m.formacaoOk.acao ?? 'ok'}${m.formacaoOk.slot ? ` (formação ${m.formacaoOk.slot})` : ''}`);
@@ -1154,6 +1276,9 @@
   }
   ligarWs();
   const vigia = setInterval(() => { ligarWs(); if (estaAberto()) pintarStatus(); }, 1000);
+  // A IA precisa da ladder fresca (quem está jogando = V/D subindo): pede a cada 2 min.
+  const vigiaLadder = setInterval(() => { if (cfg.auto.ativo && cfg.auto.ia && core.logado) core.send({ t: 'pvp.info' }); }, 120_000);
+  limpezas.push(() => clearInterval(vigiaLadder));
   limpezas.push(() => { clearInterval(vigia); wsOuvido?.removeEventListener('message', aoMensagem); });
 
   // ---------------------------------------------------------------- UI
@@ -1812,6 +1937,7 @@
     else if (a === 'autoAnti') cfg.auto.contraCounter = b.checked;
     else if (a === 'autoAbertura') cfg.auto.abertura = b.checked;
     else if (a === 'autoReavaliar') cfg.auto.reavaliarFila = b.checked;
+    else if (a === 'autoIA') cfg.auto.ia = b.checked;
     else if (a === 'calcAtivos') return calcularContraAtivos(b.dataset.v);
     else if (a === 'cruzCalc') return calcularCruz(b.dataset.v);
     else if (a === 'autoFora') {
