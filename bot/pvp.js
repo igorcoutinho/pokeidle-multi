@@ -18,7 +18,7 @@
 //    (vitórias > derrotas), encerra de vez. Enquanto a sessão roda, ela substitui a trava do item 2.
 (() => {
   'use strict';
-  const VERSAO_PVP = '1.17.0';
+  const VERSAO_PVP = '1.17.1';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -492,6 +492,7 @@
   // e a decisão é refeita no TEMPO: logo antes de cada bloqueio acabar. Backtest no histórico:
   // ~76% de acerto no 1º palpite (a regra antiga acertava ~19%).
   const ladderVivo = new Map(); // nick minúsculo → { pos, jogos, mudouEm, vistoEm }
+  let minhaPosicao = null;       // a SUA posição no ranqueado (pvp.info → posicao) — a ladder só traz o topo
   function anotarLadder(lista) {
     const agora = Date.now();
     for (const l of lista) {
@@ -519,7 +520,10 @@
    */
   function preverIA(t = Date.now() + 25_000) {
     const bloq = bloqueioMs();
-    const meu = ladderVivo.get(meuNick().toLowerCase());
+    // A sua posição: a da ladder (se você está no topo listado) ou a que o jogo manda à parte.
+    // Sem saber onde você está, ninguém da ladder entra — ela só lista o topo, e quem está longe
+    // do topo nunca enfrenta aquela gente.
+    const minhaPos = ladderVivo.get(meuNick().toLowerCase())?.pos ?? minhaPosicao;
     const cand = new Map(); // k → { nick, ultimoEm }
     for (const h of hist) {
       if (t - h.em > 60 * 60_000) continue;
@@ -528,7 +532,7 @@
     }
     for (const [k, l] of ladderVivo) {
       if (cand.has(k) || k === meuNick().toLowerCase() || !l.mudouEm || t - l.mudouEm > 15 * 60_000) continue;
-      if (meu?.pos && l.pos && Math.abs(meu.pos - l.pos) > 3) continue;
+      if (!minhaPos || !l.pos || Math.abs(minhaPos - l.pos) > 3) continue;
       const nick = ladder.find((x) => String(x.nick ?? '').toLowerCase() === k)?.nick ?? k;
       const ultimo = [...hist].filter((h) => String(h.nick).toLowerCase() === k).sort((a, b) => b.em - a.em)[0];
       cand.set(k, { nick, ultimoEm: ultimo?.em ?? 0 });
@@ -541,7 +545,7 @@
       const l = ladderVivo.get(k);
       if (l?.mudouEm && t - l.mudouEm < 15 * 60_000) w *= 1.5;          // está jogando agora
       else if (l && Date.now() - l.desde > 30 * 60_000 && !l.mudouEm) w *= 0.6; // olhamos 30 min e ele não jogou
-      if (meu?.pos && l?.pos) w *= Math.abs(meu.pos - l.pos) <= 3 ? 1.4 : 0.5;
+      if (minhaPos && l?.pos) w *= Math.abs(minhaPos - l.pos) <= 3 ? 1.4 : 0.5;
       lista.push({ nick: c.nick, w, livreEm: c.ultimoEm + bloq, livre, base: livre ? 'livre' : `bloqueado até ${new Date(c.ultimoEm + bloq).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}` });
     }
     const soma = lista.reduce((a, x) => a + x.w, 0);
@@ -1400,6 +1404,7 @@
     if (m.t !== 'pvp') return;
     const ids = (x) => (x ?? []).map((v) => (typeof v === 'object' ? v?.id : v)).filter((v) => v != null);
     if (m.time !== undefined) meuTimeIds = ids(m.time);
+    if (m.posicao != null) minhaPosicao = Number(m.posicao) || null;
     if (Array.isArray(m.ladder)) { ladder = m.ladder; anotarLadder(m.ladder); if (aba === 'rivais') pintar(); }
     if (m.formacoes !== undefined) formacoes = m.formacoes ?? [];
     if (m.fila?.tamanho != null) filaInfo = { n: Number(m.fila.tamanho) || 0, em: Date.now() };
