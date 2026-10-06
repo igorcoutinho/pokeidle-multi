@@ -18,7 +18,7 @@
 //    (vitórias > derrotas), encerra de vez. Enquanto a sessão roda, ela substitui a trava do item 2.
 (() => {
   'use strict';
-  const VERSAO_PVP = '1.17.1';
+  const VERSAO_PVP = '1.18.0';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -577,8 +577,24 @@
   // ---------------------------------------------------------------- agente de IA externo
   // A decisão vai para um modelo (OpenAI/Anthropic) configurado em "🤖 Agente IA" na barra do app.
   // A página não tem a chave: pede pelo preload (postMessage) e o processo principal chama a API.
-  const CHAVE_CADERNO = 'pokepvp.agente.caderno';
-  let caderno = (() => { try { return localStorage.getItem(CHAVE_CADERNO) ?? ''; } catch { return ''; } })();
+  // Cadernos de lições: um GERAL (estratégia, padrões da fila — até ~1500 caracteres) e um POR
+  // RIVAL (até ~800 cada, sem limite de rivais). Em cada decisão vão o geral e os dos 3 rivais
+  // mais prováveis — a memória cresce com os adversários sem pesar no pedido.
+  const CHAVE_CADERNO = 'pokepvp.agente.caderno';          // o antigo (texto único) — vira o geral
+  const CHAVE_CADERNOS = 'pokepvp.agente.cadernos.v2';
+  const MAX_GERAL = 1500, MAX_RIVAL = 800;
+  let cadernos = (() => {
+    try {
+      const c = JSON.parse(localStorage.getItem(CHAVE_CADERNOS));
+      if (c?.geral != null) return { geral: c.geral, rivais: c.rivais ?? {} };
+    } catch {}
+    let antigo = '';
+    try { antigo = localStorage.getItem(CHAVE_CADERNO) ?? ''; } catch {}
+    return { geral: antigo.slice(0, MAX_GERAL), rivais: {} };
+  })();
+  const salvarCadernos = () => { try { localStorage.setItem(CHAVE_CADERNOS, JSON.stringify(cadernos)); } catch {} };
+  const cadernoDe = (nick) => cadernos.rivais[String(nick ?? '').toLowerCase()]?.texto ?? '';
+  const tamanhoCadernos = () => cadernos.geral.length + Object.values(cadernos.rivais).reduce((t, r) => t + (r.texto?.length ?? 0), 0);
   let agenteStatus = '';
   // Os eventos do agente (aba 🤖 Agente): decisões, falhas, caderno — e, na partida seguinte, o resultado.
   const CHAVE_EVENTOS = 'pokepvp.agente.eventos.v1';
@@ -612,7 +628,7 @@
       window.postMessage({ __pbIA: { id, pedido: { ...pedido, timeoutMs: ms } } }, '*');
     });
   }
-  const SISTEMA_AGENTE = `Você é o técnico de PvP de um jogador de PokéIdle. Regras do PvP do jogo: duelo 5×5 automático, os pokémon entram em SEQUÊNCIA (quem vence fica em campo com o HP que sobrou e enfrenta o próximo), então a ORDEM é a comp. Tipos e golpes decidem cada 1×1. A fila junta jogadores próximos na ladder (±3 posições); o jogo NUNCA repete o mesmo adversário antes de ~10 min e, quando esse bloqueio acaba e os dois estão buscando, junta de novo na hora. Você recebe: quem deve ser o próximo adversário (com chance e se está livre/bloqueado), o hábito de cada um (repete a comp, usa 2 comps, mesmos pokémon em ordens diferentes, com quem abre), as formações candidatas (ordem exata) com o placar REAL contra cada provável e a nota do modelo estatístico, as regras do próprio jogador (respeite-as) e o seu caderno de lições. Escolha UMA formação entre as candidatas, pensando em quem vem e no que ele costuma usar. Placar real pesa mais que a nota do modelo; poucos jogos = pouca certeza. Responda SÓ JSON: {"formacao":"<id exato da candidata>","motivo":"<1-2 frases em português>","confianca":<0 a 1>}.`;
+  const SISTEMA_AGENTE = `Você é o técnico de PvP de um jogador de PokéIdle. Regras do PvP do jogo: duelo 5×5 automático, os pokémon entram em SEQUÊNCIA (quem vence fica em campo com o HP que sobrou e enfrenta o próximo), então a ORDEM é a comp. Tipos e golpes decidem cada 1×1. A fila junta jogadores próximos na ladder (±3 posições); o jogo NUNCA repete o mesmo adversário antes de ~10 min e, quando esse bloqueio acaba e os dois estão buscando, junta de novo na hora. Você recebe: quem deve ser o próximo adversário (com chance e se está livre/bloqueado), o hábito de cada um (repete a comp, usa 2 comps, mesmos pokémon em ordens diferentes, com quem abre), as formações candidatas (ordem exata) com o placar REAL contra cada provável e a nota do modelo estatístico, as regras do próprio jogador (respeite-as), o seu caderno GERAL de lições e o caderno de cada rival provável. Escolha UMA formação entre as candidatas, pensando em quem vem e no que ele costuma usar. Placar real pesa mais que a nota do modelo; poucos jogos = pouca certeza. Responda SÓ JSON: {"formacao":"<id exato da candidata>","motivo":"<1-2 frases em português>","confianca":<0 a 1>}.`;
 
   function estadoParaAgente(reg, previstos, notas, forcar) {
     const ultimasDele = (nick) => hist.filter((h) => mesmoNick(h.nick, nick) && h.dele?.length).sort((a, b) => b.em - a.em).slice(0, 3)
@@ -627,7 +643,8 @@
       candidatas: notas.slice(0, 8).map((n) => ({ id: n.f.k, ordem: nomesDosIds(n.f.ids), geral: `${n.f.v}V ${n.f.n - n.f.v}D`,
         contraProvaveis: Object.fromEntries(previstos.slice(0, 3).map((x) => { const pv = placarVs(n.f.k, x.nick); return [x.nick, pv.n ? `${pv.v}V ${pv.n - pv.v}D` : 'nunca']; })),
         notaModelo: Math.round(n.nota * 100), porqueModelo: n.det.slice(0, 3) })),
-      cadernoDeLicoes: caderno || '(vazio — primeira partida com o agente)',
+      cadernoGeral: cadernos.geral || '(vazio)',
+      cadernosDosRivais: Object.fromEntries(previstos.slice(0, 3).map((x) => [x.nick, cadernoDe(x.nick) || '(sem lições sobre ele ainda)'])),
     };
   }
 
@@ -636,17 +653,21 @@
     if (!cfg.auto.agente) return;
     const t = trocas.find((x) => !x.pendente && x.veio && mesmoNick(x.veio, reg.nick));
     const r = await perguntarAgente({
-      sistema: 'Você mantém o caderno de lições de PvP de um jogador de PokéIdle (duelo 5×5 em sequência; a ORDEM é a comp). Reescreva o caderno incorporando a partida nova: lições CONCRETAS por rival (que ordem ganhou/perdeu contra qual comp dele, quem do time dele te derruba, padrões de fila/horário). Mantenha o que continua valendo, corrija o que a partida desmentiu, no máximo 1200 caracteres, em português. Responda SÓ JSON: {"caderno":"<texto>"}.',
-      usuario: JSON.stringify({ cadernoAtual: caderno || '(vazio)', partida: { rival: reg.nick, resultado: reg.venci ? 'vitória' : 'derrota', minhaOrdem: (reg.meu ?? []).map((x) => x.nome), ordemDele: (reg.dele ?? []).map((x) => x.nome), naoEntrouDele: (reg.naoEntrou ?? []).map((x) => x.nome) },
+      sistema: `Você mantém os cadernos de lições de PvP de um jogador de PokéIdle (duelo 5×5 em sequência; a ORDEM é a comp). Há um caderno GERAL (estratégia que vale contra todos, padrões da fila/horário, o que costuma funcionar) e um caderno POR RIVAL. Reescreva os dois incorporando a partida nova: no do rival, lições CONCRETAS sobre ELE (que ordem sua ganhou/perdeu contra qual comp dele, quem do time dele te derruba, com quem ele abre, se repete); no geral, só o que vale para todos. Mantenha o que continua valendo e corrija o que a partida desmentiu. Geral: no máximo ${MAX_GERAL} caracteres; rival: no máximo ${MAX_RIVAL}. Português. Responda SÓ JSON: {"geral":"<texto>","rival":"<texto>"}.`,
+      usuario: JSON.stringify({ cadernoGeralAtual: cadernos.geral || '(vazio)', cadernoDoRivalAtual: cadernoDe(reg.nick) || '(vazio — primeira vez contra ele com o agente)', partida: { rival: reg.nick, resultado: reg.venci ? 'vitória' : 'derrota', minhaOrdem: (reg.meu ?? []).map((x) => x.nome), ordemDele: (reg.dele ?? []).map((x) => x.nome), naoEntrouDele: (reg.naoEntrou ?? []).map((x) => x.nome) },
         decisaoAnterior: t ? { acao: t.acao, previsto: t.previstos?.[0]?.nick ?? null, acertouPrevisao: t.acertou, motivo: t.motivo } : null,
         placarGeralContraEle: (() => { const d = hist.filter((h) => mesmoNick(h.nick, reg.nick)); return `${d.filter((h) => h.venci).length}V ${d.filter((h) => !h.venci).length}D`; })() }),
       maxTokens: 700,
     }, 25_000);
-    if (r.ok && typeof r.resposta?.caderno === 'string') {
-      caderno = r.resposta.caderno.slice(0, 2000);
-      try { localStorage.setItem(CHAVE_CADERNO, caderno); } catch {}
-      registrar('🤖 agente: caderno de lições atualizado');
-      anotarAgente({ tipo: 'caderno', motivo: `caderno reescrito depois de ${reg.venci ? 'vencer' : 'perder para'} ${reg.nick} (${caderno.length} caracteres)` });
+    const novoGeral = r.resposta?.geral ?? r.resposta?.caderno;
+    if (r.ok && (typeof novoGeral === 'string' || typeof r.resposta?.rival === 'string')) {
+      if (typeof novoGeral === 'string') cadernos.geral = novoGeral.slice(0, MAX_GERAL + 300);
+      if (typeof r.resposta.rival === 'string' && r.resposta.rival.trim()) {
+        cadernos.rivais[String(reg.nick).toLowerCase()] = { nick: reg.nick, texto: r.resposta.rival.slice(0, MAX_RIVAL + 200), em: Date.now() };
+      }
+      salvarCadernos();
+      registrar(`🤖 agente: cadernos atualizados (geral + ${reg.nick})`);
+      anotarAgente({ tipo: 'caderno', motivo: `cadernos reescritos depois de ${reg.venci ? 'vencer' : 'perder para'} ${reg.nick} — geral ${cadernos.geral.length} · ${reg.nick} ${cadernoDe(reg.nick).length} caracteres` });
     } else if (!r.ok) { registrar(`🤖 agente: não atualizou o caderno (${r.erro})`); anotarAgente({ tipo: 'falha', motivo: `caderno: ${r.erro}` }); }
     if (estaAberto()) pintar();
   }
@@ -1316,7 +1337,10 @@
           <span>Falhas: <b>${falhas}</b></span>
           <span>Tempo médio: <b>${msMed != null ? `${msMed} s` : '—'}</b></span>
         </div>
-        <details><summary class="ppvp-aviso">📓 caderno de lições (${caderno.length} caracteres)</summary><pre class="ppvp-log" style="max-height:220px">${esc(caderno || 'vazio — ele escreve depois da próxima partida')}</pre>${caderno ? '<button class="ppvp-bt ppvp-mini" data-a="limparCaderno">limpar caderno</button>' : ''}</details>
+        <details><summary class="ppvp-aviso">📓 cadernos de lições — geral + ${Object.keys(cadernos.rivais).length} rivais (${tamanhoCadernos().toLocaleString("pt-BR")} caracteres)</summary>
+          <b>Geral</b> <small class="ppvp-aviso">(${cadernos.geral.length}/${MAX_GERAL})</small><pre class="ppvp-log" style="max-height:180px">${esc(cadernos.geral || 'vazio — ele escreve depois da próxima partida')}</pre>
+          ${Object.values(cadernos.rivais).sort((a, b) => (b.em ?? 0) - (a.em ?? 0)).map((r) => `<b>${esc(r.nick)}</b> <small class="ppvp-aviso">(${r.texto.length}/${MAX_RIVAL} · ${r.em ? quando(r.em) : ''})</small><pre class="ppvp-log" style="max-height:140px">${esc(r.texto)}</pre>`).join('')}
+          ${tamanhoCadernos() ? '<button class="ppvp-bt ppvp-mini" data-a="limparCaderno">limpar todos os cadernos</button>' : ''}</details>
       </section>
       <section>
         ${pag.length ? `<table class="ppvp-tab"><tr><th>Quando</th><th></th><th>Situação</th><th>Previsão</th><th>Escolha</th><th>Motivo</th><th>Resultado</th></tr>
@@ -1370,7 +1394,7 @@
           <label title="depois de VENCER destes, o time fica (eles repetem a comp) — só troca após derrota. Vírgula separa; vale parte do nick.">manter a equipe após vencer: <input class="ppvp-in" data-c="manterSeVencer" value="${esc(a.manterSeVencer ?? '')}" style="width:120px" spellcheck="false"></label>
           <label title="regras da SUA ordem contra um rival. Formato: rival: Pokémon=último; Pokémon≠último; Pokémon=1 — uma linha por rival">regras por rival: <textarea class="ppvp-in" data-c="regrasRival" rows="2" style="width:330px;vertical-align:middle" spellcheck="false">${esc(a.regrasRival ?? '')}</textarea></label>
           <label title="pede a decisão ao agente de IA configurado em 🤖 Agente IA (barra de cima do app); se ele falhar ou demorar, vale o modelo estatístico"><input type="checkbox" data-a="autoAgente" ${a.agente ? 'checked' : ''}> 🤖 agente de IA decide${agenteStatus ? ` <small>(${esc(agenteStatus)})</small>` : ''}</label>
-          ${a.agente ? `<details style="width:100%"><summary class="ppvp-aviso">📓 caderno de lições do agente (${caderno.length} caracteres)</summary><pre class="ppvp-log" style="max-height:200px">${esc(caderno || 'vazio — ele escreve depois da próxima partida')}</pre><button class="ppvp-bt ppvp-mini" data-a="limparCaderno">limpar caderno</button></details>` : ''}
+          ${a.agente ? '<span class="ppvp-aviso">📓 cadernos e registro do agente: aba 🤖 Agente</span>' : ''}
           <label title="prevê o próximo pelo bloqueio de revanche (medido), por quem está ativo e por quem está perto de você na ladder — e refaz a escolha logo antes de cada bloqueio acabar"><input type="checkbox" data-a="autoIA" ${a.ia ? 'checked' : ''}> 🤖 IA de previsão${(() => { const b = backtestIA(); return b ? ` <small>(acerta ${Math.round(b.ia * 100)}% no seu histórico · regra antiga ${Math.round(b.antiga * 100)}% · bloqueio ${b.bloqMin.toFixed(0)} min)</small>` : ''; })()}</label>
           <label title="refaz a escolha no tempo: com a IA, logo antes de cada bloqueio acabar; sem ela, em 60 s e 120 s de busca"><input type="checkbox" data-a="autoReavaliar" ${a.reavaliarFila ? 'checked' : ''}> reavaliar enquanto busca</label>
           <label title="depois de jogar contra estes (vitória OU derrota), o time sempre troca — eles já viram o seu time e vão counterar. Vírgula separa; vale parte do nick.">sempre trocar depois de jogar contra: <input class="ppvp-in" data-c="sempreTrocar" value="${esc(a.sempreTrocar ?? '')}" style="width:160px" spellcheck="false"></label>
@@ -2118,7 +2142,7 @@
     else if (a === 'autoAgenteSw') { cfg.auto.agente = !cfg.auto.agente; if (cfg.auto.agente && !cfg.auto.ativo) { cfg.auto.ativo = true; cfg.auto.seguidas = 0; } registrar(cfg.auto.agente ? '🤖 agente de IA LIGADO nesta conta' : '🤖 agente de IA desligado nesta conta'); }
     else if (a === 'limparEventos') { eventosAgente = []; salvarEventos(); }
     else if (a === 'pagAgente') { paginaAgente = Math.max(0, paginaAgente + Number(b.dataset.v)); }
-    else if (a === 'limparCaderno') { caderno = ''; try { localStorage.removeItem(CHAVE_CADERNO); } catch {} }
+    else if (a === 'limparCaderno') { cadernos = { geral: '', rivais: {} }; salvarCadernos(); try { localStorage.removeItem(CHAVE_CADERNO); } catch {} }
     else if (a === 'calcAtivos') return calcularContraAtivos(b.dataset.v);
     else if (a === 'cruzCalc') return calcularCruz(b.dataset.v);
     else if (a === 'autoFora') {
