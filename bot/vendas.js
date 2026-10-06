@@ -7,7 +7,7 @@
 // A comissão é a do jogo: `shared/taxa-mercado.mjs`, o mesmo arquivo que o servidor usa.
 (() => {
   'use strict';
-  const VERSAO_VENDAS = '1.1.2';
+  const VERSAO_VENDAS = '1.2.0';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -177,6 +177,140 @@
     salvarReb();
     reb.publicando = false;
     setTimeout(carregarMercadoReb, 1500);
+  }
+
+  // ---------------------------------------------------------------- reposição automática de pedras
+  // Quando uma pedra VIGIADA desta conta vende no Mercado (`marketVendido`), compra as 2 mais baratas
+  // do Mercado — até o alvo de compra do Rotom, nunca de uma conta sua — e reanuncia a "alvo + %".
+  // É o estoque das contas alternativas para segurar o preço perto do alvo (a Bekazin compra no alvo).
+  // NUNCA roda na conta protegida. Os alvos, os seus nicks e o % de cada conta vêm da janela do app
+  // (`window.__pokeReposicao`), lidos do Rotom Sniper.
+  const PEDRAS_REPOR = ['Water', 'Rock', 'Earth', 'Fire', 'Leaf'];
+  const CHAVE_REPOR = 'pokevendas.repor.v1';
+  const repor = (() => {
+    const padrao = { ativo: false, pedras: Object.fromEntries(PEDRAS_REPOR.map((p) => [p, true])), qtd: 2, log: [] };
+    try { const s = JSON.parse(localStorage.getItem(CHAVE_REPOR)) ?? {}; return { ...padrao, ...s, pedras: { ...padrao.pedras, ...(s.pedras ?? {}) }, log: s.log ?? [] }; } catch { return padrao; }
+  })();
+  const salvarRepor = () => { try { localStorage.setItem(CHAVE_REPOR, JSON.stringify({ ...repor, log: repor.log.slice(0, 40) })); } catch {} };
+  const reporNota = (txt) => { repor.log.unshift({ em: Date.now(), txt }); repor.log = repor.log.slice(0, 40); salvarRepor(); console.log('[Reposição]', txt); if (document.getElementById('pv-fundo')?.classList.contains('aberto') && modo === 'rebaixar') pintar(); };
+  const dadosApp = () => window.__pokeReposicao ?? null;
+  /** O id e o nome do catálogo de "<Tipo> Stone". */
+  function pedraDoTipo(tipo) {
+    for (const [id, i] of core.itens ?? []) {
+      const n = String(i.name ?? i.nome ?? '');
+      if (new RegExp(`^${tipo}\\s+stone$`, 'i').test(n)) return { id: Number(id), nome: n };
+    }
+    return null;
+  }
+  const naBolsaId = (id) => Math.floor(Number(core.eu?.items?.[id]) || 0);
+
+  /** Espera um evento de batalha (ex.: `marketComprado`) que passe no filtro. */
+  function esperarEvento(filtro, ms = 7000) {
+    return new Promise((ok) => {
+      const ws = core.ws;
+      if (!ws) return ok(null);
+      const t = setTimeout(() => { ws.removeEventListener('message', f); ok(null); }, ms);
+      function f(ev) {
+        if (typeof ev.data !== 'string' || !ev.data.includes('"t":"batalha"')) return;
+        let m;
+        try { m = JSON.parse(ev.data); } catch { return; }
+        const e = (m.ev ?? []).find(filtro);
+        if (!e) return;
+        clearTimeout(t); ws.removeEventListener('message', f); ok(e);
+      }
+      ws.addEventListener('message', f);
+    });
+  }
+
+  const filaRepor = [];
+  let reponDo = false;
+  const ultimaRepos = new Map(); // tipo → quando (evita repor 2× pelo mesmo lote)
+  function aoVenderPedra(descricao) {
+    const m = String(descricao ?? '').match(/\b(water|rock|earth|fire|leaf)\s+stone\b/i);
+    if (!m) return;
+    const tipo = PEDRAS_REPOR.find((p) => p.toLowerCase() === m[1].toLowerCase());
+    if (!repor.ativo || !repor.pedras[tipo]) return;
+    if (contaProtegida()) { reporNota(`🔒 ${tipo} Stone vendeu, mas esta conta é protegida — não repõe`); return; }
+    if (Date.now() - (ultimaRepos.get(tipo) ?? 0) < 30_000 || filaRepor.includes(tipo)) return;
+    filaRepor.push(tipo);
+    processarRepor();
+  }
+
+  async function processarRepor() {
+    if (reponDo) return;
+    reponDo = true;
+    try {
+      while (filaRepor.length) {
+        const tipo = filaRepor.shift();
+        ultimaRepos.set(tipo, Date.now());
+        await reporPedra(tipo).catch((e) => reporNota(`⚠ ${tipo} Stone: ${e.message}`));
+        await dormir(1500);
+      }
+    } finally { reponDo = false; }
+  }
+
+  async function reporPedra(tipo) {
+    if (contaProtegida()) return;
+    const pedra = pedraDoTipo(tipo);
+    if (!pedra) return reporNota(`⚠ não achei "${tipo} Stone" no catálogo de itens`);
+    const app = dadosApp();
+    const alvo = Number(app?.alvos?.[pedra.nome.toLowerCase()]) || 0;
+    if (!alvo) return reporNota(`⚠ ${pedra.nome} vendeu, mas não há alvo no Rotom para ela — não comprei (sem teto de preço)`);
+    const meus = new Set([...(app?.meusNicks ?? []), core.eu?.nick].filter(Boolean).map((n) => String(n).toLowerCase()));
+    // 1) os anúncios em Coins, do mais barato, sem os seus, até o alvo
+    const r = await pedir({ t: 'market.item', itemId: pedra.id, moeda: 'gold' }, (x) => x.aba === 'item' && Number(x.itemId) === pedra.id, 8000);
+    const ofertas = (r.linhas ?? []).filter((l) => !meus.has(String(l.vendedor ?? '').toLowerCase()) && Number(l.preco) > 0 && Number(l.preco) <= alvo)
+      .sort((a, b) => a.preco - b.preco);
+    let falta = Math.max(1, Math.min(5, Number(repor.qtd) || 2));
+    let comprou = 0, gasto = 0;
+    const antes = naBolsaId(pedra.id);
+    for (const l of ofertas) {
+      if (!falta) break;
+      const n = Math.min(falta, Math.floor(Number(l.qtd) || 1));
+      if ((Number(core.eu?.gold) || 0) < n * l.preco) { reporNota(`⚠ ${pedra.nome}: sem Coins para comprar ${n}× a ${fmt(l.preco)}`); break; }
+      core.send({ t: 'market.comprar', id: l.id, qtd: n, preco: l.preco, moeda: 'gold' });
+      const ev = await esperarEvento((e) => e.k === 'marketComprado' && /stone/i.test(e.descricao ?? ''), 7000);
+      if (!ev) { reporNota(`⚠ ${pedra.nome}: a compra de ${n}× de ${l.vendedor} não confirmou (outro comprador levou?)`); continue; }
+      comprou += n; gasto += n * l.preco; falta -= n;
+      await dormir(700);
+    }
+    if (!comprou) return reporNota(`${pedra.nome} vendeu — nenhum anúncio até o alvo (${fmt(alvo)}) para repor${ofertas.length ? '' : ` · menor fora dos seus: ${fmt(Math.min(...(r.linhas ?? []).filter((l) => !meus.has(String(l.vendedor ?? '').toLowerCase())).map((l) => l.preco)) || 0)}`}`);
+    // 2) reanuncia a alvo + % (o degrau desta conta, que a janela do app escalona entre as contas)
+    for (let i = 0; i < 10 && naBolsaId(pedra.id) < antes + comprou; i++) await dormir(500);
+    const acima = Math.max(0, Number(app?.acima ?? 5)) / 100;
+    const precoVenda = Math.max(2, Math.ceil(alvo * (1 + acima)));
+    const pub = await rebaixarAgora({ nome: pedra.nome, qtd: Math.min(comprou, 2), preco: precoVenda, itemId: pedra.id, ref: alvo, desconto: -Math.round(acima * 100) });
+    reporNota(`🔁 ${pedra.nome} vendeu → comprei ${comprou}× (${fmt(gasto)} Coins, até o alvo ${fmt(alvo)}) e ${pub.ok ? `anunciei ${pub.qtd}× a ${fmt(precoVenda)} (alvo +${Math.round(acima * 100)}%)` : `NÃO anunciei (${pub.msg})`}`);
+  }
+
+  // Escuta as vendas desta conta (inclusive as que aconteceram offline: chegam no login).
+  function aoMsgRepor(ev) {
+    if (typeof ev.data !== 'string' || !ev.data.includes('"marketVendido"')) return;
+    let m;
+    try { m = JSON.parse(ev.data); } catch { return; }
+    for (const e of m.ev ?? []) if (e.k === 'marketVendido') aoVenderPedra(e.descricao);
+  }
+  let wsRepor = null;
+  const vigiaRepor = setInterval(() => {
+    if (core.ws === wsRepor) return;
+    wsRepor?.removeEventListener('message', aoMsgRepor);
+    wsRepor = core.ws;
+    wsRepor?.addEventListener('message', aoMsgRepor);
+  }, 1000);
+  limpezas.push(() => { clearInterval(vigiaRepor); wsRepor?.removeEventListener('message', aoMsgRepor); });
+
+  function htmlRepor() {
+    if (contaProtegida()) return `<section><p class="pv-neg"><b>🔁 Reposição automática: 🔒 bloqueada nesta conta.</b></p></section>`;
+    const app = dadosApp();
+    return `<section>
+        <h4 class="pv-rot">🔁 Reposição automática</h4>
+        <div class="pv-linha">
+          <button class="pv-bt ${repor.ativo ? 'on' : ''}" data-a="reporAtivo">${repor.ativo ? '● LIGADA' : 'desligada'}</button>
+          ${PEDRAS_REPOR.map((p) => `<label><input type="checkbox" data-a="reporPedra" data-v="${p}" ${repor.pedras[p] ? 'checked' : ''}> ${p}</label>`).join(' ')}
+        </div>
+        <p class="pv-ajuda">Quando uma dessas pedras desta conta vende, o bot compra as <b>2 mais baratas</b> do Mercado (em Coins, <b>até o seu alvo do Rotom</b>, nunca de uma conta sua) e reanuncia a <b>alvo + ${esc(app?.acima ?? 5)}%</b>. Alvos do Rotom: ${app?.alvos ? PEDRAS_REPOR.map((p) => { const pe = pedraDoTipo(p); const a = pe && app.alvos[pe.nome.toLowerCase()]; return `${p} ${a ? fmt(a) : '—'}`; }).join(' · ') : '<span class="pv-neg">ainda não recebidos da janela do app (abra o app novo / aguarde 1 min)</span>'}.</p>
+        ${repor.log.length ? `<table class="pv-tab"><tr><th>Quando</th><th>O que aconteceu</th></tr>${repor.log.slice(0, 12).map((l) => `<tr><td>${dataHora(l.em)}</td><td style="text-align:left;white-space:normal">${esc(l.txt)}</td></tr>`).join('')}</table>` : '<p class="pv-ajuda">Nada ainda.</p>'}
+      </section>`;
   }
 
   function htmlRebaixar() {
@@ -480,7 +614,7 @@
         <button class="pv-bt ${modo === 'relatorio' ? 'on' : ''}" data-a="modo" data-v="relatorio">📊 Relatório</button>
         <button class="pv-bt ${modo === 'rebaixar' ? 'on' : ''}" data-a="modo" data-v="rebaixar">📉 Anunciar abaixo do mercado</button>
         <button data-a="fechar" title="Fechar">×</button></span></header>`;
-    if (modo === 'rebaixar') { modal.innerHTML = cab + htmlRebaixar(); return; }
+    if (modo === 'rebaixar') { modal.innerHTML = cab + htmlRepor() + htmlRebaixar(); return; }
     const foco = document.activeElement?.dataset?.c;
     const cursor = document.activeElement?.selectionStart;
 
@@ -598,6 +732,8 @@
     else if (a === 'rebAuto') { reb.desconto = null; pintar(); }
     else if (a === 'rebPrecos') carregarMercadoReb();
     else if (a === 'rebPublicar') publicarReb();
+    else if (a === 'reporAtivo') { if (!contaProtegida()) { repor.ativo = !repor.ativo; salvarRepor(); reporNota(repor.ativo ? 'reposição LIGADA' : 'reposição desligada'); } }
+    else if (a === 'reporPedra') { repor.pedras[b.dataset.v] = b.checked; salvarRepor(); }
   }
 
   function abrir() {

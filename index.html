@@ -460,6 +460,33 @@
   }
 
   document.getElementById('bt-rebaixar').onclick = abrirReb;
+  // ---------------------------------------------------------------- reposição de pedras: dados para as contas
+  // A cada 10 min: os alvos de compra do Rotom (os da conta protegida valem primeiro), os nicks das
+  // suas contas (a reposição nunca compra de você mesmo) e o % acima do alvo de cada conta
+  // alternativa (escalonado: a 1ª +8%, descendo até +3%).
+  async function sincronizarReposicao() {
+    try {
+      const info = await Promise.all(contas.map(async (c) => ({ c, i: await naConta(c, '(() => ({ nick: window.__pokebotCore?.eu?.nick ?? null, protegida: !!window.__pokeVendas?.infoRebaixar?.()?.protegida }))()') })));
+      const alvos = {};
+      for (const x of [...info].sort((a, b) => (b.i?.protegida ? 1 : 0) - (a.i?.protegida ? 1 : 0))) {
+        const regras = window.multi.rotomRegras ? await window.multi.rotomRegras(x.c.n).catch(() => null) : null;
+        for (const r of regras ?? []) {
+          const nome = String(r.targetName ?? '').toLowerCase();
+          if (nome && Number(r.maxPriceGold) > 0 && !(nome in alvos)) alvos[nome] = Number(r.maxPriceGold);
+        }
+      }
+      const meusNicks = info.map((x) => x.i?.nick).filter(Boolean);
+      const alts = info.filter((x) => x.i?.nick && !x.i.protegida);
+      alts.forEach((x, i) => {
+        const acima = alts.length > 1 ? 8 - (5 * i) / (alts.length - 1) : 8;
+        naConta(x.c, `window.__pokeReposicao = ${JSON.stringify({ alvos, meusNicks, acima: Math.round(acima * 10) / 10, em: Date.now() })}`);
+      });
+      for (const x of info.filter((y) => y.i?.protegida)) naConta(x.c, 'window.__pokeReposicao = null');
+    } catch (e) { console.warn('reposição: não sincronizou', e); }
+  }
+  setTimeout(sincronizarReposicao, 45_000);
+  setInterval(sincronizarReposicao, 10 * 60_000);
+
   // ---------------------------------------------------------------- Guia: onde caçar e ranking de XP
   const gxFundo = document.getElementById('gx-fundo');
   const gxModal = document.getElementById('gx-modal');
