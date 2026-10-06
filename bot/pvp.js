@@ -18,10 +18,12 @@
 //    (vitórias > derrotas), encerra de vez. Enquanto a sessão roda, ela substitui a trava do item 2.
 (() => {
   'use strict';
-  const VERSAO_PVP = '1.16.1';
+  const VERSAO_PVP = '1.16.2';
 
   const core = window.__pokebotCore;
   if (!core) return;
+  // Versão Lite do app: nada de PvP (nem auto-switch, nem agente, nem trava da fila).
+  if (window.__pokeVariante === 'lite') { window.__pokePvp?.desmontar?.(); window.__pokePvp = null; return; }
   const estavaAberto = !!document.getElementById('ppvp-fundo')?.classList.contains('aberto');
   window.__pokePvp?.desmontar?.();
 
@@ -33,6 +35,9 @@
     get autoPvp() { return cfg.sessao ? { ...cfg.sessao } : null; },
     /** Liga/desliga o auto-switch (o botão 🔁 Switch do cabeçalho da conta chama isto). */
     alternarAutoSwitch() { alternarAuto(); pintar(); return !!cfg.auto.ativo; },
+    /** Liga/desliga o "🤖 agente de IA decide" desta conta (o painel 🤖 Agente IA do app chama isto). Ligar também liga o auto-switch. */
+    definirAgente(v) { cfg.auto.agente = !!v; if (v && !cfg.auto.ativo) { cfg.auto.ativo = true; cfg.auto.seguidas = 0; } salvarCfg(); registrar(v ? '🤖 agente de IA LIGADO nesta conta' : '🤖 agente de IA desligado nesta conta'); pintar(); return cfg.auto.agente; },
+    get agente() { return !!cfg.auto.agente; },
     desmontar() { for (const f of limpezas.splice(0)) { try { f(); } catch {} } },
     abrir: () => abrir(),
     fechar: () => fechar(),
@@ -973,7 +978,7 @@
           if (minha !== rodadaSwitch || hist[0]?.id !== idAgora || !cfg.auto.ativo) return;
           const t = em + 5_000;
           const prev = preverProximo(reg.nick, PESO_REPETIR, t);
-          registrar(`🤖 IA: bloqueio de revanche acabando — previsão para ${new Date(t).toLocaleTimeString('pt-BR')}: ${prev.slice(0, 3).map((x) => `${x.nick} ${Math.round(x.p * 100)}%`).join(', ')}`);
+          registrar(`📈 previsão: bloqueio de revanche acabando — previsão para ${new Date(t).toLocaleTimeString('pt-BR')}: ${prev.slice(0, 3).map((x) => `${x.nick} ${Math.round(x.p * 100)}%`).join(', ')}`);
           const r1 = await escolherFormacao(reg, minha, { reavaliando: true, t });
           if (minha === rodadaSwitch && r1 !== 'manter') await ajustarAbertura(preverProximo(reg.nick, PESO_REPETIR, t), minha);
         }, Math.max(0, em - 25_000 - agora)));
