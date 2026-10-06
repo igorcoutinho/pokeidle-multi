@@ -18,7 +18,7 @@
 //    (vitórias > derrotas), encerra de vez. Enquanto a sessão roda, ela substitui a trava do item 2.
 (() => {
   'use strict';
-  const VERSAO_PVP = '1.16.2';
+  const VERSAO_PVP = '1.17.0';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -576,6 +576,28 @@
   const CHAVE_CADERNO = 'pokepvp.agente.caderno';
   let caderno = (() => { try { return localStorage.getItem(CHAVE_CADERNO) ?? ''; } catch { return ''; } })();
   let agenteStatus = '';
+  // Os eventos do agente (aba 🤖 Agente): decisões, falhas, caderno — e, na partida seguinte, o resultado.
+  const CHAVE_EVENTOS = 'pokepvp.agente.eventos.v1';
+  let eventosAgente = (() => { try { return JSON.parse(localStorage.getItem(CHAVE_EVENTOS)) ?? []; } catch { return []; } })();
+  const salvarEventos = () => { try { localStorage.setItem(CHAVE_EVENTOS, JSON.stringify(eventosAgente.slice(0, 300))); } catch {} };
+  function anotarAgente(ev) {
+    eventosAgente.unshift({ em: Date.now(), ...ev });
+    eventosAgente = eventosAgente.slice(0, 300);
+    salvarEventos();
+    if (estaAberto() && aba === 'agente') pintar();
+  }
+  /** A partida que chegou responde à última decisão do agente ainda sem resultado. */
+  function conferirAgente(reg) {
+    const d = eventosAgente.find((e) => (e.tipo === 'decisão' || e.tipo === 'manteve') && e.pendente);
+    if (!d) return;
+    d.pendente = false;
+    d.veio = reg.nick;
+    d.venceu = !!reg.venci;
+    d.acertou = d.previstos?.length ? mesmoNick(d.previstos[0].nick, reg.nick) : null;
+    const lutou = idsDoDuelo(reg)?.join(',');
+    d.usou = lutou && d.k ? lutou === d.k : null;
+    salvarEventos();
+  }
   function perguntarAgente(pedido, ms = 14_000) {
     return new Promise((res) => {
       const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -620,7 +642,8 @@
       caderno = r.resposta.caderno.slice(0, 2000);
       try { localStorage.setItem(CHAVE_CADERNO, caderno); } catch {}
       registrar('🤖 agente: caderno de lições atualizado');
-    } else if (!r.ok) registrar(`🤖 agente: não atualizou o caderno (${r.erro})`);
+      anotarAgente({ tipo: 'caderno', motivo: `caderno reescrito depois de ${reg.venci ? 'vencer' : 'perder para'} ${reg.nick} (${caderno.length} caracteres)` });
+    } else if (!r.ok) { registrar(`🤖 agente: não atualizou o caderno (${r.erro})`); anotarAgente({ tipo: 'falha', motivo: `caderno: ${r.erro}` }); }
     if (estaAberto()) pintar();
   }
 
@@ -1076,21 +1099,29 @@
     let doAgente = null;
     if (cfg.auto.agente && notas.length) {
       agenteStatus = 'pensando…';
+      const t0 = Date.now();
       const r = await perguntarAgente({ sistema: SISTEMA_AGENTE, usuario: JSON.stringify(estadoParaAgente(reg, previstos, notas, forcar)), maxTokens: 300 });
-      if (minha !== rodadaSwitch) return;
+      const ms = Date.now() - t0;
+      const prevResumo = previstos.slice(0, 3).map((x) => ({ nick: x.nick, p: Math.round(x.p * 100), base: x.base ?? '' }));
+      const quando = opc.reavaliando ? 'antes do bloqueio acabar' : `depois de ${reg.venci ? 'vencer' : 'perder para'} ${reg.nick}`;
+      if (minha !== rodadaSwitch) { anotarAgente({ tipo: 'descartada', quando, ms, motivo: 'chegou outra partida enquanto ele pensava' }); return; }
       const id = String(r.resposta?.formacao ?? '');
       const esc = r.ok ? notas.find((n) => n.f.k === id) : null;
       if (esc) {
         doAgente = { motivo: String(r.resposta.motivo ?? '').slice(0, 240), confianca: Number(r.resposta.confianca) || null, modelo: r.modelo };
         melhor = { ...esc, det: [`🤖 ${doAgente.motivo}`, ...esc.det] };
         agenteStatus = `${r.modelo}: escolheu ${esc.f.nome}`;
+        anotarAgente({ tipo: 'decisão', quando, ms, modelo: r.modelo, previstos: prevResumo, de: atual?.nome ?? null, escolha: nomesDosIds(esc.f.ids).join(' → '), k: esc.f.k,
+          doModelo: notas[0]?.f.k === esc.f.k ? 'igual à do modelo' : `modelo preferia ${notas[0]?.f.nome ?? '—'}`, motivo: doAgente.motivo, confianca: doAgente.confianca, forcada: !!forcar, pendente: true });
       } else if (r.ok && !forcar && id === chaveAtual()) {
         agenteStatus = `${r.modelo}: manter a atual`;
+        anotarAgente({ tipo: 'manteve', quando, ms, modelo: r.modelo, previstos: prevResumo, escolha: atual?.nome ?? 'a atual', k: chaveAtual(), motivo: String(r.resposta.motivo ?? '').slice(0, 240), confianca: Number(r.resposta.confianca) || null, pendente: true });
         registrar(`🤖 agente: manter a equipe atual — ${String(r.resposta.motivo ?? '').slice(0, 200)}`);
         anotarTroca(reg, { acao: 'manteve', previstos, de: atual?.nome, para: atual?.nome, motivo: `🤖 agente: ${String(r.resposta.motivo ?? '').slice(0, 200)}` });
         return;
       } else {
         agenteStatus = r.ok ? `respondeu uma formação que não existe (${id}) — vale o modelo` : `falhou: ${r.erro} — vale o modelo`;
+        anotarAgente({ tipo: 'falha', quando, ms, modelo: r.modelo ?? null, motivo: agenteStatus, escolha: `modelo: ${notas[0]?.f.nome ?? '—'}` });
         registrar(`🤖 agente: ${agenteStatus}`);
       }
     }
@@ -1248,6 +1279,56 @@
         : '<p class="ppvp-aviso">Nenhuma decisão ainda — com o auto-switch ligado, cada partida registra aqui o que ele decidiu e, na seguinte, se deu certo.</p>'}`;
   }
 
+  let paginaAgente = 0;
+  function htmlAgente() {
+    const dec = eventosAgente.filter((e) => (e.tipo === 'decisão' || e.tipo === 'manteve') && !e.pendente && e.veio);
+    const v = dec.filter((e) => e.venceu).length;
+    const acertos = dec.filter((e) => e.acertou).length;
+    const falhas = eventosAgente.filter((e) => e.tipo === 'falha').length;
+    const difModelo = dec.filter((e) => e.doModelo && e.doModelo !== 'igual à do modelo');
+    const vDif = difModelo.filter((e) => e.venceu).length;
+    const ms = eventosAgente.filter((e) => e.ms).map((e) => e.ms);
+    const msMed = ms.length ? Math.round(ms.reduce((a, b) => a + b, 0) / ms.length / 100) / 10 : null;
+    const POR = 15;
+    const paginas = Math.max(1, Math.ceil(eventosAgente.length / POR));
+    paginaAgente = Math.min(paginaAgente, paginas - 1);
+    const pag = eventosAgente.slice(paginaAgente * POR, (paginaAgente + 1) * POR);
+    const icone = { 'decisão': '🔁', manteve: '⏸', falha: '⚠', caderno: '📓', descartada: '↩' };
+    const resultado = (e) => (e.tipo !== 'decisão' && e.tipo !== 'manteve') ? '' : e.pendente ? '<span class="ppvp-aviso">aguardando a partida</span>'
+      : `vs <b>${esc(e.veio)}</b> ${e.venceu ? '<span class="ppvp-v">venceu</span>' : '<span class="ppvp-d">perdeu</span>'}${e.acertou === true ? ' · previsão ✅' : e.acertou === false ? ' · previsão ❌' : ''}${e.usou === false ? ' · <small class="ppvp-aviso">a equipe mudou antes</small>' : ''}`;
+    return `<section>
+        <div class="ppvp-linha">
+          <button class="ppvp-sw ${cfg.auto.agente ? 'on' : ''}" data-a="autoAgenteSw"></button>
+          <b>🤖 agente de IA decide nesta conta</b>
+          <span class="ppvp-aviso">${esc(agenteStatus || (cfg.auto.agente ? 'aguardando a próxima decisão' : 'desligado'))}</span>
+          <span style="flex:1"></span>
+          ${eventosAgente.length ? '<button class="ppvp-bt ppvp-mini" data-a="limparEventos">limpar registro</button>' : ''}
+        </div>
+        <div class="ppvp-linha" style="gap:14px">
+          <span>Decisões com resultado: <b>${dec.length}</b></span>
+          <span>Vitórias depois delas: <b class="${dec.length && v * 2 >= dec.length ? 'ppvp-v' : 'ppvp-d'}">${dec.length ? `${v}/${dec.length} (${Math.round((v / dec.length) * 100)}%)` : '—'}</b></span>
+          <span>Previsão do próximo: <b>${dec.length ? `${Math.round((acertos / dec.length) * 100)}%` : '—'}</b></span>
+          <span title="decisões em que o agente escolheu diferente do modelo estatístico">Quando discordou do modelo: <b>${difModelo.length ? `${vDif}/${difModelo.length} vitórias` : '—'}</b></span>
+          <span>Falhas: <b>${falhas}</b></span>
+          <span>Tempo médio: <b>${msMed != null ? `${msMed} s` : '—'}</b></span>
+        </div>
+        <details><summary class="ppvp-aviso">📓 caderno de lições (${caderno.length} caracteres)</summary><pre class="ppvp-log" style="max-height:220px">${esc(caderno || 'vazio — ele escreve depois da próxima partida')}</pre>${caderno ? '<button class="ppvp-bt ppvp-mini" data-a="limparCaderno">limpar caderno</button>' : ''}</details>
+      </section>
+      <section>
+        ${pag.length ? `<table class="ppvp-tab"><tr><th>Quando</th><th></th><th>Situação</th><th>Previsão</th><th>Escolha</th><th>Motivo</th><th>Resultado</th></tr>
+          ${pag.map((e) => `<tr>
+            <td>${quando(e.em)}${e.ms ? `<small> · ${(e.ms / 1000).toFixed(1)} s</small>` : ''}</td>
+            <td title="${esc(e.tipo)}">${icone[e.tipo] ?? '·'}</td>
+            <td style="white-space:normal">${esc(e.quando ?? '')}${e.forcada ? ' <small class="ppvp-aviso">(troca obrigatória)</small>' : ''}</td>
+            <td style="white-space:normal">${(e.previstos ?? []).map((x) => `${esc(x.nick)} ${x.p}%`).join('<br>')}</td>
+            <td style="white-space:normal">${esc(e.escolha ?? '')}${e.doModelo ? `<br><small class="ppvp-aviso">${esc(e.doModelo)}</small>` : ''}${e.confianca != null ? `<br><small>confiança ${Math.round(e.confianca * 100)}%</small>` : ''}</td>
+            <td style="white-space:normal;max-width:300px">${esc(e.motivo ?? '')}${e.modelo ? `<br><small class="ppvp-aviso">${esc(e.modelo)}</small>` : ''}</td>
+            <td style="white-space:normal">${resultado(e)}</td></tr>`).join('')}</table>
+          ${paginas > 1 ? `<div class="ppvp-linha"><button class="ppvp-bt" data-a="pagAgente" data-v="-1" ${paginaAgente === 0 ? 'disabled' : ''}>‹</button><span>página ${paginaAgente + 1} de ${paginas}</span><button class="ppvp-bt" data-a="pagAgente" data-v="1" ${paginaAgente >= paginas - 1 ? 'disabled' : ''}>›</button></div>` : ''}`
+          : `<span class="ppvp-aviso">Nada ainda. ${cfg.auto.agente ? 'A primeira decisão sai depois da próxima partida (ou 25 s antes de um bloqueio de revanche acabar).' : 'Ligue o agente acima — e confira se ele está "Ligado" no 🤖 Agente IA da barra do app, com a chave salva.'}</span>`}
+      </section>`;
+  }
+
   function htmlFormacoes() {
     const a = cfg.auto;
     const todas = minhasFormacoes().sort((x, y) => y.n - x.n || notaF(y) - notaF(x));
@@ -1344,6 +1425,7 @@
         contarResultado(reg);
         if (reg.dele.length) registrar(`${reg.venci ? 'vitória' : 'derrota'} vs ${reg.nick}: ${reg.dele.map((x) => x.nome).join(' → ')}`);
         conferirTroca(reg);
+        conferirAgente(reg);
         atualizarCaderno(reg).catch(() => {});
         autoSwitch(reg);
       }
@@ -1582,7 +1664,12 @@
         <button class="ppvp-bt ${aba === 'stats' ? 'ppvp-on' : ''}" data-a="aba" data-v="stats">Estatísticas</button>
         <button class="ppvp-bt ${aba === 'rivais' ? 'ppvp-on' : ''}" data-a="aba" data-v="rivais">Rivais</button>
         <button class="ppvp-bt ${aba === 'formacoes' ? 'ppvp-on' : ''}" data-a="aba" data-v="formacoes">Formações${cfg.auto.ativo ? ' 🔁' : ''}</button>
+        <button class="ppvp-bt ${aba === 'agente' ? 'ppvp-on' : ''}" data-a="aba" data-v="agente">🤖 Agente${cfg.auto.agente ? ' ●' : ''}</button>
         <button class="ppvp-x" data-a="fechar" title="Fechar">×</button></span>`;
+    if (aba === 'agente') {
+      modal.innerHTML = `<header><span>⚔ PvP — agente de IA<small>v${VERSAO_PVP}</small></span>${abas}</header>${htmlAgente()}`;
+      return;
+    }
     if (aba === 'formacoes') {
       modal.innerHTML = `<header><span>⚔ PvP — formações e auto-switch<small>v${VERSAO_PVP}</small></span>${abas}</header>${htmlFormacoes()}`;
       return;
@@ -2023,6 +2110,9 @@
     else if (a === 'autoReavaliar') cfg.auto.reavaliarFila = b.checked;
     else if (a === 'autoIA') cfg.auto.ia = b.checked;
     else if (a === 'autoAgente') cfg.auto.agente = b.checked;
+    else if (a === 'autoAgenteSw') { cfg.auto.agente = !cfg.auto.agente; if (cfg.auto.agente && !cfg.auto.ativo) { cfg.auto.ativo = true; cfg.auto.seguidas = 0; } registrar(cfg.auto.agente ? '🤖 agente de IA LIGADO nesta conta' : '🤖 agente de IA desligado nesta conta'); }
+    else if (a === 'limparEventos') { eventosAgente = []; salvarEventos(); }
+    else if (a === 'pagAgente') { paginaAgente = Math.max(0, paginaAgente + Number(b.dataset.v)); }
     else if (a === 'limparCaderno') { caderno = ''; try { localStorage.removeItem(CHAVE_CADERNO); } catch {} }
     else if (a === 'calcAtivos') return calcularContraAtivos(b.dataset.v);
     else if (a === 'cruzCalc') return calcularCruz(b.dataset.v);
