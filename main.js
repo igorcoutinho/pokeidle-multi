@@ -263,7 +263,7 @@ ipcMain.handle('pb:logica', () => lerLogica());
 ipcMain.handle('multi:cfg', () => ({ ...lerCfg(), ia: iaConfig(), nContas: N_CONTAS, urlJogo: URL_JOGO, pastaBot: PASTA_BOT, rotom, variante: VARIANTE }));
 ipcMain.handle('multi:iaConfig', (_e, novo) => { try { return novo ? iaSalvar(novo) : iaConfig(); } catch (e) { return { erro: e.message, ...iaConfig() }; } });
 ipcMain.handle('multi:iaTestar', () => iaPerguntar({ teste: true, sistema: 'Responda só JSON.', usuario: 'Responda {"ok": true, "msg": "<uma frase curta em português>"}', maxTokens: 60, timeoutMs: 20_000 }));
-ipcMain.handle('pb:ia', (_e, pedido) => iaPerguntar(pedido ?? {}));
+ipcMain.handle('pb:ia', (_e, pedido) => (VARIANTE === 'lite' ? { ok: false, erro: 'a versão Lite não tem o agente de IA' } : iaPerguntar(pedido ?? {})));
 ipcMain.handle('multi:abrirCockpit', (_e, n) => abrirCockpit(n));
 ipcMain.handle('multi:rotomRegras', (_e, n) => lerRegrasRotom(n));
 ipcMain.handle('multi:twitchLives', (_e, lives) => abrirLivesNovas(lives));

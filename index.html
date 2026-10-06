@@ -71,7 +71,7 @@
   <span id="abas-1x1"></span>
   <span class="esp"></span>
   <span class="info" id="info-bot">bot: carregando…</span>
-  <button id="bt-ia" title="Agente de IA (OpenAI/Anthropic) que decide a formação do PvP e aprende com as partidas">🤖 Agente IA</button>
+  <button id="bt-ia" class="so-completa" title="Agente de IA (OpenAI/Anthropic) que decide a formação do PvP e aprende com as partidas">🤖 Agente IA</button>
   <button id="bt-rankxp" title="Top 10 do ranking de XP do dia (dados do guiapokeidlehardtocapture.site) e a posição das suas contas">🏆 Ranking XP</button>
   <button id="bt-twitch" title="Quando uma live oficial do jogo entra no ar (bônus de XP), abre no seu Chrome — uma vez por live">📺 Lives → Chrome</button>
   <button id="bt-rebaixar" title="Anunciar uma pedra abaixo do mercado em todas as contas alternativas, de uma vez">📉 Pedra abaixo do mercado</button>
@@ -124,7 +124,7 @@
   })()`;
 
   async function injetarLogica(c) {
-    try { await c.wv.executeJavaScript(logica); }
+    try { await c.wv.executeJavaScript(`window.__pokeVariante = ${JSON.stringify(cfg.variante ?? '')};\n${logica}`); }
     catch (e) { console.warn('lógica não entrou na conta', c.n, e); }
   }
 
@@ -147,7 +147,7 @@
         <button data-a="itens" title="Itens principais (Boss Token, peças de TM, fragmentos) e histórico de drops por boss">📦 Itens</button>
         <button data-a="vendas" title="Relatório de compras e vendas no Mercado: preço médio, taxa, lucro e preço de venda">💰 Vendas</button>
         ${lite ? '' : '<button data-a="pvp" class="eco" title="PvP: ordem que cada rival usou e trava da fila automática">⚔ PvP</button>'}
-        <button data-a="time" title="Análise do time para PvP: quem colocar no lugar de quem">📊 Time</button>
+        ${lite ? '' : '<button data-a="time" title="Análise do time para PvP: quem colocar no lugar de quem">📊 Time</button>'}
         <button data-a="eco" class="eco" title="Ligar/desligar o Modo Economia do jogo nesta conta">🍃 Eco</button>
         ${cfg.rotom ? '<button data-a="rotom" title="Abrir o Cockpit do Rotom Sniper desta conta">🎯 Rotom</button>' : ''}
         <button data-a="menos" title="Diminuir zoom">−</button>
@@ -536,7 +536,7 @@
     if (msg) iaUltimoMsg = `${msg} <span class="ajuda">(${new Date().toLocaleTimeString('pt-BR')})</span>`;
     const c = await window.multi.iaConfig();
     // As últimas decisões do agente em cada conta (do Registro do ⚔ PvP) e se ela está com "agente decide".
-    const porConta = await Promise.all(contas.map(async (x) => ({ x, r: await naConta(x, `(() => { try { const c = JSON.parse(localStorage.getItem('pokepvp.v1') || '{}'); return { liga: !!c.auto?.agente, nick: window.__pokebotCore?.eu?.nick ?? null, linhas: (c.log ?? []).filter((l) => l.includes('🤖')).slice(0, 6) }; } catch { return null; } })()`) })));
+    const porConta = await Promise.all(contas.map(async (x) => ({ x, r: await naConta(x, `(() => { try { const c = JSON.parse(localStorage.getItem('pokepvp.v1') || '{}'); return { liga: !!c.auto?.agente, nick: window.__pokebotCore?.eu?.nick ?? null, linhas: (c.log ?? []).filter((l) => l.includes('🤖 agente') || l.includes('🤖 Agente')).slice(0, 6) }; } catch { return null; } })()`) })));
     gxFundo.classList.add('aberto');
     gxModal.innerHTML = `<header><span>🤖 Agente de IA do PvP</span><button data-gx="fechar">×</button></header>
       <section id="ia-modal">
@@ -548,7 +548,7 @@
         <div class="linha ajuda">${c.temChave ? '<span class="ok">✓ chave salva neste PC</span>' : 'sem chave'} · a chave fica criptografada pelo Windows no seu PC, só o processo principal do app a usa (nunca vai para as páginas do jogo nem para o GitHub).</div>
         ${iaUltimoMsg ? `<div class="linha"><b>Último teste/ação:</b>&nbsp;${iaUltimoMsg}</div>` : ''}
         <div style="margin-top:6px"><b>Decisões do agente por conta</b> <button data-ia="atualizar">⟳</button>
-          ${porConta.map(({ x, r }) => `<div style="margin-top:4px"><b>${escH(x.nome)}</b>${r?.nick ? ` (${escH(r.nick)})` : ''} — ${r?.liga ? '<span class="ok">🤖 agente decide: LIGADO</span>' : '<span class="ajuda">agente decide: desligado (⚔ PvP → Formações)</span>'}
+          ${porConta.map(({ x, r }) => `<div style="margin-top:4px"><b>${escH(x.nome)}</b>${r?.nick ? ` (${escH(r.nick)})` : ''} — ${r?.liga ? `<span class="ok">🤖 agente decide: LIGADO</span> <button data-ia="conta" data-n="${x.n}" data-v="0">desligar</button>` : `<span class="ajuda">agente decide: desligado</span> <button data-ia="conta" data-n="${x.n}" data-v="1">ligar nesta conta</button>`}
             ${r?.linhas?.length ? `<pre class="ajuda" style="white-space:pre-wrap;margin:2px 0 0">${escH(r.linhas.join(String.fromCharCode(10)))}</pre>` : '<div class="ajuda">nenhuma decisão do agente ainda</div>'}</div>`).join('')}
         </div>
         <p class="ajuda">Como funciona: depois de cada partida e antes de cada bloqueio de revanche acabar, o app manda ao modelo um resumo (quem está livre, a previsão da IA estatística, suas formações com o placar contra cada rival, hábitos e as suas regras) e ele escolhe a formação. Depois de cada partida ele reescreve um <b>caderno de lições</b> que vai junto nas próximas decisões. Se ele demorar, errar ou escolher algo que não existe, vale a escolha do modelo estatístico. Cada decisão custa uma chamada de API (frações de centavo num modelo "mini").</p>
@@ -561,6 +561,10 @@
     if (a === 'salvar') {
       const r = await window.multi.iaConfig({ provedor: val('provedor').value, modelo: val('modelo').value, chave: val('chave').value || null, ligado: val('ligado').checked });
       abrirIA(r.erro ? `<span class="ruim">${escH(r.erro)}</span>` : '<span class="ok">salvo</span>');
+    } else if (a === 'conta') {
+      const x = contas.find((y) => y.n === Number(e.target.dataset.n));
+      const r = x ? await naConta(x, `window.__pokePvp?.definirAgente ? window.__pokePvp.definirAgente(${e.target.dataset.v === '1'}) : 'sem'`) : null;
+      abrirIA(r === 'sem' ? '<span class="ruim">o módulo de PvP desta conta ainda não atualizou — espere 1 min e tente de novo</span>' : `${escH(x?.nome ?? '')}: agente ${r ? 'LIGADO (e o auto-switch também)' : 'desligado'}`);
     } else if (a === 'atualizar') {
       abrirIA();
     } else if (a === 'apagar') {
@@ -578,6 +582,8 @@
     if (a === 'provedor') { await window.multi.iaConfig({ provedor: e.target.value }); abrirIA(); }
   });
   document.getElementById('bt-ia').onclick = () => abrirIA();
+  // Lite: sem agente, sem PvP, sem análise de multi-acc.
+  if (lite) for (const el of document.querySelectorAll('.so-completa')) el.remove();
 
 
 

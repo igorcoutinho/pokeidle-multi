@@ -11,6 +11,8 @@
 
   const core = window.__pokebotCore;
   if (!core) return;
+  // Versão Lite do app: sem a análise de time do PvP.
+  if (window.__pokeVariante === 'lite') { window.__pokeAnalise?.desmontar?.(); window.__pokeAnalise = null; return; }
   const estavaAberto = !!document.getElementById('pa-fundo')?.classList.contains('aberto');
   window.__pokeAnalise?.desmontar?.();
 

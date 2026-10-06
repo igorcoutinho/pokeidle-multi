@@ -17,7 +17,8 @@
 // pelo mesmo preço. Só junta evidência para VOCÊ reportar — não faz nada com as contas.
 (() => {
   'use strict';
-  const VERSAO_ITENS = '1.3.2';
+  const VERSAO_ITENS = '1.3.3';
+  const LITE = window.__pokeVariante === 'lite'; // versão Lite do app: sem a aba Multi-acc
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -639,6 +640,7 @@
   }
   // Monitor: com ele ligado NESTA conta, varre a cada N minutos.
   const relogio = setInterval(() => {
+    if (LITE) return; // versão Lite: sem o monitor de multi-acc
     if (cfg.monitor && !varre.rodando && Date.now() - varre.ultima > Math.max(5, Number(cfg.cadaMin) || 10) * 60_000) varrer();
   }, 30_000);
   limpezas.push(() => clearInterval(relogio));
@@ -837,9 +839,9 @@
         <span class="pit-linha" style="margin:0">
           <button class="pit-bt ${cfg.aba === 'principais' ? 'on' : ''}" data-a="aba" data-v="principais">Principais</button>
           <button class="pit-bt ${cfg.aba === 'boss' ? 'on' : ''}" data-a="aba" data-v="boss">Boss</button>
-          <button class="pit-bt ${cfg.aba === 'multi' ? 'on' : ''}" data-a="aba" data-v="multi">🕵 Multi-acc</button>
+          ${LITE ? '' : `<button class="pit-bt ${cfg.aba === 'multi' ? 'on' : ''}" data-a="aba" data-v="multi">🕵 Multi-acc</button>`}
           <button class="pit-x" data-a="fechar" title="Fechar">×</button></span></header>
-      ${cfg.aba === 'boss' ? htmlBoss() : cfg.aba === 'multi' ? htmlMulti() : htmlPrincipais()}`;
+      ${cfg.aba === 'boss' ? htmlBoss() : cfg.aba === 'multi' && !LITE ? htmlMulti() : htmlPrincipais()}`;
   }
 
   function aoClicar(e) {
