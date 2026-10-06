@@ -18,7 +18,7 @@
 //    (vitórias > derrotas), encerra de vez. Enquanto a sessão roda, ela substitui a trava do item 2.
 (() => {
   'use strict';
-  const VERSAO_PVP = '1.18.0';
+  const VERSAO_PVP = '1.18.1';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -36,7 +36,7 @@
     /** Liga/desliga o auto-switch (o botão 🔁 Switch do cabeçalho da conta chama isto). */
     alternarAutoSwitch() { alternarAuto(); pintar(); return !!cfg.auto.ativo; },
     /** Liga/desliga o "🤖 agente de IA decide" desta conta (o painel 🤖 Agente IA do app chama isto). Ligar também liga o auto-switch. */
-    definirAgente(v) { cfg.auto.agente = !!v; if (v && !cfg.auto.ativo) { cfg.auto.ativo = true; cfg.auto.seguidas = 0; } salvarCfg(); registrar(v ? '🤖 agente de IA LIGADO nesta conta' : '🤖 agente de IA desligado nesta conta'); pintar(); return cfg.auto.agente; },
+    definirAgente(v) { ligarAgente(v); salvarCfg(); registrar(v ? '🤖 agente de IA LIGADO nesta conta' : '🤖 agente de IA desligado nesta conta'); pintar(); return cfg.auto.agente; },
     get agente() { return !!cfg.auto.agente; },
     desmontar() { for (const f of limpezas.splice(0)) { try { f(); } catch {} } },
     abrir: () => abrir(),
@@ -59,7 +59,7 @@
     // `sessao` = o Auto PvP em andamento: { inicio, v, d, seguidas, estado: rodando|pausada|encerrada, motivo }.
     const padrao = { trava: true, derrotas: 2, seguidas: 0, log: [], sessao: null, autoPvp: { maxSeguidas: 3, checarCada: 10 },
       auto: { ativo: false, modo: 'prever', vitorias: 1, naDerrota: true, focoAmeacas: true, contraCounter: true, ultimoAnti: null, abertura: true, sempreTrocar: 'zator, alan', manterSeVencer: 'erva',
-        regrasRival: 'erva: Blastoise=último; Venusaur≠último', reavaliarFila: true, ia: true, agente: false, minUso: 2, foraKeys: [], seguidas: 0, usoEm: {} } };
+        regrasRival: 'erva: Blastoise=último; Venusaur≠último', reavaliarFila: true, ia: true, agente: false, agenteLimite: 0, agenteLutas: 0, minUso: 2, foraKeys: [], seguidas: 0, usoEm: {} } };
     try {
       const s = JSON.parse(localStorage.getItem(CHAVE_CFG)) ?? {};
       return { ...padrao, ...s, auto: { ...padrao.auto, ...(s.auto ?? {}) }, autoPvp: { ...padrao.autoPvp, ...(s.autoPvp ?? {}) } };
@@ -606,6 +606,22 @@
     salvarEventos();
     if (estaAberto() && aba === 'agente') pintar();
   }
+  /** Cada luta com o agente ligado conta; ao chegar no limite ("parar depois de N lutas"), ele desliga. */
+  function contarLutaDoAgente(reg) {
+    if (!cfg.auto.agente) return;
+    cfg.auto.agenteLutas = (cfg.auto.agenteLutas ?? 0) + 1;
+    const lim = Number(cfg.auto.agenteLimite) || 0;
+    if (lim && cfg.auto.agenteLutas >= lim) {
+      cfg.auto.agente = false;
+      const txt = `🤖 agente DESLIGADO: chegou a ${lim} luta(s) com ele (a última: ${reg.venci ? 'vitória' : 'derrota'} vs ${reg.nick}) — o auto-switch segue com o modelo estatístico`;
+      registrar(txt);
+      avisar(txt);
+      anotarAgente({ tipo: 'falha', motivo: txt });
+    }
+    salvarCfg();
+  }
+  const ligarAgente = (v) => { cfg.auto.agente = !!v; if (v) { cfg.auto.agenteLutas = 0; if (!cfg.auto.ativo) { cfg.auto.ativo = true; cfg.auto.seguidas = 0; } } };
+
   /** A partida que chegou responde à última decisão do agente ainda sem resultado. */
   function conferirAgente(reg) {
     const d = eventosAgente.find((e) => (e.tipo === 'decisão' || e.tipo === 'manteve') && e.pendente);
@@ -1326,6 +1342,8 @@
           <button class="ppvp-sw ${cfg.auto.agente ? 'on' : ''}" data-a="autoAgenteSw"></button>
           <b>🤖 agente de IA decide nesta conta</b>
           <span class="ppvp-aviso">${esc(agenteStatus || (cfg.auto.agente ? 'aguardando a próxima decisão' : 'desligado'))}</span>
+          <span title="conta as lutas desde que o agente foi ligado; ao chegar no número, ele desliga sozinho (0 = sem limite)">· parar depois de <input type="number" class="ppvp-in" data-c="agenteLimite" min="0" max="500" value="${esc(cfg.auto.agenteLimite ?? 0)}" style="width:60px"> lutas
+            <b>${cfg.auto.agente && Number(cfg.auto.agenteLimite) ? `(${cfg.auto.agenteLutas ?? 0}/${cfg.auto.agenteLimite})` : cfg.auto.agente ? `(${cfg.auto.agenteLutas ?? 0} lutas, sem limite)` : ''}</b></span>
           <span style="flex:1"></span>
           ${eventosAgente.length ? '<button class="ppvp-bt ppvp-mini" data-a="limparEventos">limpar registro</button>' : ''}
         </div>
@@ -1455,6 +1473,7 @@
         if (reg.dele.length) registrar(`${reg.venci ? 'vitória' : 'derrota'} vs ${reg.nick}: ${reg.dele.map((x) => x.nome).join(' → ')}`);
         conferirTroca(reg);
         conferirAgente(reg);
+        contarLutaDoAgente(reg);
         atualizarCaderno(reg).catch(() => {});
         autoSwitch(reg);
       }
@@ -1541,6 +1560,7 @@
     });
     fundo.addEventListener('change', (e) => {
       if (e.target.dataset.c === 'cruzA' || e.target.dataset.c === 'cruzB') { cruz[e.target.dataset.c === 'cruzA' ? 'a' : 'b'] = e.target.value; cruz.calc = null; pintar(); }
+      if (e.target.dataset.c === 'agenteLimite') { cfg.auto.agenteLimite = Math.max(0, Math.min(500, Number(e.target.value) || 0)); cfg.auto.agenteLutas = 0; salvarCfg(); pintar(); }
       if (e.target.dataset.c === 'manterSeVencer') { cfg.auto.manterSeVencer = e.target.value; salvarCfg(); }
       if (e.target.dataset.c === 'regrasRival') { cfg.auto.regrasRival = e.target.value; salvarCfg(); }
       if (e.target.dataset.c === 'sempreTrocar') { cfg.auto.sempreTrocar = e.target.value; salvarCfg(); }
@@ -2138,8 +2158,8 @@
     else if (a === 'autoAbertura') cfg.auto.abertura = b.checked;
     else if (a === 'autoReavaliar') cfg.auto.reavaliarFila = b.checked;
     else if (a === 'autoIA') cfg.auto.ia = b.checked;
-    else if (a === 'autoAgente') cfg.auto.agente = b.checked;
-    else if (a === 'autoAgenteSw') { cfg.auto.agente = !cfg.auto.agente; if (cfg.auto.agente && !cfg.auto.ativo) { cfg.auto.ativo = true; cfg.auto.seguidas = 0; } registrar(cfg.auto.agente ? '🤖 agente de IA LIGADO nesta conta' : '🤖 agente de IA desligado nesta conta'); }
+    else if (a === 'autoAgente') ligarAgente(b.checked);
+    else if (a === 'autoAgenteSw') { ligarAgente(!cfg.auto.agente); registrar(cfg.auto.agente ? '🤖 agente de IA LIGADO nesta conta' : '🤖 agente de IA desligado nesta conta'); }
     else if (a === 'limparEventos') { eventosAgente = []; salvarEventos(); }
     else if (a === 'pagAgente') { paginaAgente = Math.max(0, paginaAgente + Number(b.dataset.v)); }
     else if (a === 'limparCaderno') { cadernos = { geral: '', rivais: {} }; salvarCadernos(); try { localStorage.removeItem(CHAVE_CADERNO); } catch {} }
