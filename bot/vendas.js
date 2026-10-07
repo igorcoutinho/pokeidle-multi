@@ -7,7 +7,7 @@
 // A comissão é a do jogo: `shared/taxa-mercado.mjs`, o mesmo arquivo que o servidor usa.
 (() => {
   'use strict';
-  const VERSAO_VENDAS = '1.2.0';
+  const VERSAO_VENDAS = '1.2.2';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -188,7 +188,7 @@
   const PEDRAS_REPOR = ['Water', 'Rock', 'Earth', 'Fire', 'Leaf'];
   const CHAVE_REPOR = 'pokevendas.repor.v1';
   const repor = (() => {
-    const padrao = { ativo: false, pedras: Object.fromEntries(PEDRAS_REPOR.map((p) => [p, true])), qtd: 2, log: [] };
+    const padrao = { ativo: false, garantir: true, teto: 150, pedras: Object.fromEntries(PEDRAS_REPOR.map((p) => [p, true])), qtd: 2, log: [] };
     try { const s = JSON.parse(localStorage.getItem(CHAVE_REPOR)) ?? {}; return { ...padrao, ...s, pedras: { ...padrao.pedras, ...(s.pedras ?? {}) }, log: s.log ?? [] }; } catch { return padrao; }
   })();
   const salvarRepor = () => { try { localStorage.setItem(CHAVE_REPOR, JSON.stringify({ ...repor, log: repor.log.slice(0, 40) })); } catch {} };
@@ -231,8 +231,8 @@
     const tipo = PEDRAS_REPOR.find((p) => p.toLowerCase() === m[1].toLowerCase());
     if (!repor.ativo || !repor.pedras[tipo]) return;
     if (contaProtegida()) { reporNota(`🔒 ${tipo} Stone vendeu, mas esta conta é protegida — não repõe`); return; }
-    if (Date.now() - (ultimaRepos.get(tipo) ?? 0) < 30_000 || filaRepor.includes(tipo)) return;
-    filaRepor.push(tipo);
+    if (Date.now() - (ultimaRepos.get(tipo) ?? 0) < 30_000 || filaRepor.some((x) => x.tipo === tipo)) return;
+    filaRepor.push({ tipo, garantir: false });
     processarRepor();
   }
 
@@ -241,25 +241,42 @@
     reponDo = true;
     try {
       while (filaRepor.length) {
-        const tipo = filaRepor.shift();
-        ultimaRepos.set(tipo, Date.now());
-        await reporPedra(tipo).catch((e) => reporNota(`⚠ ${tipo} Stone: ${e.message}`));
+        const { tipo, garantir } = filaRepor.shift();
+        if (!garantir) ultimaRepos.set(tipo, Date.now());
+        await reporPedra(tipo, garantir).catch((e) => reporNota(`⚠ ${tipo} Stone: ${e.message}`));
         await dormir(1500);
       }
     } finally { reponDo = false; }
   }
 
-  async function reporPedra(tipo) {
+  /**
+   * `garantir` = checagem periódica ("manter sempre um anúncio"): se esta conta já tem anúncio da
+   * pedra, não faz nada; se não tem, anuncia o que tiver na bolsa ou, sem nenhuma, compra 2 e anuncia.
+   */
+  async function reporPedra(tipo, garantir = false) {
     if (contaProtegida()) return;
     const pedra = pedraDoTipo(tipo);
-    if (!pedra) return reporNota(`⚠ não achei "${tipo} Stone" no catálogo de itens`);
+    if (!pedra) return garantir ? null : reporNota(`⚠ não achei "${tipo} Stone" no catálogo de itens`);
     const app = dadosApp();
     const alvo = Number(app?.alvos?.[pedra.nome.toLowerCase()]) || 0;
-    if (!alvo) return reporNota(`⚠ ${pedra.nome} vendeu, mas não há alvo no Rotom para ela — não comprei (sem teto de preço)`);
+    if (!alvo) return garantir ? null : reporNota(`⚠ ${pedra.nome} vendeu, mas não há alvo no Rotom para ela — não comprei (sem teto de preço)`);
     const meus = new Set([...(app?.meusNicks ?? []), core.eu?.nick].filter(Boolean).map((n) => String(n).toLowerCase()));
     // 1) os anúncios em Coins, do mais barato, sem os seus, até o alvo
     const r = await pedir({ t: 'market.item', itemId: pedra.id, moeda: 'gold' }, (x) => x.aba === 'item' && Number(x.itemId) === pedra.id, 8000);
-    const ofertas = (r.linhas ?? []).filter((l) => !meus.has(String(l.vendedor ?? '').toLowerCase()) && Number(l.preco) > 0 && Number(l.preco) <= alvo)
+    const acimaG = Math.max(0, Number(app?.acima ?? 5)) / 100;
+    const precoG = Math.max(2, Math.ceil(alvo * (1 + acimaG)));
+    if (garantir) {
+      const eu = String(core.eu?.nick ?? '').toLowerCase();
+      if ((r.linhas ?? []).some((l) => String(l.vendedor ?? '').toLowerCase() === eu)) return; // já tem anúncio: nada a fazer
+      const tem = naBolsaId(pedra.id);
+      if (tem > 0) {
+        const pub = await rebaixarAgora({ nome: pedra.nome, qtd: Math.min(tem, 2), preco: precoG, itemId: pedra.id, ref: alvo, desconto: -Math.round(acimaG * 100) });
+        return reporNota(`📌 ${pedra.nome}: estava sem anúncio — ${pub.ok ? `anunciei ${pub.qtd}× da bolsa a ${fmt(precoG)} (alvo +${Math.round(acimaG * 100)}%)` : `não anunciei (${pub.msg})`}`);
+      }
+    }
+    // Do mais barato que encontrar, fora as suas contas; teto = X% do alvo (0 = sem teto).
+    const teto = Number(repor.teto) > 0 ? alvo * (Number(repor.teto) / 100) : Infinity;
+    const ofertas = (r.linhas ?? []).filter((l) => !meus.has(String(l.vendedor ?? '').toLowerCase()) && Number(l.preco) > 0 && Number(l.preco) <= teto)
       .sort((a, b) => a.preco - b.preco);
     let falta = Math.max(1, Math.min(5, Number(repor.qtd) || 2));
     let comprou = 0, gasto = 0;
@@ -274,13 +291,13 @@
       comprou += n; gasto += n * l.preco; falta -= n;
       await dormir(700);
     }
-    if (!comprou) return reporNota(`${pedra.nome} vendeu — nenhum anúncio até o alvo (${fmt(alvo)}) para repor${ofertas.length ? '' : ` · menor fora dos seus: ${fmt(Math.min(...(r.linhas ?? []).filter((l) => !meus.has(String(l.vendedor ?? '').toLowerCase())).map((l) => l.preco)) || 0)}`}`);
+    if (!comprou) return reporNota(`${pedra.nome} ${garantir ? 'sem estoque nem anúncio' : 'vendeu'} — nenhum anúncio até o teto (${teto === Infinity ? 'sem teto' : fmt(teto)}) para repor${ofertas.length ? '' : ` · menor fora dos seus: ${fmt(Math.min(...(r.linhas ?? []).filter((l) => !meus.has(String(l.vendedor ?? '').toLowerCase())).map((l) => l.preco)) || 0)}`}`);
     // 2) reanuncia a alvo + % (o degrau desta conta, que a janela do app escalona entre as contas)
     for (let i = 0; i < 10 && naBolsaId(pedra.id) < antes + comprou; i++) await dormir(500);
     const acima = Math.max(0, Number(app?.acima ?? 5)) / 100;
     const precoVenda = Math.max(2, Math.ceil(alvo * (1 + acima)));
     const pub = await rebaixarAgora({ nome: pedra.nome, qtd: Math.min(comprou, 2), preco: precoVenda, itemId: pedra.id, ref: alvo, desconto: -Math.round(acima * 100) });
-    reporNota(`🔁 ${pedra.nome} vendeu → comprei ${comprou}× (${fmt(gasto)} Coins, até o alvo ${fmt(alvo)}) e ${pub.ok ? `anunciei ${pub.qtd}× a ${fmt(precoVenda)} (alvo +${Math.round(acima * 100)}%)` : `NÃO anunciei (${pub.msg})`}`);
+    reporNota(`${garantir ? '📌' : '🔁'} ${pedra.nome} ${garantir ? 'sem estoque nem anúncio' : 'vendeu'} → comprei ${comprou}× (${fmt(gasto)} Coins, do mais barato · alvo ${fmt(alvo)}) e ${pub.ok ? `anunciei ${pub.qtd}× a ${fmt(precoVenda)} (alvo +${Math.round(acima * 100)}%)` : `NÃO anunciei (${pub.msg})`}`);
   }
 
   // Escuta as vendas desta conta (inclusive as que aconteceram offline: chegam no login).
@@ -298,6 +315,15 @@
     wsRepor?.addEventListener('message', aoMsgRepor);
   }, 1000);
   limpezas.push(() => { clearInterval(vigiaRepor); wsRepor?.removeEventListener('message', aoMsgRepor); });
+  // "Manter sempre um anúncio": a cada 10 min (a 1ª, 2 min depois de abrir), confere cada pedra marcada.
+  let ultimaGarantia = Date.now() - 8 * 60_000;
+  const vigiaGarantia = setInterval(() => {
+    if (!repor.ativo || !repor.garantir || contaProtegida() || !core.logado || !dadosApp()?.alvos || Date.now() - ultimaGarantia < 10 * 60_000) return;
+    ultimaGarantia = Date.now();
+    for (const p of PEDRAS_REPOR) if (repor.pedras[p] && !filaRepor.some((x) => x.tipo === p)) filaRepor.push({ tipo: p, garantir: true });
+    processarRepor();
+  }, 30_000);
+  limpezas.push(() => clearInterval(vigiaGarantia));
 
   function htmlRepor() {
     if (contaProtegida()) return `<section><p class="pv-neg"><b>🔁 Reposição automática: 🔒 bloqueada nesta conta.</b></p></section>`;
@@ -307,8 +333,10 @@
         <div class="pv-linha">
           <button class="pv-bt ${repor.ativo ? 'on' : ''}" data-a="reporAtivo">${repor.ativo ? '● LIGADA' : 'desligada'}</button>
           ${PEDRAS_REPOR.map((p) => `<label><input type="checkbox" data-a="reporPedra" data-v="${p}" ${repor.pedras[p] ? 'checked' : ''}> ${p}</label>`).join(' ')}
+          <label title="compra do mais barato que encontrar, até este % do seu alvo do Rotom (0 = sem teto: compra seja qual for o preço)">teto de compra <input type="number" class="pv-in" data-c="reporTeto" min="0" max="1000" step="10" value="${esc(repor.teto ?? 150)}" style="width:64px">% do alvo</label>
+          <label title="a cada 10 min: se esta conta não tiver anúncio de uma pedra marcada, anuncia o que tiver na bolsa — ou, sem nenhuma, compra 2 no Mercado (até o alvo) e anuncia"><input type="checkbox" data-a="reporGarantir" ${repor.garantir ? 'checked' : ''}> manter sempre um anúncio (sem estoque → compra 2)</label>
         </div>
-        <p class="pv-ajuda">Quando uma dessas pedras desta conta vende, o bot compra as <b>2 mais baratas</b> do Mercado (em Coins, <b>até o seu alvo do Rotom</b>, nunca de uma conta sua) e reanuncia a <b>alvo + ${esc(app?.acima ?? 5)}%</b>. Alvos do Rotom: ${app?.alvos ? PEDRAS_REPOR.map((p) => { const pe = pedraDoTipo(p); const a = pe && app.alvos[pe.nome.toLowerCase()]; return `${p} ${a ? fmt(a) : '—'}`; }).join(' · ') : '<span class="pv-neg">ainda não recebidos da janela do app (abra o app novo / aguarde 1 min)</span>'}.</p>
+        <p class="pv-ajuda">Quando uma dessas pedras desta conta vende (ou, com "manter sempre um anúncio", quando ela fica sem), o bot compra as <b>2 mais baratas</b> do Mercado (em Coins, até <b>${Number(repor.teto) > 0 ? `${esc(repor.teto)}% do alvo do Rotom` : 'qualquer preço'}</b>, nunca de uma conta sua) e reanuncia a <b>alvo + ${esc(app?.acima ?? 5)}%</b>. Alvos do Rotom: ${app?.alvos ? PEDRAS_REPOR.map((p) => { const pe = pedraDoTipo(p); const a = pe && app.alvos[pe.nome.toLowerCase()]; return `${p} ${a ? fmt(a) : '—'}`; }).join(' · ') : '<span class="pv-neg">ainda não recebidos da janela do app (abra o app novo / aguarde 1 min)</span>'}.</p>
         ${repor.log.length ? `<table class="pv-tab"><tr><th>Quando</th><th>O que aconteceu</th></tr>${repor.log.slice(0, 12).map((l) => `<tr><td>${dataHora(l.em)}</td><td style="text-align:left;white-space:normal">${esc(l.txt)}</td></tr>`).join('')}</table>` : '<p class="pv-ajuda">Nada ainda.</p>'}
       </section>`;
   }
@@ -710,6 +738,7 @@
     const c = e.target.dataset?.c;
     if (!c) return;
     if (c === 'rebItem') { reb.itemId = Number(e.target.value); reb.msg = ''; return pintar(); }
+    if (c === 'reporTeto') { if (e.type === 'change') { repor.teto = Math.max(0, Math.min(1000, Number(e.target.value) || 0)); salvarRepor(); pintar(); } return; }
     if (c === 'rebDesc') { if (e.type === 'change') { reb.desconto = e.target.value === '' ? null : Number(e.target.value); pintar(); } return; }
     cfg[c] = e.target.value;
     salvarCfg();
@@ -734,6 +763,7 @@
     else if (a === 'rebPublicar') publicarReb();
     else if (a === 'reporAtivo') { if (!contaProtegida()) { repor.ativo = !repor.ativo; salvarRepor(); reporNota(repor.ativo ? 'reposição LIGADA' : 'reposição desligada'); } }
     else if (a === 'reporPedra') { repor.pedras[b.dataset.v] = b.checked; salvarRepor(); }
+    else if (a === 'reporGarantir') { repor.garantir = b.checked; salvarRepor(); }
   }
 
   function abrir() {
