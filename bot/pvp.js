@@ -18,7 +18,7 @@
 //    (vitórias > derrotas), encerra de vez. Enquanto a sessão roda, ela substitui a trava do item 2.
 (() => {
   'use strict';
-  const VERSAO_PVP = '1.19.0';
+  const VERSAO_PVP = '1.20.0';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -34,7 +34,7 @@
     get autoSwitch() { return !!cfg.auto.ativo; },
     get autoPvp() { return cfg.sessao ? { ...cfg.sessao } : null; },
     /** Diagnóstico (testes): as funções de previsão e nota. */
-    get _diag() { return { proximaCompDe, placarVsBuild, minhasFormacoes, pontuar, nomesDosIds }; },
+    get _diag() { return { proximaCompDe, placarVsBuild, minhasFormacoes, pontuar, nomesDosIds, candidatasPara }; },
     /** Liga/desliga o auto-switch (o botão 🔁 Switch do cabeçalho da conta chama isto). */
     alternarAutoSwitch() { alternarAuto(); pintar(); return !!cfg.auto.ativo; },
     /** Liga/desliga o "🤖 agente de IA decide" desta conta (o painel 🤖 Agente IA do app chama isto). Ligar também liga o auto-switch. */
@@ -61,7 +61,7 @@
     // `sessao` = o Auto PvP em andamento: { inicio, v, d, seguidas, estado: rodando|pausada|encerrada, motivo }.
     const padrao = { trava: true, derrotas: 2, seguidas: 0, log: [], sessao: null, autoPvp: { maxSeguidas: 3, checarCada: 10 },
       auto: { ativo: false, modo: 'prever', vitorias: 1, naDerrota: true, focoAmeacas: true, contraCounter: true, ultimoAnti: null, abertura: true, sempreTrocar: 'zator, alan', manterSeVencer: 'erva',
-        regrasRival: 'erva: Blastoise=último; Venusaur≠último', reavaliarFila: true, ia: true, agente: false, agenteLimite: 0, agenteLutas: 0, difPontos: 100, minUso: 2, foraKeys: [], seguidas: 0, usoEm: {} } };
+        regrasRival: 'erva: Blastoise=último; Venusaur≠último', reavaliarFila: true, ia: true, agente: false, agenteLimite: 0, agenteLutas: 0, difPontos: 100, seguirTime: true, minUso: 2, foraKeys: [], seguidas: 0, usoEm: {} } };
     try {
       const s = JSON.parse(localStorage.getItem(CHAVE_CFG)) ?? {};
       return { ...padrao, ...s, auto: { ...padrao.auto, ...(s.auto ?? {}) }, autoPvp: { ...padrao.autoPvp, ...(s.autoPvp ?? {}) } };
@@ -731,8 +731,28 @@
   }
 
   /** As candidatas: suas formações na rotação + a melhor comp simulada contra o próximo provável. */
+  /** Os 5 da sua equipe de PvP AGORA (em qualquer ordem) — quando você troca um pokémon, o switch segue. */
+  const conjuntoAtual = () => (meuTimeIds?.length >= timeCheio() ? [...meuTimeIds].map(Number).sort((a, b) => a - b).join(',') : null);
+  const mesmoConjunto = (ids) => !conjuntoAtual() || [...ids].map(Number).sort((a, b) => a - b).join(',') === conjuntoAtual();
+  function permutacoesIds(ids) {
+    if (ids.length <= 1) return [ids.slice()];
+    const out = [];
+    ids.forEach((x, i) => { for (const r of permutacoesIds([...ids.slice(0, i), ...ids.slice(i + 1)])) out.push([x, ...r]); });
+    return out;
+  }
+
   function candidatasPara(previstos) {
     const todas = minhasFormacoes();
+    // "Seguir o time": só ORDENS dos 5 da equipe atual — as 120, com o histórico de quem já jogou.
+    if (cfg.auto.seguirTime && conjuntoAtual() && meuTimeIds.length <= 6) {
+      const porK = new Map(todas.map((f) => [f.k, f]));
+      return permutacoesIds([...meuTimeIds]).map((ids) => {
+        const k = ids.join(',');
+        if (porK.has(k)) return porK.get(k);
+        const n = nomesDosIds(ids).map((x) => String(x).replace(/^Mega\s+/i, ''));
+        return { k, ids, n: 0, v: 0, ultimo: 0, armario: null, nova: true, nome: `${n[0]} … ${n[n.length - 1]}` };
+      });
+    }
     const lista = todas.filter((f) => naRotacao(f));
     const naBolsa = new Set((core.eu?.pokemons ?? []).map((p) => p.id));
     for (const o of melhores.__ativos__?.r ?? []) {
@@ -1144,7 +1164,8 @@
     if (topo && topo.p >= 0.5 && manterContra(topo.nick)) {
       const ultimaVs = hist.filter((h) => mesmoNick(h.nick, topo.nick)).sort((a, b) => b.em - a.em)[0];
       const ids = ultimaVs?.venci ? idsDoDuelo(ultimaVs) : null;
-      if (ids?.length >= Math.min(TIME_PVP, (core.eu?.pokemons ?? []).length)) {
+      // (com "seguir o time", a comp que venceu só volta se for dos MESMOS 5 de agora)
+      if (ids?.length >= Math.min(TIME_PVP, (core.eu?.pokemons ?? []).length) && (!cfg.auto.seguirTime || mesmoConjunto(ids))) {
         if (ids.join(',') === chaveAtual()) {
           registrar(`auto-switch: próximo deve ser ${topo.nick} (${Math.round(topo.p * 100)}%) — a equipe atual venceu ele na última, FICA`);
           anotarTroca(reg, { acao: 'manteve', previstos, motivo: `${topo.nick}: a comp que venceu ele fica` });
@@ -1481,6 +1502,7 @@
           <label title="pede a decisão ao agente de IA configurado em 🤖 Agente IA (barra de cima do app); se ele falhar ou demorar, vale o modelo estatístico"><input type="checkbox" data-a="autoAgente" ${a.agente ? 'checked' : ''}> 🤖 agente de IA decide${agenteStatus ? ` <small>(${esc(agenteStatus)})</small>` : ''}</label>
           ${a.agente ? '<span class="ppvp-aviso">📓 cadernos e registro do agente: aba 🤖 Agente</span>' : ''}
           <label title="prevê o próximo pelo bloqueio de revanche (medido), por quem está ativo e por quem está perto de você na ladder — e refaz a escolha logo antes de cada bloqueio acabar"><input type="checkbox" data-a="autoIA" ${a.ia ? 'checked' : ''}> 🤖 IA de previsão${(() => { const b = backtestIA(); return b ? ` <small>(acerta ${Math.round(b.ia * 100)}% no seu histórico · regra antiga ${Math.round(b.antiga * 100)}% · bloqueio ${b.bloqMin.toFixed(0)} min)</small>` : ''; })()}</label>
+          <label title="as formações candidatas são só as ORDENS dos 5 pokémon da sua equipe de PvP atual — trocou um pokémon no jogo, o switch passa a usar o time novo (e não volta para formações com o antigo)"><input type="checkbox" data-a="autoSeguir" ${a.seguirTime ? 'checked' : ''}> seguir o time atual (só ordens dos 5 da equipe)</label>
           <label title="acima desta diferença de pontos (PR) o jogo quase não junta você com o rival (ex.: o 1º raramente pega o 4º)">diferença de pontos máx.: <input type="number" class="ppvp-in" data-c="difPontos" min="20" max="1000" step="10" value="${esc(a.difPontos ?? 100)}" style="width:64px"></label>
           <label title="refaz a escolha no tempo: com a IA, logo antes de cada bloqueio acabar; sem ela, em 60 s e 120 s de busca"><input type="checkbox" data-a="autoReavaliar" ${a.reavaliarFila ? 'checked' : ''}> reavaliar enquanto busca</label>
           <label title="depois de jogar contra estes (vitória OU derrota), o time sempre troca — eles já viram o seu time e vão counterar. Vírgula separa; vale parte do nick.">sempre trocar depois de jogar contra: <input class="ppvp-in" data-c="sempreTrocar" value="${esc(a.sempreTrocar ?? '')}" style="width:160px" spellcheck="false"></label>
@@ -2227,6 +2249,7 @@
     else if (a === 'autoAbertura') cfg.auto.abertura = b.checked;
     else if (a === 'autoReavaliar') cfg.auto.reavaliarFila = b.checked;
     else if (a === 'autoIA') cfg.auto.ia = b.checked;
+    else if (a === 'autoSeguir') cfg.auto.seguirTime = b.checked;
     else if (a === 'autoAgente') ligarAgente(b.checked);
     else if (a === 'autoAgenteSw') { ligarAgente(!cfg.auto.agente); registrar(cfg.auto.agente ? '🤖 agente de IA LIGADO nesta conta' : '🤖 agente de IA desligado nesta conta'); }
     else if (a === 'limparEventos') { eventosAgente = []; salvarEventos(); }
