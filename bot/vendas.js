@@ -7,7 +7,7 @@
 // A comissão é a do jogo: `shared/taxa-mercado.mjs`, o mesmo arquivo que o servidor usa.
 (() => {
   'use strict';
-  const VERSAO_VENDAS = '1.3.0';
+  const VERSAO_VENDAS = '1.3.1';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -763,13 +763,14 @@
 
     let corpo = '';
     if (!dados.baixadoEm) {
-      corpo = `<section class="pv-msg">${esc(msg || 'Carregando o extrato…')}</section>`;
+      corpo = `${pintarFiltros()}<section class="pv-msg">${esc(msg || (ocupado ? 'Lendo o extrato…' : 'Clique em "⟳ Atualizar extrato" para ler suas compras e vendas (ele só lê quando você pede).'))}</section>`;
     } else {
       const r = montarRelatorio();
       const estadoDados = `${fmt(dados.compras.length)} compras e ${fmt(dados.vendas.length)} vendas lidas`
         + (dados.ate ? ` · desde ${new Date(dados.ate).toLocaleDateString('pt-BR')}` : '')
         + (dados.completo ? ' (extrato inteiro)' : '')
-        + ` · atualizado ${dataHora(dados.baixadoEm)}`;
+        + ` · atualizado ${dataHora(dados.baixadoEm)}`
+        + (!dados.completo && inicioDoPeriodo() < dados.ate ? ' · ⚠ o período escolhido começa antes do que foi lido — clique em "⟳ Atualizar extrato"' : '');
       const cards = Object.entries(r.tot).map(([m, t]) => `
         <div class="pv-card"><small>Comprou (${moedaNome(m)})</small><b>${preco(t.gasto, m)}</b></div>
         <div class="pv-card"><small>Vendeu bruto (${moedaNome(m)})</small><b>${preco(t.bruto, m)}</b></div>
@@ -859,7 +860,7 @@
     cfg[c] = e.target.value;
     salvarCfg();
     clearTimeout(espera);
-    espera = setTimeout(() => { pintar(); if (c === 'de') garantirDados(); }, c === 'busca' ? 250 : 0);
+    espera = setTimeout(() => pintar(), c === 'busca' ? 250 : 0);
   }
 
   function aoClicar(e) {
@@ -868,7 +869,7 @@
     if (!b) return;
     const a = b.dataset.a;
     if (a === 'fechar') fechar();
-    else if (a === 'periodo') { cfg.periodo = b.dataset.v; salvarCfg(); pintar(); garantirDados(); }
+    else if (a === 'periodo') { cfg.periodo = b.dataset.v; salvarCfg(); pintar(); }
     else if (a === 'moeda' || a === 'tipo' || a === 'ordem') { cfg[a] = b.dataset.v; salvarCfg(); pintar(); }
     else if (a === 'detalhe') { aberto = aberto === b.dataset.v ? null : b.dataset.v; pintar(); }
     else if (a === 'baixar') garantirDados(true);
@@ -886,9 +887,7 @@
 
   function abrir() {
     document.getElementById('pv-fundo').classList.add('aberto');
-    pintar();
-    // Reabrir depois de 5 min busca o extrato de novo — vendas novas entram.
-    garantirDados(dados.baixadoEm && Date.now() - dados.baixadoEm > 5 * 60 * 1000);
+    pintar(); // o extrato só é lido quando você pede ("⟳ Atualizar extrato")
   }
   function fechar() { document.getElementById('pv-fundo')?.classList.remove('aberto'); }
 
