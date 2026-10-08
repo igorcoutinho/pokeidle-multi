@@ -7,7 +7,7 @@
 // A comissão é a do jogo: `shared/taxa-mercado.mjs`, o mesmo arquivo que o servidor usa.
 (() => {
   'use strict';
-  const VERSAO_VENDAS = '1.2.2';
+  const VERSAO_VENDAS = '1.3.0';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -341,6 +341,119 @@
       </section>`;
   }
 
+  // ---------------------------------------------------------------- ⭐ favoritos vigiados
+  // Os anúncios que você favoritou no Mercado (a ★ do card): a cada N min o bot pede a lista
+  // (`market.favoritos`) e avisa quando o PREÇO muda ou o anúncio SAI (vendido / retirado).
+  // Só lê — não compra nada.
+  const CHAVE_FAV = 'pokevendas.favoritos.v1';
+  const fav = (() => {
+    const padrao = { ativo: true, cadaMin: 2, vistos: {}, log: [] };
+    try { const s = JSON.parse(localStorage.getItem(CHAVE_FAV)) ?? {}; return { ...padrao, ...s, vistos: s.vistos ?? {}, log: s.log ?? [] }; } catch { return padrao; }
+  })();
+  const salvarFav = () => { try { localStorage.setItem(CHAVE_FAV, JSON.stringify({ ...fav, log: fav.log.slice(0, 40) })); } catch {} };
+  let favUltima = 0, favLendo = false, favMsg = '';
+  const nomeAnuncio = (a) => {
+    const f = a.ficha ?? {};
+    const nome = f.nome ?? f.especie ?? f.name ?? a.nome ?? a.descricao ?? `anúncio ${a.id}`;
+    const nv = f.level ?? f.nivel;
+    return `${f.shiny ? '✨' : ''}${nome}${nv ? ` Nv ${fmt(nv)}` : ''}`;
+  };
+  const precoTxt = (v, m) => `${fmt(v)} ${m === 'orb' ? '💎' : '🪙'}`;
+
+  function alertaFav(txt) {
+    fav.log.unshift({ em: Date.now(), txt });
+    fav.log = fav.log.slice(0, 40);
+    salvarFav();
+    console.log('[Favoritos]', txt);
+    // aviso grande na tela (fica 20 s), som e notificação do Windows
+    let el = document.getElementById('pv-fav-alerta');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'pv-fav-alerta';
+      el.style.cssText = 'position:fixed;left:50%;top:90px;transform:translateX(-50%);z-index:100004;padding:12px 18px;border-radius:12px;background:#1e3a1e;color:#b6ffb6;border:3px solid #7fdc8f;font:800 16px system-ui;box-shadow:0 8px 24px rgba(0,0,0,.6);cursor:pointer;max-width:80vw';
+      el.onclick = () => el.remove();
+      document.body.appendChild(el);
+      limpezas.push(() => el.remove());
+    }
+    el.textContent = `⭐ ${txt}`;
+    clearTimeout(alertaFav.t);
+    alertaFav.t = setTimeout(() => el.remove(), 20_000);
+    try {
+      const ctx = new AudioContext();
+      for (const [i, f] of [880, 1175, 1568].entries()) {
+        const o = ctx.createOscillator(), g = ctx.createGain();
+        o.frequency.value = f; g.gain.value = 0.15;
+        o.connect(g).connect(ctx.destination);
+        o.start(ctx.currentTime + i * 0.18); o.stop(ctx.currentTime + i * 0.18 + 0.15);
+      }
+    } catch {}
+    try { if (window.Notification) new Notification('PokéIdle — favorito', { body: txt }); } catch {}
+    if (document.getElementById('pv-fundo')?.classList.contains('aberto') && modo === 'favoritos') pintar();
+  }
+
+  async function vigiarFavoritos(manual = false) {
+    if (favLendo || !core.logado) return;
+    favLendo = true;
+    try {
+      const m = await pedir({ t: 'market.favoritos' }, (x) => x.aba === 'favoritos', 9000);
+      const agora = Date.now();
+      const linhas = (m.linhas ?? []).filter((a) => a.id != null);
+      const presentes = new Set();
+      for (const a of linhas) {
+        const k = String(a.id);
+        presentes.add(k);
+        const nome = nomeAnuncio(a);
+        const preco = Number(a.preco) || 0;
+        const moeda = a.moeda ?? 'gold';
+        const aberto = !a.estado || a.estado === 'aberto';
+        const antes = fav.vistos[k];
+        if (!antes) {
+          fav.vistos[k] = { nome, vendedor: a.vendedor ?? '', preco, moeda, aberto, desde: agora, mudouEm: null, antes: null };
+          continue;
+        }
+        if (aberto && antes.aberto && preco && preco !== antes.preco) {
+          const pct = antes.preco ? Math.round(((preco - antes.preco) / antes.preco) * 100) : 0;
+          alertaFav(`${nome} (de ${a.vendedor ?? antes.vendedor}) ${preco < antes.preco ? 'BAIXOU' : 'subiu'}: ${precoTxt(antes.preco, antes.moeda)} → ${precoTxt(preco, moeda)} (${pct > 0 ? '+' : ''}${pct}%)`);
+          Object.assign(antes, { antes: antes.preco, preco, moeda, mudouEm: agora });
+        } else if (!aberto && antes.aberto) {
+          alertaFav(`${nome} (de ${antes.vendedor}) ${a.estado === 'vendido' ? 'foi VENDIDO' : 'saiu do Mercado'}`);
+          Object.assign(antes, { aberto: false, mudouEm: agora });
+        }
+        Object.assign(antes, { nome, vendedor: a.vendedor ?? antes.vendedor, aberto });
+      }
+      for (const k of Object.keys(fav.vistos)) if (!presentes.has(k)) delete fav.vistos[k]; // você desfavoritou
+      favUltima = agora;
+      favMsg = `${linhas.length} favorito(s) · lido ${dataHora(agora)}`;
+      salvarFav();
+    } catch (e) {
+      favMsg = `não deu para ler os favoritos: ${e.message}`;
+    } finally {
+      favLendo = false;
+      if (document.getElementById('pv-fundo')?.classList.contains('aberto') && modo === 'favoritos') pintar();
+    }
+  }
+  const vigiaFav = setInterval(() => {
+    if (fav.ativo && Date.now() - favUltima > Math.max(1, Number(fav.cadaMin) || 2) * 60_000) vigiarFavoritos();
+  }, 20_000);
+  limpezas.push(() => clearInterval(vigiaFav));
+
+  function htmlFavoritos() {
+    const itens = Object.entries(fav.vistos).sort((a, b) => (b[1].mudouEm ?? 0) - (a[1].mudouEm ?? 0));
+    return `<section>
+        <div class="pv-linha">
+          <button class="pv-bt ${fav.ativo ? 'on' : ''}" data-a="favAtivo">${fav.ativo ? '● vigiando' : 'parado'}</button>
+          a cada <input type="number" class="pv-in" data-c="favCada" min="1" max="60" value="${esc(fav.cadaMin)}" style="width:54px"> min
+          <button class="pv-bt" data-a="favAgora" ${favLendo ? 'disabled' : ''}>${favLendo ? 'lendo…' : '⟳ ler agora'}</button>
+          <span class="pv-ajuda">${esc(favMsg)}</span>
+        </div>
+        <p class="pv-ajuda">Vigia os anúncios que você favoritou (★ no card do Mercado) NESTA conta e avisa — na tela, com som e notificação do Windows — quando o preço muda ou o anúncio sai. Não compra nada.</p>
+        ${itens.length ? `<table class="pv-tab"><tr><th>Anúncio</th><th>Vendedor</th><th>Preço agora</th><th>Antes</th><th>Mudou</th><th>Situação</th></tr>
+          ${itens.map(([, v]) => `<tr><td style="text-align:left"><b>${esc(v.nome)}</b></td><td>${esc(v.vendedor)}</td><td><b>${precoTxt(v.preco, v.moeda)}</b></td><td>${v.antes != null ? precoTxt(v.antes, v.moeda) : '—'}</td><td>${v.mudouEm ? dataHora(v.mudouEm) : '—'}</td><td>${v.aberto ? 'à venda' : '<span class="pv-neg">fora do Mercado</span>'}</td></tr>`).join('')}</table>`
+          : '<p class="pv-ajuda">Nenhum favorito lido ainda — clique em "ler agora".</p>'}
+        ${fav.log.length ? `<h4 class="pv-rot">Avisos</h4><table class="pv-tab">${fav.log.slice(0, 12).map((l) => `<tr><td>${dataHora(l.em)}</td><td style="text-align:left;white-space:normal">${esc(l.txt)}</td></tr>`).join('')}</table>` : ''}
+      </section>`;
+  }
+
   function htmlRebaixar() {
     if (contaProtegida()) {
       return `<section><p class="pv-neg"><b>🔒 Bloqueado nesta conta (${esc(core.eu?.nick ?? '')}).</b> O anúncio abaixo do mercado só roda nas contas alternativas.</p></section>`;
@@ -641,8 +754,10 @@
       <span class="pv-linha" style="margin:0">
         <button class="pv-bt ${modo === 'relatorio' ? 'on' : ''}" data-a="modo" data-v="relatorio">📊 Relatório</button>
         <button class="pv-bt ${modo === 'rebaixar' ? 'on' : ''}" data-a="modo" data-v="rebaixar">📉 Anunciar abaixo do mercado</button>
+        <button class="pv-bt ${modo === 'favoritos' ? 'on' : ''}" data-a="modo" data-v="favoritos">⭐ Favoritos</button>
         <button data-a="fechar" title="Fechar">×</button></span></header>`;
     if (modo === 'rebaixar') { modal.innerHTML = cab + htmlRepor() + htmlRebaixar(); return; }
+    if (modo === 'favoritos') { modal.innerHTML = cab + htmlFavoritos(); if (!favUltima && !favLendo) vigiarFavoritos(true); return; }
     const foco = document.activeElement?.dataset?.c;
     const cursor = document.activeElement?.selectionStart;
 
@@ -738,6 +853,7 @@
     const c = e.target.dataset?.c;
     if (!c) return;
     if (c === 'rebItem') { reb.itemId = Number(e.target.value); reb.msg = ''; return pintar(); }
+    if (c === 'favCada') { if (e.type === 'change') { fav.cadaMin = Math.max(1, Math.min(60, Number(e.target.value) || 2)); salvarFav(); pintar(); } return; }
     if (c === 'reporTeto') { if (e.type === 'change') { repor.teto = Math.max(0, Math.min(1000, Number(e.target.value) || 0)); salvarRepor(); pintar(); } return; }
     if (c === 'rebDesc') { if (e.type === 'change') { reb.desconto = e.target.value === '' ? null : Number(e.target.value); pintar(); } return; }
     cfg[c] = e.target.value;
@@ -761,6 +877,8 @@
     else if (a === 'rebAuto') { reb.desconto = null; pintar(); }
     else if (a === 'rebPrecos') carregarMercadoReb();
     else if (a === 'rebPublicar') publicarReb();
+    else if (a === 'favAtivo') { fav.ativo = !fav.ativo; salvarFav(); }
+    else if (a === 'favAgora') { vigiarFavoritos(true); }
     else if (a === 'reporAtivo') { if (!contaProtegida()) { repor.ativo = !repor.ativo; salvarRepor(); reporNota(repor.ativo ? 'reposição LIGADA' : 'reposição desligada'); } }
     else if (a === 'reporPedra') { repor.pedras[b.dataset.v] = b.checked; salvarRepor(); }
     else if (a === 'reporGarantir') { repor.garantir = b.checked; salvarRepor(); }
