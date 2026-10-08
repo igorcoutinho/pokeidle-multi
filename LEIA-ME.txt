@@ -81,6 +81,14 @@ RANKING DE XP — botão 🏆 Ranking XP na barra de cima
   - Top 10 do XP ganho no dia (dados do guia, coleta 2× ao dia), a posição das suas contas (mesmo
     fora do top 10), o XP total com a posição geral e a sua posição dia a dia.
 
+PERFIL 2 E PROXY (4 contas a mais saindo pelo IP de uma VPS, rodando no SEU PC)
+  - atalhos\Abrir Perfil 2.bat (copie para a pasta do .exe): abre uma segunda cópia do app com outra pasta
+    de dados — outras 4 contas, outros logins. (Ou: "PokeIdle Multi <versão>.exe" --perfil=2)
+  - Botão 🌐 na barra de cima: proxy SÓ das contas deste app e o IP de saída delas. Ex.: socks5://127.0.0.1:1080.
+    Depois de aplicar, recarregue as contas (⟳). Atualização do bot, guia e Twitch seguem pela sua internet.
+  - atalhos\Tunel VPS.bat: abre o túnel SSH até a VPS (troque IP e usuário dentro dele) e cria o proxy
+    socks5://127.0.0.1:1080. Deixe a janela aberta. Na VPS precisa do OpenSSH Server ligado.
+
 PEDRA ABAIXO DO MERCADO — botão 📉 na barra de cima do app (você dá a ordem, roda em todas)
   - Escolha a pedra (as que as contas alternativas têm), a quantidade por conta (1 ou 2) e o
     desconto (vazio = automático entre 5% e 10%, maior quanto mais anúncios houver).

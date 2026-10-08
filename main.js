@@ -72,9 +72,11 @@ function trazerParaFrente(w) {
 
 // Uma instância só: abrir o .exe de novo com o app já aberto (ex.: minimizado) traz a janela de
 // volta, em vez de subir uma segunda cópia brigando pelas mesmas sessões das contas.
-// POKEIDLE_PERFIL=teste roda um app separado (outras sessões, outra trava) ao lado do de uso.
-if (process.env.POKEIDLE_PERFIL) {
-  app.setPath('userData', path.join(app.getPath('appData'), `PokeIdle Multi (${process.env.POKEIDLE_PERFIL})`));
+// POKEIDLE_PERFIL=teste (ou --perfil=2 no atalho) roda um app separado — outras sessões, outra
+// trava, outras 4 contas — ao lado do de uso. Cada perfil pode ter o próprio proxy (🌐 na barra).
+const PERFIL = process.env.POKEIDLE_PERFIL || (process.argv.find((a) => a.startsWith('--perfil='))?.slice(9) ?? '');
+if (PERFIL) {
+  app.setPath('userData', path.join(app.getPath('appData'), `PokeIdle Multi (${PERFIL.replace(/[^\w -]/g, '')})`));
 }
 const instanciaUnica = app.requestSingleInstanceLock();
 if (!instanciaUnica) app.quit();
@@ -504,8 +506,40 @@ async function atualizarDoGitHub() {
   }
 }
 
+// ---------------------------------------------------------------- proxy deste perfil
+// Só as contas (partições persist:contaN) saem pelo proxy — ex.: socks5://127.0.0.1:1080 de um
+// túnel SSH até a VPS, para estas 4 contas usarem o IP dela. O resto do app (atualização do bot,
+// guia, Twitch) segue pela sua internet normal.
+async function aplicarProxy(regra) {
+  const proxyRules = String(regra ?? '').trim();
+  for (let n = 1; n <= N_CONTAS; n++) {
+    const ses = session.fromPartition(`persist:conta${n}`);
+    await ses.setProxy(proxyRules ? { proxyRules, proxyBypassRules: '<local>' } : { mode: 'direct' });
+    await ses.closeAllConnections?.();
+  }
+  return proxyRules;
+}
+/** O IP público que as contas usam agora (pela partição da conta 1, com o proxy dela). */
+async function ipDeSaida() {
+  try {
+    const ses = session.fromPartition('persist:conta1');
+    const r = await ses.fetch('https://api.ipify.org?format=json', { cache: 'no-store' });
+    return { ip: (await r.json()).ip };
+  } catch (e) { return { erro: e.message }; }
+}
+ipcMain.handle('multi:proxy', async (_e, novo) => {
+  if (novo != null) {
+    const regra = String(novo).trim();
+    if (regra && !/^(socks5|socks4|http|https):\/\/[\w.-]+:\d+$/i.test(regra)) return { erro: 'formato: socks5://127.0.0.1:1080 (ou http://IP:PORTA)' };
+    salvarCfg({ ...lerCfg(), proxy: regra });
+    await aplicarProxy(regra);
+  }
+  return { proxy: lerCfg().proxy ?? '', perfil: PERFIL, ...(await ipDeSaida()) };
+});
+
 app.whenReady().then(async () => {
   if (!instanciaUnica) return;
+  await aplicarProxy(lerCfg().proxy); // antes de qualquer conta abrir
   semearPastaDoBot();
   await carregarRotom(); // antes das webviews: o content script precisa estar lá quando o jogo abrir
   criarJanela();
