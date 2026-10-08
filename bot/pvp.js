@@ -18,7 +18,7 @@
 //    (vitórias > derrotas), encerra de vez. Enquanto a sessão roda, ela substitui a trava do item 2.
 (() => {
   'use strict';
-  const VERSAO_PVP = '1.18.1';
+  const VERSAO_PVP = '1.19.0';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -33,6 +33,8 @@
     get trava() { return cfg.trava; },
     get autoSwitch() { return !!cfg.auto.ativo; },
     get autoPvp() { return cfg.sessao ? { ...cfg.sessao } : null; },
+    /** Diagnóstico (testes): as funções de previsão e nota. */
+    get _diag() { return { proximaCompDe, placarVsBuild, minhasFormacoes, pontuar, nomesDosIds }; },
     /** Liga/desliga o auto-switch (o botão 🔁 Switch do cabeçalho da conta chama isto). */
     alternarAutoSwitch() { alternarAuto(); pintar(); return !!cfg.auto.ativo; },
     /** Liga/desliga o "🤖 agente de IA decide" desta conta (o painel 🤖 Agente IA do app chama isto). Ligar também liga o auto-switch. */
@@ -59,7 +61,7 @@
     // `sessao` = o Auto PvP em andamento: { inicio, v, d, seguidas, estado: rodando|pausada|encerrada, motivo }.
     const padrao = { trava: true, derrotas: 2, seguidas: 0, log: [], sessao: null, autoPvp: { maxSeguidas: 3, checarCada: 10 },
       auto: { ativo: false, modo: 'prever', vitorias: 1, naDerrota: true, focoAmeacas: true, contraCounter: true, ultimoAnti: null, abertura: true, sempreTrocar: 'zator, alan', manterSeVencer: 'erva',
-        regrasRival: 'erva: Blastoise=último; Venusaur≠último', reavaliarFila: true, ia: true, agente: false, agenteLimite: 0, agenteLutas: 0, minUso: 2, foraKeys: [], seguidas: 0, usoEm: {} } };
+        regrasRival: 'erva: Blastoise=último; Venusaur≠último', reavaliarFila: true, ia: true, agente: false, agenteLimite: 0, agenteLutas: 0, difPontos: 100, minUso: 2, foraKeys: [], seguidas: 0, usoEm: {} } };
     try {
       const s = JSON.parse(localStorage.getItem(CHAVE_CFG)) ?? {};
       return { ...padrao, ...s, auto: { ...padrao.auto, ...(s.auto ?? {}) }, autoPvp: { ...padrao.autoPvp, ...(s.autoPvp ?? {}) } };
@@ -500,7 +502,7 @@
       if (!k) continue;
       const jogos = (Number(l.vitorias) || 0) + (Number(l.derrotas) || 0);
       const a = ladderVivo.get(k);
-      ladderVivo.set(k, { pos: Number(l.pos) || null, jogos, mudouEm: a && jogos > a.jogos ? agora : (a?.mudouEm ?? 0), vistoEm: agora, desde: a?.desde ?? agora });
+      ladderVivo.set(k, { pos: Number(l.pos) || null, pontos: Number(l.pontos) || null, jogos, mudouEm: a && jogos > a.jogos ? agora : (a?.mudouEm ?? 0), vistoEm: agora, desde: a?.desde ?? agora });
     }
   }
   /** O bloqueio de revanche, medido: o menor intervalo entre dois duelos seguidos contra o mesmo (5–20 min). */
@@ -546,6 +548,12 @@
       if (l?.mudouEm && t - l.mudouEm < 15 * 60_000) w *= 1.5;          // está jogando agora
       else if (l && Date.now() - l.desde > 30 * 60_000 && !l.mudouEm) w *= 0.6; // olhamos 30 min e ele não jogou
       if (minhaPos && l?.pos) w *= Math.abs(minhaPos - l.pos) <= 3 ? 1.4 : 0.5;
+      // Diferença de PONTOS: acima de ~100 o jogo quase não junta (ex.: o 1º raramente pega o 4º).
+      const meusPts = ladderVivo.get(meuNick().toLowerCase())?.pontos;
+      if (meusPts && l?.pontos) {
+        const dif = Math.abs(meusPts - l.pontos), lim = Math.max(20, Number(cfg.auto.difPontos) || 100);
+        w *= dif <= lim ? 1 : dif <= lim * 2 ? 0.25 : 0.05;
+      }
       lista.push({ nick: c.nick, w, livreEm: c.ultimoEm + bloq, livre, base: livre ? 'livre' : `bloqueado até ${new Date(c.ultimoEm + bloq).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}` });
     }
     const soma = lista.reduce((a, x) => a + x.w, 0);
@@ -644,7 +652,7 @@
       window.postMessage({ __pbIA: { id, pedido: { ...pedido, timeoutMs: ms } } }, '*');
     });
   }
-  const SISTEMA_AGENTE = `Você é o técnico de PvP de um jogador de PokéIdle. Regras do PvP do jogo: duelo 5×5 automático, os pokémon entram em SEQUÊNCIA (quem vence fica em campo com o HP que sobrou e enfrenta o próximo), então a ORDEM é a comp. Tipos e golpes decidem cada 1×1. A fila junta jogadores próximos na ladder (±3 posições); o jogo NUNCA repete o mesmo adversário antes de ~10 min e, quando esse bloqueio acaba e os dois estão buscando, junta de novo na hora. Você recebe: quem deve ser o próximo adversário (com chance e se está livre/bloqueado), o hábito de cada um (repete a comp, usa 2 comps, mesmos pokémon em ordens diferentes, com quem abre), as formações candidatas (ordem exata) com o placar REAL contra cada provável e a nota do modelo estatístico, as regras do próprio jogador (respeite-as), o seu caderno GERAL de lições e o caderno de cada rival provável. Escolha UMA formação entre as candidatas, pensando em quem vem e no que ele costuma usar. Placar real pesa mais que a nota do modelo; poucos jogos = pouca certeza. Responda SÓ JSON: {"formacao":"<id exato da candidata>","motivo":"<1-2 frases em português>","confianca":<0 a 1>}.`;
+  const SISTEMA_AGENTE = `Você é o técnico de PvP de um jogador de PokéIdle. Regras do PvP do jogo: duelo 5×5 automático, os pokémon entram em SEQUÊNCIA (quem vence fica em campo com o HP que sobrou e enfrenta o próximo), então a ORDEM é a comp. Tipos e golpes decidem cada 1×1. A fila junta jogadores próximos na ladder (±3 posições); o jogo NUNCA repete o mesmo adversário antes de ~10 min e, quando esse bloqueio acaba e os dois estão buscando, junta de novo na hora. Você recebe: quem deve ser o próximo adversário (com chance e se está livre/bloqueado), o hábito de cada um (repete a comp, usa 2 comps, mesmos pokémon em ordens diferentes, com quem abre), as formações candidatas (ordem exata) com o placar REAL contra cada provável e a nota do modelo estatístico, as regras do próprio jogador (respeite-as), o seu caderno GERAL de lições e o caderno de cada rival provável. Escolha UMA formação entre as candidatas. O MAIS IMPORTANTE: responda à BUILD que o rival provável deve usar AGORA (proximaBuildDele, com chance) — vários rivais alternam builds (ex.: um abre de Gyarados ou de Aerodactyl) e cada build pede outra resposta. Use o placar de cada candidata CONTRA CADA BUILD (contraCadaBuild), não o placar geral contra o jogador. Depois de vencer, o rival quase sempre repete a build; depois de perder, ~metade das vezes troca. Placar real pesa mais que a nota do modelo; poucos jogos = pouca certeza. Responda SÓ JSON: {"formacao":"<id exato da candidata>","motivo":"<1-2 frases em português>","confianca":<0 a 1>}.`;
 
   function estadoParaAgente(reg, previstos, notas, forcar) {
     const ultimasDele = (nick) => hist.filter((h) => mesmoNick(h.nick, nick) && h.dele?.length).sort((a, b) => b.em - a.em).slice(0, 3)
@@ -652,12 +660,14 @@
     return {
       jogador: meuNick(),
       ultimaPartida: { rival: reg.nick, resultado: reg.venci ? 'vitória' : 'derrota', minhaOrdem: (reg.meu ?? []).map((x) => x.nome), ordemDele: (reg.dele ?? []).map((x) => x.nome) },
-      proximosProvaveis: previstos.slice(0, 4).map((x) => ({ nick: x.nick, chance: `${Math.round(x.p * 100)}%`, situacao: x.base ?? '', voceGanhaDele: `${Math.round((1 - dificuldade(x.nick)) * 100)}%`,
+      proximosProvaveis: previstos.slice(0, 4).map((x) => ({ nick: x.nick, chance: `${Math.round(x.p * 100)}%`, situacao: x.base ?? '',
+        proximaBuildDele: (proximaCompDe(x.nick)?.dist ?? []).slice(0, 3).map((b) => ({ abreCom: b.abre, ordem: b.ordem.join(' > '), chance: `${Math.round(b.p * 100)}%` })), voceGanhaDele: `${Math.round((1 - dificuldade(x.nick)) * 100)}%`,
         habito: habitoDe(x.nick)?.txt ?? 'variado', abreCom: aberturaDe(x.nick)?.nome ?? null, ultimasCompsDele: ultimasDele(x.nick), regras: regrasContra(x.nick).map((r) => `${r.poke} ${r.nao ? '≠' : '='} ${r.pos}`) })),
       formacaoAtual: chaveAtual(),
       trocaObrigatoria: !!forcar,
       candidatas: notas.slice(0, 8).map((n) => ({ id: n.f.k, ordem: nomesDosIds(n.f.ids), geral: `${n.f.v}V ${n.f.n - n.f.v}D`,
         contraProvaveis: Object.fromEntries(previstos.slice(0, 3).map((x) => { const pv = placarVs(n.f.k, x.nick); return [x.nick, pv.n ? `${pv.v}V ${pv.n - pv.v}D` : 'nunca']; })),
+        contraCadaBuild: Object.fromEntries(previstos.slice(0, 2).map((x) => [x.nick, Object.fromEntries((proximaCompDe(x.nick)?.dist ?? []).slice(0, 3).map((b) => [`abre ${b.abre}`, placarVsBuild(n.f, x.nick, b.abre)?.txt ?? 'sem dados']))])),
         notaModelo: Math.round(n.nota * 100), porqueModelo: n.det.slice(0, 3) })),
       cadernoGeral: cadernos.geral || '(vazio)',
       cadernosDosRivais: Object.fromEntries(previstos.slice(0, 3).map((x) => [x.nick, cadernoDe(x.nick) || '(sem lições sobre ele ainda)'])),
@@ -759,6 +769,49 @@
   /** O peso de um adversário na escolha: a chance de ele vir × (com o foco ligado) quão difícil ele é. */
   const pesoNaEscolha = (x) => (cfg.auto.focoAmeacas ? x.p * (0.3 + 1.4 * dificuldade(x.nick)) : x.p);
 
+  // ---------------------------------------------------------------- a PRÓXIMA comp do rival
+  // Quem alterna builds (ex.: Alan: Gyarados na frente × Aerodactyl na frente) pede respostas
+  // diferentes. Medido no histórico: depois de VENCER, o rival quase sempre repete a build; depois
+  // de PERDER, repete ~metade das vezes e troca para outra das que ele usa. As builds são
+  // identificadas por quem ABRE (é o que decide o confronto) e cada uma guarda a ordem mais recente.
+  const abreCom = (h) => String(h.dele?.[0]?.nome ?? '').replace(/^Mega\s+/i, '');
+  function proximaCompDe(nick) {
+    const deles = hist.filter((h) => mesmoNick(h.nick, nick) && !h.deleSemOrdem && (h.dele?.length ?? 0) >= 2).sort((a, b) => a.em - b.em);
+    if (deles.length < 3) return null;
+    // quanto ele mantém a build depois de ganhar / perder (com prior)
+    let kg = 1, ng = 1.1, kp = 1, np = 2;
+    for (let i = 1; i < deles.length; i++) {
+      const manteve = abreCom(deles[i]) === abreCom(deles[i - 1]);
+      if (deles[i - 1].venci) { np++; if (manteve) kp++; } else { ng++; if (manteve) kg++; }
+    }
+    const ultimo = deles.at(-1);
+    const pManter = ultimo.venci ? kp / np : kg / ng;
+    const freq = new Map();
+    for (const h of deles.slice(-15)) {
+      const k = abreCom(h);
+      const c = freq.get(k) ?? { abre: k, n: 0, ordem: h.dele.map((x) => x.nome) };
+      c.n++; c.ordem = h.dele.map((x) => x.nome);
+      freq.set(k, c);
+    }
+    const lastK = abreCom(ultimo);
+    const outras = [...freq.values()].filter((c) => c.abre !== lastK);
+    const somaOutras = outras.reduce((t, c) => t + c.n, 0);
+    const dist = [{ abre: lastK, ordem: ultimo.dele.map((x) => x.nome), p: outras.length ? pManter : 1 }];
+    for (const c of outras) dist.push({ abre: c.abre, ordem: c.ordem, p: (1 - pManter) * (c.n / somaOutras) });
+    return { dist: dist.sort((a, b) => b.p - a.p), pManter, ultimoResultado: ultimo.venci ? 'ele perdeu' : 'ele ganhou' };
+  }
+  /** O placar da formação contra o rival quando ele abriu com `abre` — exato; senão pela SUA abertura contra a dele. */
+  function placarVsBuild(f, nick, abre) {
+    let n = 0, v = 0, n2 = 0, v2 = 0;
+    const meuLider = String(nomesDosIds([f.ids[0]])[0] ?? '').replace(/^Mega\s+/i, '');
+    for (const h of hist) {
+      if (!mesmoNick(h.nick, nick) || abreCom(h) !== abre) continue;
+      if (idsDoDuelo(h)?.join(',') === f.k) { n++; if (h.venci) v++; }
+      if (String(h.meu?.[0]?.nome ?? '').replace(/^Mega\s+/i, '') === meuLider) { n2++; if (h.venci) v2++; }
+    }
+    return n ? { nota: (v + 1) / (n + 2), txt: `${v}V ${n - v}D vs ${abre}`, n } : n2 ? { nota: 0.5 + ((v2 + 1) / (n2 + 2) - 0.5) * 0.8, txt: `abrindo de ${meuLider}: ${v2}V ${n2 - v2}D vs ${abre}`, n: n2 } : null;
+  }
+
   function pontuar(f, previstos) {
     let soma = 0, peso = 0;
     const det = [];
@@ -766,8 +819,22 @@
       const { nick } = x;
       const p = pesoNaEscolha(x);
       const r = notaVs(f, nick);
-      soma += p * r.nota; peso += p;
-      det.push(`${nick}: ${r.fonte}`);
+      // Contra a build que ele deve usar AGORA (pesa mais que o placar geral contra ele).
+      const pc = proximaCompDe(nick);
+      let nota = r.nota, txt = r.fonte;
+      if (pc) {
+        let sb = 0, pb = 0;
+        const partes = [];
+        for (const b of pc.dist) {
+          const pv = placarVsBuild(f, nick, b.abre);
+          if (!pv) continue;
+          sb += b.p * pv.nota; pb += b.p;
+          if (b.p >= 0.2) partes.push(pv.txt);
+        }
+        if (pb > 0.3) { nota = 0.7 * (sb / pb) + 0.3 * r.nota; txt = `${partes.join(' · ') || r.fonte} (próxima build: ${pc.dist[0].abre} ${Math.round(pc.dist[0].p * 100)}%)`; }
+      }
+      soma += p * nota; peso += p;
+      det.push(`${nick}: ${txt}`);
     }
     return { nota: peso ? soma / peso : notaF(f), det };
   }
@@ -1267,7 +1334,7 @@
     const geral = cand.map((f) => ({ f, ...pontuar(f, previstos) })).sort((x, y) => y.nota - x.nota)[0];
     return `<div class="ppvp-destaque" style="background:#2a2a4a;border-color:#8a8aff">
         🔮 Último adversário: <b>${esc(ultimo.nick)}</b> (${ultimo.venci ? '<span class="ppvp-v">venceu</span>' : '<span class="ppvp-d">perdeu</span>'}) · ativos na fila e chance de vir agora:
-        ${previstos.map((x) => { const d = dificuldade(x.nick); return `<b>${esc(x.nick)}</b> ${Math.round(x.p * 100)}% <small class="${d > 0.55 ? 'ppvp-d' : d < 0.35 ? 'ppvp-v' : ''}">(você ganha ${Math.round((1 - d) * 100)}%${d > 0.55 ? ' · ameaça' : ''}${(() => { const ab = aberturaDe(x.nick); return ab ? ` · abre de ${esc(ab.nome)} ${ab.vezes}/${ab.de}` : ''; })()}${(() => { const h = habitoDe(x.nick); return h ? ` · ${esc(h.txt)}` : ''; })()})</small>`; }).join(' · ')}
+        ${previstos.map((x) => { const d = dificuldade(x.nick); return `<b>${esc(x.nick)}</b> ${Math.round(x.p * 100)}% <small class="${d > 0.55 ? 'ppvp-d' : d < 0.35 ? 'ppvp-v' : ''}">(você ganha ${Math.round((1 - d) * 100)}%${d > 0.55 ? ' · ameaça' : ''}${(() => { const ab = aberturaDe(x.nick); return ab ? ` · abre de ${esc(ab.nome)} ${ab.vezes}/${ab.de}` : ''; })()}${(() => { const h = habitoDe(x.nick); return h ? ` · ${esc(h.txt)}` : ''; })()}${(() => { const pc = proximaCompDe(x.nick); return pc ? ` · próxima build: ${esc(pc.dist[0].abre)} ${Math.round(pc.dist[0].p * 100)}%` : ''; })()})</small>`; }).join(' · ')}
         <small class="ppvp-aviso">(${cfg.auto.ia ? `🤖 IA: ${previstos.slice(0, 4).map((x) => `${esc(x.nick)} ${esc(x.base)}`).join(' · ')}` : `${esc(previstos[0].base)}; quem acabou de lutar com você pesa menos`})</small>
         <table class="ppvp-tab" style="margin-top:4px"><tr><th>Contra</th><th>Melhor formação</th><th>Por quê</th></tr>
         ${previstos.map((x) => { const m = melhorPara(x.nick); return `<tr><td><b>${esc(x.nick)}</b></td><td>${m ? esc(m.f.nome) + (m.f.simulada ? ' <small class="ppvp-aviso">(simulada)</small>' : '') : '—'}</td><td>${m ? esc(m.r.fonte) : '—'}</td></tr>`; }).join('')}
@@ -1414,6 +1481,7 @@
           <label title="pede a decisão ao agente de IA configurado em 🤖 Agente IA (barra de cima do app); se ele falhar ou demorar, vale o modelo estatístico"><input type="checkbox" data-a="autoAgente" ${a.agente ? 'checked' : ''}> 🤖 agente de IA decide${agenteStatus ? ` <small>(${esc(agenteStatus)})</small>` : ''}</label>
           ${a.agente ? '<span class="ppvp-aviso">📓 cadernos e registro do agente: aba 🤖 Agente</span>' : ''}
           <label title="prevê o próximo pelo bloqueio de revanche (medido), por quem está ativo e por quem está perto de você na ladder — e refaz a escolha logo antes de cada bloqueio acabar"><input type="checkbox" data-a="autoIA" ${a.ia ? 'checked' : ''}> 🤖 IA de previsão${(() => { const b = backtestIA(); return b ? ` <small>(acerta ${Math.round(b.ia * 100)}% no seu histórico · regra antiga ${Math.round(b.antiga * 100)}% · bloqueio ${b.bloqMin.toFixed(0)} min)</small>` : ''; })()}</label>
+          <label title="acima desta diferença de pontos (PR) o jogo quase não junta você com o rival (ex.: o 1º raramente pega o 4º)">diferença de pontos máx.: <input type="number" class="ppvp-in" data-c="difPontos" min="20" max="1000" step="10" value="${esc(a.difPontos ?? 100)}" style="width:64px"></label>
           <label title="refaz a escolha no tempo: com a IA, logo antes de cada bloqueio acabar; sem ela, em 60 s e 120 s de busca"><input type="checkbox" data-a="autoReavaliar" ${a.reavaliarFila ? 'checked' : ''}> reavaliar enquanto busca</label>
           <label title="depois de jogar contra estes (vitória OU derrota), o time sempre troca — eles já viram o seu time e vão counterar. Vírgula separa; vale parte do nick.">sempre trocar depois de jogar contra: <input class="ppvp-in" data-c="sempreTrocar" value="${esc(a.sempreTrocar ?? '')}" style="width:160px" spellcheck="false"></label>
           <label title="se o próximo provável sempre abre com o mesmo pokémon, quem vence esse 1×1 vai na frente (o resto mantém a ordem)"><input type="checkbox" data-a="autoAbertura" ${a.abertura ? 'checked' : ''}> abertura (contra quem sempre abre igual, põe na frente quem vence o abridor)</label>
@@ -1560,6 +1628,7 @@
     });
     fundo.addEventListener('change', (e) => {
       if (e.target.dataset.c === 'cruzA' || e.target.dataset.c === 'cruzB') { cruz[e.target.dataset.c === 'cruzA' ? 'a' : 'b'] = e.target.value; cruz.calc = null; pintar(); }
+      if (e.target.dataset.c === 'difPontos') { cfg.auto.difPontos = Math.max(20, Math.min(1000, Number(e.target.value) || 100)); salvarCfg(); pintar(); }
       if (e.target.dataset.c === 'agenteLimite') { cfg.auto.agenteLimite = Math.max(0, Math.min(500, Number(e.target.value) || 0)); cfg.auto.agenteLutas = 0; salvarCfg(); pintar(); }
       if (e.target.dataset.c === 'manterSeVencer') { cfg.auto.manterSeVencer = e.target.value; salvarCfg(); }
       if (e.target.dataset.c === 'regrasRival') { cfg.auto.regrasRival = e.target.value; salvarCfg(); }

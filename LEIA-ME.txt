@@ -162,6 +162,11 @@ PvP — botão ⚔ PvP
     de cada bloqueio acabar, ele recebe um resumo (próximos prováveis, hábitos, suas formações com o
     placar real, suas regras) e escolhe a formação; depois de cada partida reescreve um caderno de
     lições que vai junto nas próximas decisões. Falhou/demorou/inventou: vale o modelo estatístico.
+    Próxima BUILD do rival: quem alterna builds (ex.: Alan abre de Gyarados ou de Aerodactyl) é previsto
+    pela última build e pelo resultado (depois de vencer ele quase sempre repete; depois de perder, troca
+    ~metade das vezes). Suas formações são pontuadas pelo placar CONTRA AQUELA BUILD (ou pela sua
+    abertura contra a dele), e o agente recebe isso. Diferença de pontos máx. (padrão 100): acima
+    disso o rival fica bem improvável na previsão.
     🤖 IA de previsão (padrão): o jogo nunca repete o adversário antes de 10 min (bloqueio medido no
     seu histórico) e junta de novo assim que o bloqueio acaba. A IA prevê quem vem pelo que está
     LIVRE (bloqueio vencido), ATIVO (jogou com você há pouco / V-D subindo na ladder, lida a cada
