@@ -7,7 +7,7 @@
 // A comissão é a do jogo: `shared/taxa-mercado.mjs`, o mesmo arquivo que o servidor usa.
 (() => {
   'use strict';
-  const VERSAO_VENDAS = '1.5.0';
+  const VERSAO_VENDAS = '1.6.0';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -479,7 +479,7 @@
         const aberto = !a.estado || a.estado === 'aberto';
         const antes = fav.vistos[k];
         if (!antes) {
-          fav.vistos[k] = { nome, vendedor: a.vendedor ?? '', preco, moeda, aberto, desde: agora, mudouEm: null, antes: null, digital: digital(a) };
+          fav.vistos[k] = { nome, vendedor: a.vendedor ?? '', preco, moeda, aberto, desde: agora, mudouEm: null, antes: null, digital: digital(a), stats: resumoFicha(a) };
           continue;
         }
         if (aberto && antes.aberto && preco && preco !== antes.preco) {
@@ -496,7 +496,7 @@
           alertaFav(`${nome} (de ${antes.vendedor}) ${a.estado === 'vendido' ? 'foi VENDIDO' : 'saiu do Mercado'}`);
           Object.assign(antes, { aberto: false, mudouEm: agora });
         }
-        Object.assign(antes, { nome, vendedor: a.vendedor ?? antes.vendedor, aberto });
+        Object.assign(antes, { nome, vendedor: a.vendedor ?? antes.vendedor, aberto, stats: resumoFicha(a) });
       }
       for (const k of Object.keys(fav.vistos)) if (!presentes.has(k)) delete fav.vistos[k]; // você desfavoritou
       favUltima = agora;
@@ -530,7 +530,7 @@
         <p class="pv-ajuda">Vigia os anúncios que você favoritou (★ no card do Mercado) NESTA conta e avisa — aviso grande no app, som e notificação do Windows — quando o preço muda ou o anúncio sai. Com <b>🛒 comprar se baixar</b> marcado, ele COMPRA aquele anúncio sozinho quando o preço ficar MENOR que o anterior, só se for o mesmo pokémon que você favoritou e dentro do teto da moeda. Se outro comprador for mais rápido, ele avisa que não deu.</p>
         ${itens.length ? `<table class="pv-tab"><tr><th>Anúncio</th><th>Vendedor</th><th>Preço agora</th><th>Antes</th><th>Mudou</th><th>Situação</th><th>🛒 Snipe</th></tr>
           ${itens.map(([k, v]) => `<tr><td style="text-align:left"><b>${esc(v.nome)}</b></td><td>${esc(v.vendedor)}</td><td><b>${precoTxt(v.preco, v.moeda)}</b></td><td>${v.antes != null ? precoTxt(v.antes, v.moeda) : '—'}</td><td>${v.mudouEm ? dataHora(v.mudouEm) : '—'}</td><td>${v.aberto ? 'à venda' : '<span class="pv-neg">fora do Mercado</span>'}</td>
-            <td>${v.aberto ? `<label><input type="checkbox" data-a="favSnipe" data-v="${esc(k)}" ${fav.snipe[k] ? 'checked' : ''}> comprar se baixar</label><br><small>só de <b>${esc(fav.snipe[k]?.vendedor ?? v.vendedor)}</b> · até ${precoTxt(Math.min(tetoDe(v.moeda), Math.max(0, v.preco - 1)), v.moeda)}</small>` : '—'}</td></tr>`).join('')}</table>`
+            <td>${v.stats?.qualidade ? `<button class="pv-bt" data-a="prMarcarFav" data-v="${esc(k)}" title="salvar os stats e procurar este pokémon em qualquer anúncio">📌 caçar</button><br>` : ''}${v.aberto ? `<label><input type="checkbox" data-a="favSnipe" data-v="${esc(k)}" ${fav.snipe[k] ? 'checked' : ''}> comprar se baixar</label><br><small>só de <b>${esc(fav.snipe[k]?.vendedor ?? v.vendedor)}</b> · até ${precoTxt(Math.min(tetoDe(v.moeda), Math.max(0, v.preco - 1)), v.moeda)}</small>` : '—'}</td></tr>`).join('')}</table>`
           : '<p class="pv-ajuda">Nenhum favorito lido ainda — clique em "ler agora".</p>'}
         ${fav.log.length ? `<h4 class="pv-rot">Avisos</h4><table class="pv-tab">${fav.log.slice(0, 12).map((l) => `<tr><td>${dataHora(l.em)}</td><td style="text-align:left;white-space:normal">${esc(l.txt)}</td></tr>`).join('')}</table>` : ''}
       </section>`;
@@ -542,22 +542,29 @@
   // qualidade e IV somado (e nível mínimo). Serve para achar aquele que saiu e voltou num anúncio novo.
   const CHAVE_ESP = 'pokevendas.especies.v1';
   const esp = (() => {
-    const padrao = {
-      ativo: true, cadaMin: 2,
-      vigias: [{ nome: 'Garchomp', especieId: 445, alvo: { potencia: 2, qualidade: 1.551, ivSoma: 176, nivelMin: 802, vendedorAntes: 'Menecito' } }],
-      anuncios: {}, avisados: {}, log: [],
-    };
-    try { const s = JSON.parse(localStorage.getItem(CHAVE_ESP)) ?? {}; return { ...padrao, ...s }; } catch { return padrao; }
+    const padrao = { ativo: true, cadaMin: 2, procurados: null, anuncios: {}, avisados: {}, tentados: {}, log: [] };
+    let e;
+    try { e = { ...padrao, ...(JSON.parse(localStorage.getItem(CHAVE_ESP)) ?? {}) }; } catch { e = { ...padrao }; }
+    // 📌 PROCURADOS: os pokémon que você marcou, com os stats salvos e o limite de compra.
+    if (!Array.isArray(e.procurados)) {
+      e.procurados = (e.vigias ?? [{ nome: 'Garchomp', especieId: 445, alvo: { potencia: 2, qualidade: 1.551, ivSoma: 176, nivelMin: 802, vendedorAntes: 'Menecito' } }])
+        .map((v, i) => ({ id: `p${Date.now()}${i}`, nome: v.nome, especieId: v.especieId, alvo: { potencia: v.alvo.potencia, qualidade: v.alvo.qualidade, ivSoma: v.alvo.ivSoma, nivelMin: v.alvo.nivelMin },
+          vendedorAntes: v.alvo.vendedorAntes ?? '', limite: { orb: 3000, gold: null }, comprar: false, comprado: null, ultimo: null, criadoEm: Date.now() }));
+      delete e.vigias;
+    }
+    e.tentados ??= {};
+    return e;
   })();
   const salvarEsp = () => { try { localStorage.setItem(CHAVE_ESP, JSON.stringify({ ...esp, log: esp.log.slice(0, 40) })); } catch {} };
   let espUltima = 0, espLendo = false, espMsg = '';
   // (o mesmo cálculo do jogo: `iv`/`ivTotal` direto, senão a soma de `ivs`)
   const ivSoma = (f) => { const d = f?.iv ?? f?.ivTotal; if (d != null && Number.isFinite(Number(d))) return Math.round(Number(d)); return Object.values(f?.ivs ?? {}).reduce((t, v) => t + (Number(v) || 0), 0); };
-  const resumoFicha = (a) => {
+  function resumoFicha(a) {
     const f = a.ficha ?? {};
-    return { id: a.id, vendedor: a.vendedor ?? '', preco: Number(a.preco) || 0, moeda: a.moeda ?? 'gold', nivel: Number(f.level ?? f.nivel) || 0,
-      potencia: Number(f.potencia) || 0, qualidade: Number(f.quality ?? f.qualidade) || 0, iv: ivSoma(f), shiny: !!f.shiny, nome: f.nome ?? f.especie ?? '' };
-  };
+    return { id: a.id, vendedor: a.vendedor ?? '', preco: Number(a.preco) || 0, moeda: a.moeda ?? 'gold', nivel: Number(f.level ?? f.nivel) || 0, qtd: Math.floor(Number(a.qtd) || 1),
+      potencia: Number(f.potencia) || 0, qualidade: Number(f.quality ?? f.qualidade) || 0, iv: ivSoma(f), shiny: !!f.shiny, nome: f.nome ?? f.especie ?? '',
+      especieId: Number(f.speciesId ?? f.especieId ?? f.pokeId) || null, compravelEm: Number(a.compravelEm) || null };
+  }
   /** É o pokémon procurado? (potência, qualidade e IV são fixos desde a captura) */
   // Precisa ter qualidade e potência na ficha (e elas baterem); IV e nível conferem quando vierem.
   const ehProcurado = (r, alvo) => !!alvo && r.qualidade > 0 && r.potencia > 0
@@ -566,12 +573,68 @@
     && (!alvo.ivSoma || !r.iv || r.iv === Number(alvo.ivSoma))
     && (!alvo.nivelMin || !r.nivel || r.nivel >= Number(alvo.nivelMin));
 
+  /** 📌 Marca um pokémon (de um favorito ou da lista da espécie): salva os stats e o limite = preço de agora. */
+  function marcarProcurado(r, nomeEspecie) {
+    if (!r?.qualidade || !r?.potencia) { espMsg = 'esse anúncio não trouxe qualidade/potência — não dá para reconhecer o pokémon depois'; return; }
+    const especieId = r.especieId ?? esp.procurados.find((x) => x.nome.toLowerCase() === String(nomeEspecie ?? r.nome).toLowerCase())?.especieId ?? null;
+    if (!especieId) { espMsg = `não sei o número da espécie de ${r.nome} — não dá para procurar no Mercado`; return; }
+    const ja = esp.procurados.find((x) => x.especieId === especieId && ehProcurado(r, x.alvo));
+    if (ja) { espMsg = `${ja.nome} já está nos procurados`; return; }
+    const lim = { orb: null, gold: null };
+    lim[r.moeda === 'orb' ? 'orb' : 'gold'] = r.preco || null;
+    esp.procurados.push({ id: `p${Date.now()}`, nome: String(nomeEspecie ?? r.nome).replace(/^✨/, '') || 'Pokémon', especieId,
+      alvo: { potencia: r.potencia, qualidade: r.qualidade, ivSoma: r.iv || null, nivelMin: r.nivel || null }, vendedorAntes: r.vendedor ?? '',
+      limite: lim, comprar: false, comprado: null, ultimo: null, criadoEm: Date.now() });
+    espMsg = `📌 ${r.nome} marcado — limite ${r.preco ? precoTxt(r.preco, r.moeda) : 'a definir'}`;
+    salvarEsp();
+  }
+
+  /** Compra o procurado que apareceu — só com "comprar sozinho", 1 unidade, até o SEU limite naquela moeda e o teto geral. */
+  async function comprarProcurado(pr, r) {
+    const lim = Number(pr.limite?.[r.moeda === 'orb' ? 'orb' : 'gold']) || 0;
+    const nome = `${pr.nome} Nv ${fmt(r.nivel)} (P${r.potencia} · Q ${r.qualidade.toFixed(3).replace('.', ',')})`;
+    const nao = (motivo) => { const t = `🎯 ${nome} de ${r.vendedor} por ${precoTxt(r.preco, r.moeda)} — NÃO comprei: ${motivo}`; esp.log.unshift({ em: Date.now(), txt: t }); window.postMessage({ __pbAlerta: { titulo: `🔎 ${pr.nome} procurado`, texto: t } }, '*'); };
+    if (!pr.comprar) return false;
+    if (!lim) return nao(`sem limite em ${r.moeda === 'orb' ? 'Gemas' : 'Coins'} para ele`), false;
+    if (r.preco > lim) return nao(`acima do seu limite de ${precoTxt(lim, r.moeda)}`), false;
+    if (r.preco > tetoDe(r.moeda)) return nao(`acima do teto geral de ${precoTxt(tetoDe(r.moeda), r.moeda)}`), false;
+    if (r.qtd !== 1) return nao(`anúncio com ${r.qtd} unidades`), false;
+    const desvio = core.eu?.servidorAgora ? Date.now() - Number(core.eu.servidorAgora) : 0;
+    const falta = r.compravelEm ? r.compravelEm - (Date.now() - desvio) : 0;
+    if (falta > 0) {
+      if (falta > 20 * 60_000) return nao('em retenção por mais de 20 min'), false;
+      esp.log.unshift({ em: Date.now(), txt: `🎯 ${nome} em RETENÇÃO — compro quando liberar (${Math.ceil(falta / 1000)} s)` });
+      await dormir(falta + 600);
+    }
+    core.send({ t: 'market.comprar', id: r.id, qtd: 1, preco: r.preco, moeda: r.moeda });
+    const ok = await new Promise((res) => {
+      const ws = core.ws;
+      const t = setTimeout(() => { ws?.removeEventListener('message', f); res(false); }, 8000);
+      function f(e) {
+        if (typeof e.data !== 'string' || !e.data.includes('marketComprado')) return;
+        let m; try { m = JSON.parse(e.data); } catch { return; }
+        if (!(m.ev ?? []).some((x) => x.k === 'marketComprado')) return;
+        clearTimeout(t); ws?.removeEventListener('message', f); res(true);
+      }
+      ws?.addEventListener('message', f);
+    });
+    const txt = ok ? `🛒 COMPREI o ${nome} de ${r.vendedor} por ${precoTxt(r.preco, r.moeda)} (seu limite: ${precoTxt(lim, r.moeda)})`
+      : `🎯 ${nome} por ${precoTxt(r.preco, r.moeda)} — tentei comprar e NÃO deu (outro comprador levou ou o anúncio saiu)`;
+    if (ok) { pr.comprado = { em: Date.now(), preco: r.preco, moeda: r.moeda, vendedor: r.vendedor }; pr.comprar = false; }
+    esp.log.unshift({ em: Date.now(), txt });
+    window.postMessage({ __pbAlerta: { titulo: ok ? `🛒 ${pr.nome} comprado` : `🔎 ${pr.nome} procurado`, texto: txt } }, '*');
+    return ok;
+  }
+
   async function vigiarEspecies() {
     if (espLendo || !core.logado) return;
     espLendo = true;
     try {
       let total = 0;
-      for (const vg of esp.vigias) {
+      const especies = new Map();
+      for (const pr of esp.procurados) if (!pr.comprado && pr.especieId) especies.set(pr.especieId, pr.nome);
+      for (const [especieId, nomeEsp] of especies) {
+        const vg = { nome: nomeEsp, especieId };
         const vistos = {};
         for (let pagina = 0; pagina < 6; pagina++) {
           const m = await pedir({ t: 'market.listar', tipo: 'pokemon', moeda: '', busca: '', ordem: 'baratos', criterios: [], elemento: '', categoria: '',
@@ -586,11 +649,21 @@
         const antes = esp.anuncios[chave] ?? {};
         for (const [k, r] of Object.entries(vistos)) {
           r.desde = antes[k]?.desde ?? Date.now();
-          if (ehProcurado(r, vg.alvo) && !esp.avisados[k]) {
-            esp.avisados[k] = Date.now();
-            const txt = `O ${vg.nome} PROCURADO voltou! Nv ${fmt(r.nivel)} · P${r.potencia} · Q ${r.qualidade.toFixed(3).replace('.', ',')} · IV ${r.iv} — de ${r.vendedor} por ${precoTxt(r.preco, r.moeda)}`;
-            esp.log.unshift({ em: Date.now(), txt });
-            window.postMessage({ __pbAlerta: { titulo: `🔎 ${vg.nome} procurado no Mercado`, texto: txt } }, '*');
+          const pr = esp.procurados.find((x) => !x.comprado && x.especieId === especieId && ehProcurado(r, x.alvo));
+          if (pr) {
+            pr.ultimo = { vendedor: r.vendedor, preco: r.preco, moeda: r.moeda, em: Date.now() };
+            const lim = Number(pr.limite?.[r.moeda === 'orb' ? 'orb' : 'gold']) || 0;
+            const chaveTent = `${k}:${r.preco}`;
+            if (pr.comprar && lim && r.preco <= lim && !esp.tentados[chaveTent]) {
+              esp.tentados[chaveTent] = Date.now();
+              esp.avisados[k] = Date.now();
+              await comprarProcurado(pr, r);
+            } else if (!esp.avisados[k]) {
+              esp.avisados[k] = Date.now();
+              const txt = `O ${vg.nome} PROCURADO está à venda! Nv ${fmt(r.nivel)} · P${r.potencia} · Q ${r.qualidade.toFixed(3).replace('.', ',')} · IV ${r.iv} — de ${r.vendedor} por ${precoTxt(r.preco, r.moeda)}${lim ? ` (seu limite: ${precoTxt(lim, r.moeda)}${r.preco <= lim ? ' — DENTRO' : ' — acima'})` : ''}`;
+              esp.log.unshift({ em: Date.now(), txt });
+              window.postMessage({ __pbAlerta: { titulo: `🔎 ${vg.nome} procurado no Mercado`, texto: txt } }, '*');
+            }
           } else if (!antes[k] && Object.keys(antes).length) {
             esp.log.unshift({ em: Date.now(), txt: `novo ${vg.nome}: Nv ${fmt(r.nivel)} · P${r.potencia} · Q ${r.qualidade.toFixed(3).replace('.', ',')} · IV ${r.iv} — ${r.vendedor} · ${precoTxt(r.preco, r.moeda)}` });
           }
@@ -610,29 +683,45 @@
     }
   }
   const vigiaEsp = setInterval(() => {
-    if (esp.ativo && Date.now() - espUltima > Math.max(1, Number(esp.cadaMin) || 2) * 60_000) vigiarEspecies();
+    const cada = esp.procurados.some((x) => x.comprar && !x.comprado) ? 60_000 : Math.max(1, Number(esp.cadaMin) || 2) * 60_000;
+    if (esp.ativo && Date.now() - espUltima > cada - 1000) vigiarEspecies();
   }, 15_000);
   limpezas.push(() => clearInterval(vigiaEsp));
 
   function htmlEspecies() {
-    return esp.vigias.map((vg) => {
-      const lista = Object.values(esp.anuncios[vg.nome.toLowerCase()] ?? {}).sort((a, b) => (a.moeda === b.moeda ? a.preco - b.preco : a.moeda === 'orb' ? -1 : 1));
-      const al = vg.alvo ?? {};
-      return `<section>
-        <h4 class="pv-rot">🔎 Todos os ${esc(vg.nome)} à venda</h4>
+    const fmtQ = (q) => (q ? Number(q).toFixed(3).replace('.', ',') : '?');
+    const procurados = `<section>
+        <h4 class="pv-rot">📌 Procurados — o app reconhece o pokémon em qualquer anúncio (mesmo se sair e voltar)</h4>
         <div class="pv-linha">
           <button class="pv-bt ${esp.ativo ? 'on' : ''}" data-a="espAtivo">${esp.ativo ? '● vigiando' : 'parado'}</button>
-          a cada <input type="number" class="pv-in" data-c="espCada" min="1" max="60" value="${esc(esp.cadaMin)}" style="width:54px"> min
-          <button class="pv-bt" data-a="espAgora" ${espLendo ? 'disabled' : ''}>${espLendo ? 'listando…' : '⟳ listar agora'}</button>
+          a cada <input type="number" class="pv-in" data-c="espCada" min="1" max="60" value="${esc(esp.cadaMin)}" style="width:54px"> min <span class="pv-ajuda">(1 min com "comprar sozinho" ligado)</span>
+          <button class="pv-bt" data-a="espAgora" ${espLendo ? 'disabled' : ''}>${espLendo ? 'listando…' : '⟳ procurar agora'}</button>
           <span class="pv-ajuda">${esc(espMsg)}</span>
         </div>
-        <p class="pv-ajuda">Procurado: <b>P${esc(al.potencia ?? '?')} · Q ${esc(String(al.qualidade ?? '?').replace('.', ','))} · IV ${esc(al.ivSoma ?? '?')} · Nv ≥ ${esc(al.nivelMin ?? '?')}</b>${al.vendedorAntes ? ` (estava com ${esc(al.vendedorAntes)})` : ''} — se aparecer, aviso grande no app + notificação do Windows.</p>
-        ${lista.length ? `<table class="pv-tab"><tr><th></th><th>Vendedor</th><th>Preço</th><th>Nv</th><th>P</th><th>Qualidade</th><th>IV</th><th>Visto desde</th></tr>
-          ${lista.map((r) => { const alvo = ehProcurado(r, vg.alvo); return `<tr style="${alvo ? 'background:#1e3a1e;font-weight:800' : ''}"><td>${alvo ? '🎯' : r.shiny ? '✨' : ''}</td><td style="text-align:left">${esc(r.vendedor)}</td><td><b>${precoTxt(r.preco, r.moeda)}</b></td><td>${fmt(r.nivel)}</td><td>P${r.potencia || '?'}</td><td>${r.qualidade ? r.qualidade.toFixed(3).replace('.', ',') : '?'}</td><td>${r.iv || '?'}</td><td>${r.desde ? dataHora(r.desde) : '—'}</td></tr>`; }).join('')}</table>`
-          : `<p class="pv-ajuda">${espUltima ? `Nenhum ${esc(vg.nome)} à venda agora.` : 'Ainda não listado — clique em "listar agora".'}</p>`}
-        ${esp.log.length ? `<details><summary class="pv-ajuda">histórico (${esp.log.length})</summary><table class="pv-tab">${esp.log.slice(0, 20).map((l) => `<tr><td>${dataHora(l.em)}</td><td style="text-align:left;white-space:normal">${esc(l.txt)}</td></tr>`).join('')}</table></details>` : ''}
+        ${esp.procurados.length ? `<table class="pv-tab"><tr><th>Pokémon</th><th>Stats salvos</th><th>Limite 💎</th><th>Limite 🪙</th><th>Comprar sozinho</th><th>Último visto</th><th></th></tr>
+          ${esp.procurados.map((pr) => `<tr>
+            <td style="text-align:left"><b>${esc(pr.nome)}</b>${pr.vendedorAntes ? `<br><small>estava com ${esc(pr.vendedorAntes)}</small>` : ''}</td>
+            <td>P${esc(pr.alvo.potencia)} · Q ${fmtQ(pr.alvo.qualidade)} · IV ${esc(pr.alvo.ivSoma ?? '?')} · Nv ≥ ${esc(pr.alvo.nivelMin ?? '?')}</td>
+            <td><input type="number" class="pv-in" data-c="prLimOrb" data-v="${esc(pr.id)}" min="0" value="${esc(pr.limite?.orb ?? '')}" placeholder="—" style="width:80px"></td>
+            <td><input type="number" class="pv-in" data-c="prLimGold" data-v="${esc(pr.id)}" min="0" value="${esc(pr.limite?.gold ?? '')}" placeholder="—" style="width:120px"></td>
+            <td>${pr.comprado ? `<span class="pv-pos">✅ comprado ${dataHora(pr.comprado.em)} por ${precoTxt(pr.comprado.preco, pr.comprado.moeda)}</span>` : `<label><input type="checkbox" data-a="prComprar" data-v="${esc(pr.id)}" ${pr.comprar ? 'checked' : ''}> comprar se ≤ limite</label>`}</td>
+            <td>${pr.ultimo ? `${esc(pr.ultimo.vendedor)} · ${precoTxt(pr.ultimo.preco, pr.ultimo.moeda)}<br><small>${dataHora(pr.ultimo.em)}</small>` : '<small>ainda não apareceu</small>'}</td>
+            <td><button class="pv-bt" data-a="prRemover" data-v="${esc(pr.id)}" title="parar de procurar">✕</button></td></tr>`).join('')}</table>`
+          : '<p class="pv-ajuda">Nenhum. Marque um com 📌 (num favorito abaixo ou na lista de anúncios).</p>'}
+        <p class="pv-ajuda">Com "comprar sozinho", o bot compra o procurado quando ele aparecer a um preço <b>igual ou menor que o SEU limite</b> naquela moeda (e nunca acima do teto geral de ${precoTxt(tetoDe('orb'), 'orb')} / ${precoTxt(tetoDe('gold'), 'gold')}). Sem limite na moeda do anúncio, só avisa.</p>
+      </section>`;
+    const porEspecie = [...new Map(esp.procurados.filter((x) => x.especieId).map((x) => [x.especieId, x.nome])).entries()].map(([especieId, nomeEsp]) => {
+      const lista = Object.values(esp.anuncios[nomeEsp.toLowerCase()] ?? {}).sort((a, b) => (a.moeda === b.moeda ? a.preco - b.preco : a.moeda === 'orb' ? -1 : 1));
+      return `<section>
+        <h4 class="pv-rot">🔎 Todos os ${esc(nomeEsp)} à venda</h4>
+        ${lista.length ? `<table class="pv-tab"><tr><th></th><th>Vendedor</th><th>Preço</th><th>Nv</th><th>P</th><th>Qualidade</th><th>IV</th><th>Visto desde</th><th></th></tr>
+          ${lista.map((r) => { const alvo = esp.procurados.some((x) => x.especieId === especieId && ehProcurado(r, x.alvo)); return `<tr style="${alvo ? 'background:#1e3a1e;font-weight:800' : ''}"><td>${alvo ? '🎯' : r.shiny ? '✨' : ''}</td><td style="text-align:left">${esc(r.vendedor)}</td><td><b>${precoTxt(r.preco, r.moeda)}</b></td><td>${fmt(r.nivel)}</td><td>P${r.potencia || '?'}</td><td>${fmtQ(r.qualidade)}</td><td>${r.iv || '?'}</td><td>${r.desde ? dataHora(r.desde) : '—'}</td>
+            <td>${alvo ? '' : `<button class="pv-bt" data-a="prMarcarAnuncio" data-v="${esc(nomeEsp.toLowerCase())}|${esc(r.id)}" title="marcar este pokémon como procurado">📌</button>`}</td></tr>`; }).join('')}</table>`
+          : `<p class="pv-ajuda">${espUltima ? `Nenhum ${esc(nomeEsp)} à venda agora.` : 'Ainda não listado — clique em "procurar agora".'}</p>`}
       </section>`;
     }).join('');
+    const historico = esp.log.length ? `<section><details><summary class="pv-ajuda">histórico dos procurados (${esp.log.length})</summary><table class="pv-tab">${esp.log.slice(0, 25).map((l) => `<tr><td>${dataHora(l.em)}</td><td style="text-align:left;white-space:normal">${esc(l.txt)}</td></tr>`).join('')}</table></details></section>` : '';
+    return procurados + porEspecie + historico;
   }
 
   function htmlRebaixar() {
@@ -1036,6 +1125,7 @@
     if (!c) return;
     if (c === 'rebItem') { reb.itemId = Number(e.target.value); reb.msg = ''; return pintar(); }
     if (c === 'favTetoOrb' || c === 'favTetoGold') { if (e.type === 'change') { fav[c === 'favTetoOrb' ? 'tetoOrb' : 'tetoGold'] = Math.max(1, Number(e.target.value) || 1); salvarFav(); pintar(); } return; }
+    if (c === 'prLimOrb' || c === 'prLimGold') { if (e.type === 'change') { const pr = esp.procurados.find((x) => x.id === e.target.dataset.v); if (pr) { pr.limite ??= {}; pr.limite[c === 'prLimOrb' ? 'orb' : 'gold'] = e.target.value === '' ? null : Math.max(0, Number(e.target.value) || 0); salvarEsp(); pintar(); } } return; }
     if (c === 'espCada') { if (e.type === 'change') { esp.cadaMin = Math.max(1, Math.min(60, Number(e.target.value) || 2)); salvarEsp(); pintar(); } return; }
     if (c === 'favCada') { if (e.type === 'change') { fav.cadaMin = Math.max(1, Math.min(60, Number(e.target.value) || 2)); salvarFav(); pintar(); } return; }
     if (c === 'reporTeto') { if (e.type === 'change') { repor.teto = Math.max(0, Math.min(1000, Number(e.target.value) || 0)); salvarRepor(); pintar(); } return; }
@@ -1065,6 +1155,10 @@
     else if (a === 'favAgora') { vigiarFavoritos(true); }
     else if (a === 'espAtivo') { esp.ativo = !esp.ativo; salvarEsp(); }
     else if (a === 'espAgora') { vigiarEspecies(); }
+    else if (a === 'prMarcarFav') { const v = fav.vistos[b.dataset.v]; if (v?.stats) marcarProcurado(v.stats, String(v.stats.nome || v.nome).replace(/\s+Nv.*$/, '')); }
+    else if (a === 'prMarcarAnuncio') { const [esp1, id] = b.dataset.v.split('|'); const r = esp.anuncios[esp1]?.[id]; const pr0 = esp.procurados.find((x) => x.nome.toLowerCase() === esp1); if (r) marcarProcurado({ ...r, especieId: r.especieId ?? pr0?.especieId }, pr0?.nome ?? r.nome); }
+    else if (a === 'prComprar') { const pr = esp.procurados.find((x) => x.id === b.dataset.v); if (pr) { pr.comprar = b.checked; salvarEsp(); } }
+    else if (a === 'prRemover') { esp.procurados = esp.procurados.filter((x) => x.id !== b.dataset.v); salvarEsp(); }
     else if (a === 'favSnipe') {
       const v = fav.vistos[b.dataset.v];
       if (b.checked && v) fav.snipe[b.dataset.v] = { vendedor: v.vendedor, digital: v.digital ?? null, em: Date.now() };
