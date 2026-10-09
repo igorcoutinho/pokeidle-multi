@@ -7,7 +7,7 @@
 // A comissão é a do jogo: `shared/taxa-mercado.mjs`, o mesmo arquivo que o servidor usa.
 (() => {
   'use strict';
-  const VERSAO_VENDAS = '1.4.1';
+  const VERSAO_VENDAS = '1.4.2';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -351,6 +351,7 @@
     const padrao = { ativo: true, cadaMin: 2, vistos: {}, log: [], snipe: {}, tetoOrb: 3000, tetoGold: 1_000_000_000 };
     try { const s = JSON.parse(localStorage.getItem(CHAVE_FAV)) ?? {}; return { ...padrao, ...s, vistos: s.vistos ?? {}, log: s.log ?? [], snipe: s.snipe ?? {} }; } catch { return padrao; }
   })();
+  for (const [k, x] of Object.entries(fav.snipe)) if (x === true) fav.snipe[k] = { vendedor: fav.vistos[k]?.vendedor ?? '', digital: fav.vistos[k]?.digital ?? null, em: Date.now() };
   const salvarFav = () => { try { localStorage.setItem(CHAVE_FAV, JSON.stringify({ ...fav, log: fav.log.slice(0, 40) })); } catch {} };
   let favUltima = 0, favLendo = false, favMsg = '';
   const nomeAnuncio = (a) => {
@@ -408,6 +409,12 @@
     const nome = nomeAnuncio(a);
     const preco = Number(a.preco) || 0, moeda = a.moeda ?? 'gold';
     const recusa = (motivo) => alertaFav(`${nome} BAIXOU para ${precoTxt(preco, moeda)} — NÃO comprei: ${motivo}`);
+    const aut = fav.snipe[k];
+    if (!aut) return recusa('você não autorizou a compra deste anúncio');
+    const vendedorAgora = String(a.vendedor ?? '').trim();
+    const vendedorAut = String(aut.vendedor ?? v.vendedor ?? '').trim();
+    if (!vendedorAgora || vendedorAgora.toLowerCase() !== vendedorAut.toLowerCase()) return recusa(`vendedor diferente — autorizado: "${vendedorAut}", agora: "${vendedorAgora || '?'}"`);
+    if (aut.digital && digital(a) !== aut.digital) return recusa('o pokémon do anúncio não é mais o mesmo que você autorizou');
     if (!(preco > 0 && preco < precoAntes)) return recusa('não ficou mais barato');
     if (preco > tetoDe(moeda)) return recusa(`acima do seu teto de ${precoTxt(tetoDe(moeda), moeda)}`);
     if (v.digital && digital(a) !== v.digital) return recusa('o pokémon do anúncio não é mais o mesmo que você favoritou');
@@ -523,7 +530,7 @@
         <p class="pv-ajuda">Vigia os anúncios que você favoritou (★ no card do Mercado) NESTA conta e avisa — aviso grande no app, som e notificação do Windows — quando o preço muda ou o anúncio sai. Com <b>🛒 comprar se baixar</b> marcado, ele COMPRA aquele anúncio sozinho quando o preço ficar MENOR que o anterior, só se for o mesmo pokémon que você favoritou e dentro do teto da moeda. Se outro comprador for mais rápido, ele avisa que não deu.</p>
         ${itens.length ? `<table class="pv-tab"><tr><th>Anúncio</th><th>Vendedor</th><th>Preço agora</th><th>Antes</th><th>Mudou</th><th>Situação</th><th>🛒 Snipe</th></tr>
           ${itens.map(([k, v]) => `<tr><td style="text-align:left"><b>${esc(v.nome)}</b></td><td>${esc(v.vendedor)}</td><td><b>${precoTxt(v.preco, v.moeda)}</b></td><td>${v.antes != null ? precoTxt(v.antes, v.moeda) : '—'}</td><td>${v.mudouEm ? dataHora(v.mudouEm) : '—'}</td><td>${v.aberto ? 'à venda' : '<span class="pv-neg">fora do Mercado</span>'}</td>
-            <td>${v.aberto ? `<label><input type="checkbox" data-a="favSnipe" data-v="${esc(k)}" ${fav.snipe[k] ? 'checked' : ''}> comprar se baixar</label><br><small>até ${precoTxt(Math.min(tetoDe(v.moeda), Math.max(0, v.preco - 1)), v.moeda)}</small>` : '—'}</td></tr>`).join('')}</table>`
+            <td>${v.aberto ? `<label><input type="checkbox" data-a="favSnipe" data-v="${esc(k)}" ${fav.snipe[k] ? 'checked' : ''}> comprar se baixar</label><br><small>só de <b>${esc(fav.snipe[k]?.vendedor ?? v.vendedor)}</b> · até ${precoTxt(Math.min(tetoDe(v.moeda), Math.max(0, v.preco - 1)), v.moeda)}</small>` : '—'}</td></tr>`).join('')}</table>`
           : '<p class="pv-ajuda">Nenhum favorito lido ainda — clique em "ler agora".</p>'}
         ${fav.log.length ? `<h4 class="pv-rot">Avisos</h4><table class="pv-tab">${fav.log.slice(0, 12).map((l) => `<tr><td>${dataHora(l.em)}</td><td style="text-align:left;white-space:normal">${esc(l.txt)}</td></tr>`).join('')}</table>` : ''}
       </section>`;
@@ -956,7 +963,12 @@
     else if (a === 'rebPublicar') publicarReb();
     else if (a === 'favAtivo') { fav.ativo = !fav.ativo; salvarFav(); }
     else if (a === 'favAgora') { vigiarFavoritos(true); }
-    else if (a === 'favSnipe') { if (b.checked) fav.snipe[b.dataset.v] = true; else delete fav.snipe[b.dataset.v]; salvarFav(); }
+    else if (a === 'favSnipe') {
+      const v = fav.vistos[b.dataset.v];
+      if (b.checked && v) fav.snipe[b.dataset.v] = { vendedor: v.vendedor, digital: v.digital ?? null, em: Date.now() };
+      else delete fav.snipe[b.dataset.v];
+      salvarFav();
+    }
     else if (a === 'reporAtivo') { if (!contaProtegida()) { repor.ativo = !repor.ativo; salvarRepor(); reporNota(repor.ativo ? 'reposição LIGADA' : 'reposição desligada'); } }
     else if (a === 'reporPedra') { repor.pedras[b.dataset.v] = b.checked; salvarRepor(); }
     else if (a === 'reporGarantir') { repor.garantir = b.checked; salvarRepor(); }
