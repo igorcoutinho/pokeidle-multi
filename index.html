@@ -47,6 +47,16 @@
   #reb-modal td{padding:5px 6px;border-top:1px solid #4a2a2a}
   #reb-modal .ok{color:#7fdc8f;font-weight:700}#reb-modal .ruim{color:#ff8a8a;font-weight:700}#reb-modal .ajuda{opacity:.7;font-size:12px}
   #reb-modal button.on{background:var(--roxo);border-color:var(--ouro);color:#fff}
+  #alerta-grande{position:fixed;inset:0;z-index:40;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center}
+  #alerta-grande.aberto{display:flex}
+  #alerta-grande .caixa{width:min(720px,92vw);background:#1e3a1e;border:4px solid #7fdc8f;border-radius:18px;padding:22px 26px;box-shadow:0 14px 50px rgba(0,0,0,.7);color:#e8ffe8;animation:pulsar 1s ease-in-out 3}
+  #alerta-grande h2{margin:0 0 6px;font-size:22px;color:#b6ffb6}
+  #alerta-grande .conta-alerta{opacity:.8;font-size:14px;margin-bottom:10px}
+  #alerta-grande .texto{font-size:20px;font-weight:800;line-height:1.35;white-space:pre-wrap}
+  #alerta-grande .mais{margin-top:8px;font-size:13px;opacity:.75}
+  #alerta-grande .bts{display:flex;gap:10px;margin-top:16px;justify-content:flex-end}
+  #alerta-grande button{font-size:15px;padding:8px 16px}
+  @keyframes pulsar{0%,100%{transform:scale(1)}50%{transform:scale(1.03)}}
   #gx-fundo{position:fixed;inset:0;z-index:20;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center}
   #gx-fundo.aberto{display:flex}
   #gx-modal{width:min(1150px,97vw);max-height:92vh;overflow:auto;background:#3a2020;border:3px solid var(--borda);border-radius:14px;padding:0 0 12px}
@@ -82,6 +92,7 @@
 <div id="aviso"></div>
 <div id="reb-fundo"><div id="reb-modal"></div></div>
 <div id="gx-fundo"><div id="gx-modal"></div></div>
+<div id="alerta-grande"></div>
 
 <script>
 (async () => {
@@ -558,6 +569,43 @@
     if (gx.conta) gxHunts(gx.conta);
   });
   document.getElementById('bt-rankxp').onclick = gxRanking;
+  // ---------------------------------------------------------------- alerta GRANDE (vindo de uma conta)
+  const alertaFundo = document.getElementById('alerta-grande');
+  let alertas = [];
+  function tocarAlerta() {
+    try {
+      const ctx = new AudioContext();
+      [880, 1175, 1568, 1175, 1568].forEach((f, i) => {
+        const o = ctx.createOscillator(), g = ctx.createGain();
+        o.frequency.value = f; g.gain.value = 0.2;
+        o.connect(g).connect(ctx.destination);
+        o.start(ctx.currentTime + i * 0.2); o.stop(ctx.currentTime + i * 0.2 + 0.17);
+      });
+    } catch {}
+  }
+  function mostrarAlerta(c, a) {
+    alertas.unshift({ c, a, em: Date.now() });
+    alertas = alertas.slice(0, 10);
+    const [x, ...resto] = alertas;
+    alertaFundo.innerHTML = `<div class="caixa"><h2>${escH(x.a.titulo || 'Aviso')}</h2>
+      <div class="conta-alerta">conta <b>${escH(x.c.nome)}</b> · ${new Date(x.em).toLocaleTimeString('pt-BR')}</div>
+      <div class="texto">${escH(x.a.texto)}</div>
+      ${resto.length ? `<div class="mais">avisos anteriores: ${resto.slice(0, 3).map((r) => `${new Date(r.em).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })} — ${escH(r.a.texto.slice(0, 80))}`).join('<br>')}</div>` : ''}
+      <div class="bts"><button data-al="abrir">abrir a conta ${escH(x.c.nome)}</button><button class="prim" data-al="ok">OK</button></div></div>`;
+    alertaFundo.classList.add('aberto');
+    alertaFundo.dataset.n = String(x.c.n);
+    tocarAlerta();
+    window.multi.notificar?.({ titulo: `${x.a.titulo || 'PokeIdle Multi'} — ${x.c.nome}`, texto: x.a.texto });
+  }
+  alertaFundo.addEventListener('click', (e) => {
+    const a = e.target.closest('[data-al]')?.dataset.al;
+    if (!a && e.target !== alertaFundo) return;
+    if (a === 'abrir') { const c = contas.find((y) => y.n === Number(alertaFundo.dataset.n)); if (c) focar(c); }
+    alertaFundo.classList.remove('aberto');
+    alertas = [];
+  });
+  for (const c of contas) c.wv.addEventListener('ipc-message', (e) => { if (e.channel === 'pb:alerta') mostrarAlerta(c, e.args?.[0] ?? {}); });
+
   // ---------------------------------------------------------------- 🌐 proxy deste perfil
   const btProxy = document.getElementById('bt-proxy');
   async function pintarProxy() {

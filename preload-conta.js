@@ -34,6 +34,14 @@ try {
   console.error('[PokeIdle Multi] ajuste do captcha não entrou', e);
 }
 
+// Alertas grandes: a página manda postMessage({ __pbAlerta: { titulo, texto } }) e a janela do app
+// mostra por cima das 4 contas (com notificação do Windows).
+window.addEventListener('message', (ev) => {
+  if (ev.source !== window || !ev.data?.__pbAlerta) return;
+  const { titulo, texto } = ev.data.__pbAlerta;
+  ipcRenderer.sendToHost('pb:alerta', { titulo: String(titulo ?? '').slice(0, 120), texto: String(texto ?? '').slice(0, 400) });
+});
+
 // Ponte do agente de IA: a página pede com postMessage({ __pbIA: { id, pedido } }) e recebe
 // { __pbIAResp: { id, ... } }. A chave nunca entra na página — quem chama a API é o processo principal.
 window.addEventListener('message', async (ev) => {

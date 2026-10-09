@@ -7,7 +7,7 @@
 //   - NÚCLEO (bot/core.js): injetado antes do jogo carregar, escuta o WebSocket.
 //   - LÓGICA (bot/logica.js): injetada depois e TROCADA A QUENTE quando o arquivo muda no disco,
 //     sem recarregar o jogo (recarregar no meio de uma hunt conta como derrota).
-const { app, BrowserWindow, ipcMain, shell, dialog, session, safeStorage } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, dialog, session, safeStorage, Notification } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const vm = require('vm');
@@ -269,6 +269,18 @@ ipcMain.handle('pb:ia', (_e, pedido) => (VARIANTE === 'lite' ? { ok: false, erro
 ipcMain.handle('multi:abrirCockpit', (_e, n) => abrirCockpit(n));
 ipcMain.handle('multi:rotomRegras', (_e, n) => lerRegrasRotom(n));
 ipcMain.handle('multi:twitchLives', (_e, lives) => abrirLivesNovas(lives));
+// Notificação do Windows + ícone piscando na barra de tarefas (alertas grandes das contas).
+ipcMain.handle('multi:notificar', (_e, { titulo, texto } = {}) => {
+  try {
+    if (Notification.isSupported()) {
+      const n = new Notification({ title: String(titulo ?? 'PokeIdle Multi'), body: String(texto ?? ''), urgency: 'critical' });
+      n.on('click', () => { if (janela && !janela.isDestroyed()) trazerParaFrente(janela); });
+      n.show();
+    }
+    if (janela && !janela.isDestroyed() && !janela.isFocused()) janela.flashFrame(true);
+  } catch (e) { console.warn('notificação falhou', e.message); }
+  return true;
+});
 
 // ---------------------------------------------------------------- agente de IA (OpenAI / Anthropic)
 // A chave fica SÓ aqui no processo principal, criptografada pelo Windows (safeStorage) no

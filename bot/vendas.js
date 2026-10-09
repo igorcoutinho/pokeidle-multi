@@ -7,7 +7,7 @@
 // A comissão é a do jogo: `shared/taxa-mercado.mjs`, o mesmo arquivo que o servidor usa.
 (() => {
   'use strict';
-  const VERSAO_VENDAS = '1.3.1';
+  const VERSAO_VENDAS = '1.3.2';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -387,7 +387,8 @@
         o.start(ctx.currentTime + i * 0.18); o.stop(ctx.currentTime + i * 0.18 + 0.15);
       }
     } catch {}
-    try { if (window.Notification) new Notification('PokéIdle — favorito', { body: txt }); } catch {}
+    // Aviso GRANDE na janela do app (por cima das 4 contas) + notificação do Windows: vai pelo preload.
+    window.postMessage({ __pbAlerta: { titulo: '⭐ Favorito do Mercado', texto: txt } }, '*');
     if (document.getElementById('pv-fundo')?.classList.contains('aberto') && modo === 'favoritos') pintar();
   }
 
