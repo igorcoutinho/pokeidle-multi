@@ -7,7 +7,7 @@
 // A comissão é a do jogo: `shared/taxa-mercado.mjs`, o mesmo arquivo que o servidor usa.
 (() => {
   'use strict';
-  const VERSAO_VENDAS = '1.4.2';
+  const VERSAO_VENDAS = '1.5.0';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -536,6 +536,105 @@
       </section>`;
   }
 
+  // ---------------------------------------------------------------- 🔎 vigiar uma espécie no Mercado
+  // Lista TODOS os anúncios da espécie (`market.listar` com `especieId`) a cada N min e avisa — com o
+  // aviso grande do app — quando aparece o pokémon PROCURADO, reconhecido pelo que não muda: potência,
+  // qualidade e IV somado (e nível mínimo). Serve para achar aquele que saiu e voltou num anúncio novo.
+  const CHAVE_ESP = 'pokevendas.especies.v1';
+  const esp = (() => {
+    const padrao = {
+      ativo: true, cadaMin: 2,
+      vigias: [{ nome: 'Garchomp', especieId: 445, alvo: { potencia: 2, qualidade: 1.551, ivSoma: 176, nivelMin: 802, vendedorAntes: 'Menecito' } }],
+      anuncios: {}, avisados: {}, log: [],
+    };
+    try { const s = JSON.parse(localStorage.getItem(CHAVE_ESP)) ?? {}; return { ...padrao, ...s }; } catch { return padrao; }
+  })();
+  const salvarEsp = () => { try { localStorage.setItem(CHAVE_ESP, JSON.stringify({ ...esp, log: esp.log.slice(0, 40) })); } catch {} };
+  let espUltima = 0, espLendo = false, espMsg = '';
+  // (o mesmo cálculo do jogo: `iv`/`ivTotal` direto, senão a soma de `ivs`)
+  const ivSoma = (f) => { const d = f?.iv ?? f?.ivTotal; if (d != null && Number.isFinite(Number(d))) return Math.round(Number(d)); return Object.values(f?.ivs ?? {}).reduce((t, v) => t + (Number(v) || 0), 0); };
+  const resumoFicha = (a) => {
+    const f = a.ficha ?? {};
+    return { id: a.id, vendedor: a.vendedor ?? '', preco: Number(a.preco) || 0, moeda: a.moeda ?? 'gold', nivel: Number(f.level ?? f.nivel) || 0,
+      potencia: Number(f.potencia) || 0, qualidade: Number(f.quality ?? f.qualidade) || 0, iv: ivSoma(f), shiny: !!f.shiny, nome: f.nome ?? f.especie ?? '' };
+  };
+  /** É o pokémon procurado? (potência, qualidade e IV são fixos desde a captura) */
+  // Precisa ter qualidade e potência na ficha (e elas baterem); IV e nível conferem quando vierem.
+  const ehProcurado = (r, alvo) => !!alvo && r.qualidade > 0 && r.potencia > 0
+    && (!alvo.potencia || r.potencia === Number(alvo.potencia))
+    && (!alvo.qualidade || Math.abs(r.qualidade - Number(alvo.qualidade)) < 0.0006)
+    && (!alvo.ivSoma || !r.iv || r.iv === Number(alvo.ivSoma))
+    && (!alvo.nivelMin || !r.nivel || r.nivel >= Number(alvo.nivelMin));
+
+  async function vigiarEspecies() {
+    if (espLendo || !core.logado) return;
+    espLendo = true;
+    try {
+      let total = 0;
+      for (const vg of esp.vigias) {
+        const vistos = {};
+        for (let pagina = 0; pagina < 6; pagina++) {
+          const m = await pedir({ t: 'market.listar', tipo: 'pokemon', moeda: '', busca: '', ordem: 'baratos', criterios: [], elemento: '', categoria: '',
+            soShiny: false, soP5: false, soTmElemental: false, soTmAoe: false, semOutland: false, pagina, especieId: vg.especieId },
+          (x) => x.aba === 'vitrine', 9000);
+          const linhas = (m.linhas ?? []).filter((a) => a.id != null && a.ficha);
+          for (const a of linhas) vistos[String(a.id)] = resumoFicha(a);
+          if (!m.temMais || !linhas.length) break;
+          await dormir(700);
+        }
+        const chave = vg.nome.toLowerCase();
+        const antes = esp.anuncios[chave] ?? {};
+        for (const [k, r] of Object.entries(vistos)) {
+          r.desde = antes[k]?.desde ?? Date.now();
+          if (ehProcurado(r, vg.alvo) && !esp.avisados[k]) {
+            esp.avisados[k] = Date.now();
+            const txt = `O ${vg.nome} PROCURADO voltou! Nv ${fmt(r.nivel)} · P${r.potencia} · Q ${r.qualidade.toFixed(3).replace('.', ',')} · IV ${r.iv} — de ${r.vendedor} por ${precoTxt(r.preco, r.moeda)}`;
+            esp.log.unshift({ em: Date.now(), txt });
+            window.postMessage({ __pbAlerta: { titulo: `🔎 ${vg.nome} procurado no Mercado`, texto: txt } }, '*');
+          } else if (!antes[k] && Object.keys(antes).length) {
+            esp.log.unshift({ em: Date.now(), txt: `novo ${vg.nome}: Nv ${fmt(r.nivel)} · P${r.potencia} · Q ${r.qualidade.toFixed(3).replace('.', ',')} · IV ${r.iv} — ${r.vendedor} · ${precoTxt(r.preco, r.moeda)}` });
+          }
+        }
+        esp.anuncios[chave] = vistos;
+        total += Object.keys(vistos).length;
+      }
+      espUltima = Date.now();
+      espMsg = `${total} anúncio(s) · lido ${dataHora(espUltima)}`;
+      esp.log = esp.log.slice(0, 40);
+      salvarEsp();
+    } catch (e) {
+      espMsg = `não deu para listar: ${e.message}`;
+    } finally {
+      espLendo = false;
+      if (document.getElementById('pv-fundo')?.classList.contains('aberto') && modo === 'favoritos') pintar();
+    }
+  }
+  const vigiaEsp = setInterval(() => {
+    if (esp.ativo && Date.now() - espUltima > Math.max(1, Number(esp.cadaMin) || 2) * 60_000) vigiarEspecies();
+  }, 15_000);
+  limpezas.push(() => clearInterval(vigiaEsp));
+
+  function htmlEspecies() {
+    return esp.vigias.map((vg) => {
+      const lista = Object.values(esp.anuncios[vg.nome.toLowerCase()] ?? {}).sort((a, b) => (a.moeda === b.moeda ? a.preco - b.preco : a.moeda === 'orb' ? -1 : 1));
+      const al = vg.alvo ?? {};
+      return `<section>
+        <h4 class="pv-rot">🔎 Todos os ${esc(vg.nome)} à venda</h4>
+        <div class="pv-linha">
+          <button class="pv-bt ${esp.ativo ? 'on' : ''}" data-a="espAtivo">${esp.ativo ? '● vigiando' : 'parado'}</button>
+          a cada <input type="number" class="pv-in" data-c="espCada" min="1" max="60" value="${esc(esp.cadaMin)}" style="width:54px"> min
+          <button class="pv-bt" data-a="espAgora" ${espLendo ? 'disabled' : ''}>${espLendo ? 'listando…' : '⟳ listar agora'}</button>
+          <span class="pv-ajuda">${esc(espMsg)}</span>
+        </div>
+        <p class="pv-ajuda">Procurado: <b>P${esc(al.potencia ?? '?')} · Q ${esc(String(al.qualidade ?? '?').replace('.', ','))} · IV ${esc(al.ivSoma ?? '?')} · Nv ≥ ${esc(al.nivelMin ?? '?')}</b>${al.vendedorAntes ? ` (estava com ${esc(al.vendedorAntes)})` : ''} — se aparecer, aviso grande no app + notificação do Windows.</p>
+        ${lista.length ? `<table class="pv-tab"><tr><th></th><th>Vendedor</th><th>Preço</th><th>Nv</th><th>P</th><th>Qualidade</th><th>IV</th><th>Visto desde</th></tr>
+          ${lista.map((r) => { const alvo = ehProcurado(r, vg.alvo); return `<tr style="${alvo ? 'background:#1e3a1e;font-weight:800' : ''}"><td>${alvo ? '🎯' : r.shiny ? '✨' : ''}</td><td style="text-align:left">${esc(r.vendedor)}</td><td><b>${precoTxt(r.preco, r.moeda)}</b></td><td>${fmt(r.nivel)}</td><td>P${r.potencia || '?'}</td><td>${r.qualidade ? r.qualidade.toFixed(3).replace('.', ',') : '?'}</td><td>${r.iv || '?'}</td><td>${r.desde ? dataHora(r.desde) : '—'}</td></tr>`; }).join('')}</table>`
+          : `<p class="pv-ajuda">${espUltima ? `Nenhum ${esc(vg.nome)} à venda agora.` : 'Ainda não listado — clique em "listar agora".'}</p>`}
+        ${esp.log.length ? `<details><summary class="pv-ajuda">histórico (${esp.log.length})</summary><table class="pv-tab">${esp.log.slice(0, 20).map((l) => `<tr><td>${dataHora(l.em)}</td><td style="text-align:left;white-space:normal">${esc(l.txt)}</td></tr>`).join('')}</table></details>` : ''}
+      </section>`;
+    }).join('');
+  }
+
   function htmlRebaixar() {
     if (contaProtegida()) {
       return `<section><p class="pv-neg"><b>🔒 Bloqueado nesta conta (${esc(core.eu?.nick ?? '')}).</b> O anúncio abaixo do mercado só roda nas contas alternativas.</p></section>`;
@@ -839,7 +938,7 @@
         <button class="pv-bt ${modo === 'favoritos' ? 'on' : ''}" data-a="modo" data-v="favoritos">⭐ Favoritos</button>
         <button data-a="fechar" title="Fechar">×</button></span></header>`;
     if (modo === 'rebaixar') { modal.innerHTML = cab + htmlRepor() + htmlRebaixar(); return; }
-    if (modo === 'favoritos') { modal.innerHTML = cab + htmlFavoritos(); if (!favUltima && !favLendo) vigiarFavoritos(true); return; }
+    if (modo === 'favoritos') { modal.innerHTML = cab + htmlEspecies() + htmlFavoritos(); if (!favUltima && !favLendo) vigiarFavoritos(true); if (!espUltima && !espLendo) vigiarEspecies(); return; }
     const foco = document.activeElement?.dataset?.c;
     const cursor = document.activeElement?.selectionStart;
 
@@ -937,6 +1036,7 @@
     if (!c) return;
     if (c === 'rebItem') { reb.itemId = Number(e.target.value); reb.msg = ''; return pintar(); }
     if (c === 'favTetoOrb' || c === 'favTetoGold') { if (e.type === 'change') { fav[c === 'favTetoOrb' ? 'tetoOrb' : 'tetoGold'] = Math.max(1, Number(e.target.value) || 1); salvarFav(); pintar(); } return; }
+    if (c === 'espCada') { if (e.type === 'change') { esp.cadaMin = Math.max(1, Math.min(60, Number(e.target.value) || 2)); salvarEsp(); pintar(); } return; }
     if (c === 'favCada') { if (e.type === 'change') { fav.cadaMin = Math.max(1, Math.min(60, Number(e.target.value) || 2)); salvarFav(); pintar(); } return; }
     if (c === 'reporTeto') { if (e.type === 'change') { repor.teto = Math.max(0, Math.min(1000, Number(e.target.value) || 0)); salvarRepor(); pintar(); } return; }
     if (c === 'rebDesc') { if (e.type === 'change') { reb.desconto = e.target.value === '' ? null : Number(e.target.value); pintar(); } return; }
@@ -963,6 +1063,8 @@
     else if (a === 'rebPublicar') publicarReb();
     else if (a === 'favAtivo') { fav.ativo = !fav.ativo; salvarFav(); }
     else if (a === 'favAgora') { vigiarFavoritos(true); }
+    else if (a === 'espAtivo') { esp.ativo = !esp.ativo; salvarEsp(); }
+    else if (a === 'espAgora') { vigiarEspecies(); }
     else if (a === 'favSnipe') {
       const v = fav.vistos[b.dataset.v];
       if (b.checked && v) fav.snipe[b.dataset.v] = { vendedor: v.vendedor, digital: v.digital ?? null, em: Date.now() };
