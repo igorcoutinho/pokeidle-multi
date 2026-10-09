@@ -7,7 +7,7 @@
 // A comissão é a do jogo: `shared/taxa-mercado.mjs`, o mesmo arquivo que o servidor usa.
 (() => {
   'use strict';
-  const VERSAO_VENDAS = '1.3.2';
+  const VERSAO_VENDAS = '1.4.1';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -347,8 +347,9 @@
   // Só lê — não compra nada.
   const CHAVE_FAV = 'pokevendas.favoritos.v1';
   const fav = (() => {
-    const padrao = { ativo: true, cadaMin: 2, vistos: {}, log: [] };
-    try { const s = JSON.parse(localStorage.getItem(CHAVE_FAV)) ?? {}; return { ...padrao, ...s, vistos: s.vistos ?? {}, log: s.log ?? [] }; } catch { return padrao; }
+    // `snipe` = ids de anúncio com "comprar sozinho se baixar"; tetos por moeda (os seus limites).
+    const padrao = { ativo: true, cadaMin: 2, vistos: {}, log: [], snipe: {}, tetoOrb: 3000, tetoGold: 1_000_000_000 };
+    try { const s = JSON.parse(localStorage.getItem(CHAVE_FAV)) ?? {}; return { ...padrao, ...s, vistos: s.vistos ?? {}, log: s.log ?? [], snipe: s.snipe ?? {} }; } catch { return padrao; }
   })();
   const salvarFav = () => { try { localStorage.setItem(CHAVE_FAV, JSON.stringify({ ...fav, log: fav.log.slice(0, 40) })); } catch {} };
   let favUltima = 0, favLendo = false, favMsg = '';
@@ -359,6 +360,12 @@
     return `${f.shiny ? '✨' : ''}${nome}${nv ? ` Nv ${fmt(nv)}` : ''}`;
   };
   const precoTxt = (v, m) => `${fmt(v)} ${m === 'orb' ? '💎' : '🪙'}`;
+  /** A "impressão digital" do pokémon do anúncio: se mudar, NÃO é mais o mesmo — não compra. */
+  const digital = (a) => {
+    const f = a.ficha ?? {};
+    return [f.id ?? f.pokemonId ?? '', f.speciesId ?? f.nome ?? f.especie ?? '', f.level ?? f.nivel ?? '', f.shiny ? 1 : 0, f.quality ?? f.qualidade ?? '', a.vendedor ?? ''].join('|');
+  };
+  const tetoDe = (moeda) => (moeda === 'orb' ? Number(fav.tetoOrb) || 3000 : Number(fav.tetoGold) || 1_000_000_000);
 
   function alertaFav(txt) {
     fav.log.unshift({ em: Date.now(), txt });
@@ -392,6 +399,62 @@
     if (document.getElementById('pv-fundo')?.classList.contains('aberto') && modo === 'favoritos') pintar();
   }
 
+  /**
+   * Compra o anúncio favoritado que BAIXOU, com as travas: o mesmo anúncio (id), o mesmo pokémon
+   * (impressão digital igual à de quando você favoritou), preço MENOR que o anterior e dentro do teto
+   * da moeda (3.000 💎 / 1 bi 🪙 por padrão). Qualquer trava falhou: não compra e avisa.
+   */
+  async function snipar(a, k, v, precoAntes) {
+    const nome = nomeAnuncio(a);
+    const preco = Number(a.preco) || 0, moeda = a.moeda ?? 'gold';
+    const recusa = (motivo) => alertaFav(`${nome} BAIXOU para ${precoTxt(preco, moeda)} — NÃO comprei: ${motivo}`);
+    if (!(preco > 0 && preco < precoAntes)) return recusa('não ficou mais barato');
+    if (preco > tetoDe(moeda)) return recusa(`acima do seu teto de ${precoTxt(tetoDe(moeda), moeda)}`);
+    if (v.digital && digital(a) !== v.digital) return recusa('o pokémon do anúncio não é mais o mesmo que você favoritou');
+    if (a.estado && a.estado !== 'aberto') return recusa('o anúncio não está mais aberto');
+    const qtd = Math.max(1, Math.floor(Number(a.qtd) || 1));
+    if (qtd !== 1) return recusa(`o anúncio tem ${qtd} unidades (o snipe só compra anúncio de 1 pokémon)`);
+    // RETENÇÃO do jogo: o anúncio só pode ser comprado a partir de `compravelEm` (hora do servidor).
+    // Espera liberar, relê o anúncio e confere tudo de novo antes de comprar.
+    const desvio = core.eu?.servidorAgora ? Date.now() - Number(core.eu.servidorAgora) : 0;
+    const falta = a.compravelEm ? Number(a.compravelEm) - (Date.now() - desvio) : 0;
+    if (falta > 0 && !a.__reconferido) {
+      if (falta > 20 * 60_000) return recusa('o anúncio está em retenção por mais de 20 min');
+      alertaFav(`${nome} BAIXOU para ${precoTxt(preco, moeda)} — está em RETENÇÃO; compro quando liberar (em ${Math.ceil(falta / 1000)} s)`);
+      setTimeout(async () => {
+        try {
+          const m = await pedir({ t: 'market.favoritos' }, (x) => x.aba === 'favoritos', 9000);
+          const novo = (m.linhas ?? []).find((x) => String(x.id) === k);
+          if (!novo) return alertaFav(`${nome}: saiu dos favoritos/Mercado antes de liberar — não comprei`);
+          if (!fav.snipe[k]) return; // você desligou o snipe enquanto esperava
+          await snipar({ ...novo, __reconferido: true }, k, v, precoAntes);
+        } catch (e) { alertaFav(`${nome}: não deu para reconferir depois da retenção (${e.message})`); }
+      }, Math.min(falta, 20 * 60_000) + 600);
+      return;
+    }
+    core.send({ t: 'market.comprar', id: a.id, qtd: 1, preco, moeda });
+    const ev = await new Promise((ok) => {
+      const ws = core.ws;
+      const t = setTimeout(() => { ws?.removeEventListener('message', f); ok(null); }, 8000);
+      function f(e) {
+        if (typeof e.data !== 'string' || (!e.data.includes('marketComprado') && !e.data.includes('"recusa"') && !e.data.includes('"erro"'))) return;
+        let m; try { m = JSON.parse(e.data); } catch { return; }
+        const comprado = (m.ev ?? []).find((x) => x.k === 'marketComprado');
+        const erro = m.t === 'erro' || m.recusa || (m.t === 'market' && m.aba === 'erro');
+        if (!comprado && !erro) return;
+        clearTimeout(t); ws?.removeEventListener('message', f); ok(comprado ? { ok: true, d: comprado.descricao } : { ok: false, msg: m.msg ?? m.recusa?.msg ?? m.erro ?? 'recusado' });
+      }
+      ws?.addEventListener('message', f);
+    });
+    if (ev?.ok) {
+      delete fav.snipe[k];
+      salvarFav();
+      alertaFav(`🛒 COMPREI ${nome} de ${a.vendedor ?? v.vendedor} por ${precoTxt(preco, moeda)} (era ${precoTxt(precoAntes, moeda)})`);
+    } else {
+      alertaFav(`${nome} BAIXOU para ${precoTxt(preco, moeda)} — tentei comprar e NÃO deu (${ev?.msg ?? 'sem confirmação: outro comprador pode ter levado'})`);
+    }
+  }
+
   async function vigiarFavoritos(manual = false) {
     if (favLendo || !core.logado) return;
     favLendo = true;
@@ -409,13 +472,19 @@
         const aberto = !a.estado || a.estado === 'aberto';
         const antes = fav.vistos[k];
         if (!antes) {
-          fav.vistos[k] = { nome, vendedor: a.vendedor ?? '', preco, moeda, aberto, desde: agora, mudouEm: null, antes: null };
+          fav.vistos[k] = { nome, vendedor: a.vendedor ?? '', preco, moeda, aberto, desde: agora, mudouEm: null, antes: null, digital: digital(a) };
           continue;
         }
         if (aberto && antes.aberto && preco && preco !== antes.preco) {
           const pct = antes.preco ? Math.round(((preco - antes.preco) / antes.preco) * 100) : 0;
-          alertaFav(`${nome} (de ${a.vendedor ?? antes.vendedor}) ${preco < antes.preco ? 'BAIXOU' : 'subiu'}: ${precoTxt(antes.preco, antes.moeda)} → ${precoTxt(preco, moeda)} (${pct > 0 ? '+' : ''}${pct}%)`);
+          const baixou = preco < antes.preco;
+          const precoAntes = antes.preco;
           Object.assign(antes, { antes: antes.preco, preco, moeda, mudouEm: agora });
+          if (fav.snipe[k] && baixou) {
+            await snipar(a, k, antes, precoAntes);
+          } else {
+            alertaFav(`${nome} (de ${a.vendedor ?? antes.vendedor}) ${baixou ? 'BAIXOU' : 'subiu'}: ${precoTxt(precoAntes, antes.moeda)} → ${precoTxt(preco, moeda)} (${pct > 0 ? '+' : ''}${pct}%)`);
+          }
         } else if (!aberto && antes.aberto) {
           alertaFav(`${nome} (de ${antes.vendedor}) ${a.estado === 'vendido' ? 'foi VENDIDO' : 'saiu do Mercado'}`);
           Object.assign(antes, { aberto: false, mudouEm: agora });
@@ -434,8 +503,10 @@
     }
   }
   const vigiaFav = setInterval(() => {
-    if (fav.ativo && Date.now() - favUltima > Math.max(1, Number(fav.cadaMin) || 2) * 60_000) vigiarFavoritos();
-  }, 20_000);
+    const temSnipe = Object.keys(fav.snipe).length > 0;
+    const cada = temSnipe ? 20_000 : Math.max(1, Number(fav.cadaMin) || 2) * 60_000;
+    if ((fav.ativo || temSnipe) && Date.now() - favUltima > cada - 1000) vigiarFavoritos();
+  }, 10_000);
   limpezas.push(() => clearInterval(vigiaFav));
 
   function htmlFavoritos() {
@@ -447,9 +518,12 @@
           <button class="pv-bt" data-a="favAgora" ${favLendo ? 'disabled' : ''}>${favLendo ? 'lendo…' : '⟳ ler agora'}</button>
           <span class="pv-ajuda">${esc(favMsg)}</span>
         </div>
-        <p class="pv-ajuda">Vigia os anúncios que você favoritou (★ no card do Mercado) NESTA conta e avisa — na tela, com som e notificação do Windows — quando o preço muda ou o anúncio sai. Não compra nada.</p>
-        ${itens.length ? `<table class="pv-tab"><tr><th>Anúncio</th><th>Vendedor</th><th>Preço agora</th><th>Antes</th><th>Mudou</th><th>Situação</th></tr>
-          ${itens.map(([, v]) => `<tr><td style="text-align:left"><b>${esc(v.nome)}</b></td><td>${esc(v.vendedor)}</td><td><b>${precoTxt(v.preco, v.moeda)}</b></td><td>${v.antes != null ? precoTxt(v.antes, v.moeda) : '—'}</td><td>${v.mudouEm ? dataHora(v.mudouEm) : '—'}</td><td>${v.aberto ? 'à venda' : '<span class="pv-neg">fora do Mercado</span>'}</td></tr>`).join('')}</table>`
+        <div class="pv-linha">🛒 Snipe — tetos: <input type="number" class="pv-in" data-c="favTetoOrb" min="1" value="${esc(fav.tetoOrb)}" style="width:80px"> 💎 · <input type="number" class="pv-in" data-c="favTetoGold" min="1" value="${esc(fav.tetoGold)}" style="width:130px"> 🪙
+          <span class="pv-ajuda">${Object.keys(fav.snipe).length ? `<b>${Object.keys(fav.snipe).length} anúncio(s) com snipe — lendo a cada 20 s</b>` : 'marque "comprar se baixar" num favorito'}</span></div>
+        <p class="pv-ajuda">Vigia os anúncios que você favoritou (★ no card do Mercado) NESTA conta e avisa — aviso grande no app, som e notificação do Windows — quando o preço muda ou o anúncio sai. Com <b>🛒 comprar se baixar</b> marcado, ele COMPRA aquele anúncio sozinho quando o preço ficar MENOR que o anterior, só se for o mesmo pokémon que você favoritou e dentro do teto da moeda. Se outro comprador for mais rápido, ele avisa que não deu.</p>
+        ${itens.length ? `<table class="pv-tab"><tr><th>Anúncio</th><th>Vendedor</th><th>Preço agora</th><th>Antes</th><th>Mudou</th><th>Situação</th><th>🛒 Snipe</th></tr>
+          ${itens.map(([k, v]) => `<tr><td style="text-align:left"><b>${esc(v.nome)}</b></td><td>${esc(v.vendedor)}</td><td><b>${precoTxt(v.preco, v.moeda)}</b></td><td>${v.antes != null ? precoTxt(v.antes, v.moeda) : '—'}</td><td>${v.mudouEm ? dataHora(v.mudouEm) : '—'}</td><td>${v.aberto ? 'à venda' : '<span class="pv-neg">fora do Mercado</span>'}</td>
+            <td>${v.aberto ? `<label><input type="checkbox" data-a="favSnipe" data-v="${esc(k)}" ${fav.snipe[k] ? 'checked' : ''}> comprar se baixar</label><br><small>até ${precoTxt(Math.min(tetoDe(v.moeda), Math.max(0, v.preco - 1)), v.moeda)}</small>` : '—'}</td></tr>`).join('')}</table>`
           : '<p class="pv-ajuda">Nenhum favorito lido ainda — clique em "ler agora".</p>'}
         ${fav.log.length ? `<h4 class="pv-rot">Avisos</h4><table class="pv-tab">${fav.log.slice(0, 12).map((l) => `<tr><td>${dataHora(l.em)}</td><td style="text-align:left;white-space:normal">${esc(l.txt)}</td></tr>`).join('')}</table>` : ''}
       </section>`;
@@ -855,6 +929,7 @@
     const c = e.target.dataset?.c;
     if (!c) return;
     if (c === 'rebItem') { reb.itemId = Number(e.target.value); reb.msg = ''; return pintar(); }
+    if (c === 'favTetoOrb' || c === 'favTetoGold') { if (e.type === 'change') { fav[c === 'favTetoOrb' ? 'tetoOrb' : 'tetoGold'] = Math.max(1, Number(e.target.value) || 1); salvarFav(); pintar(); } return; }
     if (c === 'favCada') { if (e.type === 'change') { fav.cadaMin = Math.max(1, Math.min(60, Number(e.target.value) || 2)); salvarFav(); pintar(); } return; }
     if (c === 'reporTeto') { if (e.type === 'change') { repor.teto = Math.max(0, Math.min(1000, Number(e.target.value) || 0)); salvarRepor(); pintar(); } return; }
     if (c === 'rebDesc') { if (e.type === 'change') { reb.desconto = e.target.value === '' ? null : Number(e.target.value); pintar(); } return; }
@@ -881,6 +956,7 @@
     else if (a === 'rebPublicar') publicarReb();
     else if (a === 'favAtivo') { fav.ativo = !fav.ativo; salvarFav(); }
     else if (a === 'favAgora') { vigiarFavoritos(true); }
+    else if (a === 'favSnipe') { if (b.checked) fav.snipe[b.dataset.v] = true; else delete fav.snipe[b.dataset.v]; salvarFav(); }
     else if (a === 'reporAtivo') { if (!contaProtegida()) { repor.ativo = !repor.ativo; salvarRepor(); reporNota(repor.ativo ? 'reposição LIGADA' : 'reposição desligada'); } }
     else if (a === 'reporPedra') { repor.pedras[b.dataset.v] = b.checked; salvarRepor(); }
     else if (a === 'reporGarantir') { repor.garantir = b.checked; salvarRepor(); }
