@@ -1,13 +1,14 @@
 {
   "name": "pokeidle-multi",
   "productName": "PokeIdle Multi",
-  "version": "1.12.15",
+  "version": "1.12.16",
   "description": "4 contas do PokéIdle em grade, cada uma com sessão própria, com o PokeBot embutido.",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "build": "electron-builder --win portable",
-    "build:lite": "electron-builder --win portable -c.extraMetadata.variante=lite -c.extraMetadata.productName=\"PokeIdle Multi Lite\" -c.productName=\"PokeIdle Multi Lite\""
+    "build:lite": "electron-builder --win portable -c.extraMetadata.variante=lite -c.extraMetadata.productName=\"PokeIdle Multi Lite\" -c.productName=\"PokeIdle Multi Lite\"",
+    "build:basica": "electron-builder --win portable -c.extraMetadata.variante=basica -c.extraMetadata.productName=\"PokeIdle Multi Basico\" -c.productName=\"PokeIdle Multi Basico\""
   },
   "build": {
     "appId": "io.pokeidle.multi",

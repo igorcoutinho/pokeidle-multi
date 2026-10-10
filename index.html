@@ -57,6 +57,7 @@
   #alerta-grande .bts{display:flex;gap:10px;margin-top:16px;justify-content:flex-end}
   #alerta-grande button{font-size:15px;padding:8px 16px}
   @keyframes pulsar{0%,100%{transform:scale(1)}50%{transform:scale(1.03)}}
+  body.basica .nao-basica{display:none!important}
   #gx-fundo{position:fixed;inset:0;z-index:20;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center}
   #gx-fundo.aberto{display:flex}
   #gx-modal{width:min(1150px,97vw);max-height:92vh;overflow:auto;background:#3a2020;border:3px solid var(--borda);border-radius:14px;padding:0 0 12px}
@@ -81,12 +82,12 @@
   <span id="abas-1x1"></span>
   <span class="esp"></span>
   <span class="info" id="info-bot">bot: carregando…</span>
-  <button id="bt-proxy" title="Proxy das contas deste app (ex.: túnel até uma VPS) e o IP de saída delas">🌐 …</button>
-  <button id="bt-ia" class="so-completa" title="Agente de IA (OpenAI/Anthropic) que decide a formação do PvP e aprende com as partidas">🤖 Agente IA</button>
-  <button id="bt-rankxp" title="Top 10 do ranking de XP do dia (dados do guiapokeidlehardtocapture.site) e a posição das suas contas">🏆 Ranking XP</button>
-  <button id="bt-twitch" title="Quando uma live oficial do jogo entra no ar (bônus de XP), abre no seu Chrome — uma vez por live">📺 Lives → Chrome</button>
-  <button id="bt-rebaixar" title="Anunciar uma pedra abaixo do mercado em todas as contas alternativas, de uma vez">📉 Pedra abaixo do mercado</button>
-  <button id="bt-pasta" title="Abre a pasta onde ficam core.js e logica.js">Pasta do bot</button>
+  <button id="bt-proxy" class="nao-basica" title="Proxy das contas deste app (ex.: túnel até uma VPS) e o IP de saída delas">🌐 …</button>
+  <button id="bt-ia" class="so-completa nao-basica" title="Agente de IA (OpenAI/Anthropic) que decide a formação do PvP e aprende com as partidas">🤖 Agente IA</button>
+  <button id="bt-rankxp" class="nao-basica" title="Top 10 do ranking de XP do dia (dados do guiapokeidlehardtocapture.site) e a posição das suas contas">🏆 Ranking XP</button>
+  <button id="bt-twitch" class="nao-basica" title="Quando uma live oficial do jogo entra no ar (bônus de XP), abre no seu Chrome — uma vez por live">📺 Lives → Chrome</button>
+  <button id="bt-rebaixar" class="nao-basica" title="Anunciar uma pedra abaixo do mercado em todas as contas alternativas, de uma vez">📉 Pedra abaixo do mercado</button>
+  <button id="bt-pasta" class="nao-basica" title="Abre a pasta onde ficam core.js e logica.js">Pasta do bot</button>
 </div>
 <div id="grade"></div>
 <div id="aviso"></div>
@@ -140,8 +141,11 @@
     catch (e) { console.warn('lógica não entrou na conta', c.n, e); }
   }
 
-  const lite = cfg.variante === 'lite';
-  if (lite) document.title = `${document.title} Lite`;
+  // Básica: só as 4 telas e o bot de recompra (Pokébola/poção). Também sem nada do que a Lite tira.
+  const basica = cfg.variante === 'basica';
+  const lite = cfg.variante === 'lite' || basica;
+  if (basica) { document.body.classList.add('basica'); document.title = 'PokeIdle Multi Básico'; }
+  if (lite && !basica) document.title = `${document.title} Lite`;
   for (let n = 1; n <= cfg.nContas; n++) {
     const salvo = cfg.contas?.[n - 1] ?? {};
     const c = { n, nome: salvo.nome ?? `Conta ${n}`, zoom: salvo.zoom ?? 0.6, mudo: salvo.mudo ?? (n !== 1) };
@@ -154,14 +158,13 @@
         <span class="estado carregando" title="conexão"></span>
         <input class="nome" value="${c.nome.replace(/"/g, '&quot;')}" spellcheck="false" title="Clique para renomear">
         <span class="esp"></span>
-        ${lite ? '' : '<button data-a="shiny" class="eco" title="Caçador de shiny: registra os bichos do mapa e arremessa Great Ball quando um shiny cai">✨ Shiny</button>'}
-        <button data-a="hunts" title="Onde caçar com o pokémon ativo desta conta — calculado pelo guiapokeidlehardtocapture.site">🗺 Hunts</button>
-        <button data-a="itens" title="Itens principais (Boss Token, peças de TM, fragmentos) e histórico de drops por boss">📦 Itens</button>
-        <button data-a="vendas" title="Relatório de compras e vendas no Mercado: preço médio, taxa, lucro e preço de venda">💰 Vendas</button>
+        <button data-a="hunts" ${basica ? 'style="display:none"' : ''} title="Onde caçar com o pokémon ativo desta conta — calculado pelo guiapokeidlehardtocapture.site">🗺 Hunts</button>
+        <button data-a="itens" ${basica ? 'style="display:none"' : ''} title="Itens principais (Boss Token, peças de TM, fragmentos) e histórico de drops por boss">📦 Itens</button>
+        <button data-a="vendas" ${basica ? 'style="display:none"' : ''} title="Relatório de compras e vendas no Mercado: preço médio, taxa, lucro e preço de venda">💰 Vendas</button>
         ${lite ? '' : '<button data-a="pvp" class="eco" title="PvP: ordem que cada rival usou e trava da fila automática">⚔ PvP</button>'}
         ${lite ? '' : '<button data-a="time" title="Análise do time para PvP: quem colocar no lugar de quem">📊 Time</button>'}
-        <button data-a="eco" class="eco" title="Ligar/desligar o Modo Economia do jogo nesta conta">🍃 Eco</button>
-        ${cfg.rotom ? '<button data-a="rotom" title="Abrir o Cockpit do Rotom Sniper desta conta">🎯 Rotom</button>' : ''}
+        <button data-a="eco" ${basica ? 'style="display:none"' : ''} class="eco" title="Ligar/desligar o Modo Economia do jogo nesta conta">🍃 Eco</button>
+        ${cfg.rotom && !basica ? '<button data-a="rotom" title="Abrir o Cockpit do Rotom Sniper desta conta">🎯 Rotom</button>' : ''}
         <button data-a="menos" title="Diminuir zoom">−</button>
         <span class="zoom"></span>
         <button data-a="mais" title="Aumentar zoom">+</button>
@@ -221,8 +224,6 @@
       if (a === 'mais' || a === 'menos') {
         c.zoom = Math.min(1.5, Math.max(0.3, +(c.zoom + (a === 'mais' ? 0.05 : -0.05)).toFixed(2)));
         wv.setZoomFactor(c.zoom); pintar(); salvar();
-      } else if (a === 'shiny') {
-        wv.executeJavaScript('window.__pokeShiny?.abrir()').catch(() => aviso('Shiny: a conta ainda está carregando.'));
       } else if (a === 'hunts') {
         gxHunts(c);
       } else if (a === 'itens') {
@@ -477,6 +478,7 @@
   // suas contas (a reposição nunca compra de você mesmo) e o % acima do alvo de cada conta
   // alternativa (escalonado: a 1ª +8%, descendo até +3%).
   async function sincronizarReposicao() {
+    if (basica) return;
     try {
       const info = await Promise.all(contas.map(async (c) => ({ c, i: await naConta(c, '(() => ({ nick: window.__pokebotCore?.eu?.nick ?? null, protegida: !!window.__pokeVendas?.infoRebaixar?.()?.protegida }))()') })));
       const alvos = {};
@@ -641,7 +643,7 @@
     }
   });
   btProxy.onclick = () => abrirProxy();
-  pintarProxy();
+  if (!basica) pintarProxy();
   if (cfg.proxy) document.title = `${document.title} — via proxy`;
 
   // ---------------------------------------------------------------- agente de IA: configuração
@@ -711,6 +713,7 @@
   btTwitch.onclick = () => { twitchLigado = !twitchLigado; window.multi.salvar({ twitchChrome: twitchLigado }); pintarTwitch(); if (twitchLigado) vigiarTwitch(); };
   pintarTwitch();
   async function vigiarTwitch() {
+    if (basica) return;
     if (!twitchLigado || !window.multi.twitchLives) return;
     const blocos = (await Promise.all(contas.map((c) => naConta(c, 'JSON.stringify(window.__pokebotCore?.eu?.twitch ?? null)'))))
       .map((x) => { try { return JSON.parse(x); } catch { return null; } }).filter(Boolean);

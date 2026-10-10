@@ -45,8 +45,10 @@ function semearPastaDoBot() {
   }
 }
 // core.js entra antes do jogo; o resto é a parte trocada a quente, injetada como um bloco só.
-const ARQUIVOS_BOT = ['core.js', 'logica.js', 'analise.js', 'pvp.js', 'shiny.js', 'vendas.js', 'itens.js'];
-const lerLogica = () => ARQUIVOS_BOT.slice(1).map(lerBot).join('\n;\n');
+// (o caçador de shiny saiu da ferramenta — shiny.js ficou só como desligador para versões antigas)
+const ARQUIVOS_BOT = ['core.js', 'logica.js', 'analise.js', 'pvp.js', 'vendas.js', 'itens.js'];
+// A variante Básica só leva o bot de recompra (Pokébola e poção): logica.js.
+const lerLogica = () => (VARIANTE === 'basica' ? ['logica.js'] : ARQUIVOS_BOT.slice(1)).map(lerBot).join('\n;\n');
 const lerBot = (f) => {
   try { return fs.readFileSync(path.join(PASTA_BOT, f), 'utf8'); }
   catch { return fs.readFileSync(path.join(PASTA_BOT_EMBUTIDA, f), 'utf8'); }
@@ -265,7 +267,7 @@ ipcMain.handle('pb:logica', () => lerLogica());
 ipcMain.handle('multi:cfg', () => ({ ...lerCfg(), ia: iaConfig(), nContas: N_CONTAS, urlJogo: URL_JOGO, pastaBot: PASTA_BOT, rotom, variante: VARIANTE }));
 ipcMain.handle('multi:iaConfig', (_e, novo) => { try { return novo ? iaSalvar(novo) : iaConfig(); } catch (e) { return { erro: e.message, ...iaConfig() }; } });
 ipcMain.handle('multi:iaTestar', () => iaPerguntar({ teste: true, sistema: 'Responda só JSON.', usuario: 'Responda {"ok": true, "msg": "<uma frase curta em português>"}', maxTokens: 60, timeoutMs: 20_000 }));
-ipcMain.handle('pb:ia', (_e, pedido) => (VARIANTE === 'lite' ? { ok: false, erro: 'a versão Lite não tem o agente de IA' } : iaPerguntar(pedido ?? {})));
+ipcMain.handle('pb:ia', (_e, pedido) => (VARIANTE === 'lite' || VARIANTE === 'basica' ? { ok: false, erro: 'a versão Lite não tem o agente de IA' } : iaPerguntar(pedido ?? {})));
 ipcMain.handle('multi:abrirCockpit', (_e, n) => abrirCockpit(n));
 ipcMain.handle('multi:rotomRegras', (_e, n) => lerRegrasRotom(n));
 ipcMain.handle('multi:twitchLives', (_e, lives) => abrirLivesNovas(lives));
@@ -553,7 +555,7 @@ app.whenReady().then(async () => {
   if (!instanciaUnica) return;
   await aplicarProxy(lerCfg().proxy); // antes de qualquer conta abrir
   semearPastaDoBot();
-  await carregarRotom(); // antes das webviews: o content script precisa estar lá quando o jogo abrir
+  if (VARIANTE !== 'basica') await carregarRotom(); // antes das webviews: o content script precisa estar lá quando o jogo abrir
   criarJanela();
   vigiarBot();
   if (!EM_DESENVOLVIMENTO) {
