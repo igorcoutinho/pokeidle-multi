@@ -63,6 +63,9 @@ ONDE CAÇAR — botão 🗺 Hunts no cabeçalho de cada conta
     região, ordenação (XP/h, dinheiro/h, nível) e risco (segura/apertada/arriscada).
 
 RANKING DE XP — botão 🏆 Ranking XP na barra de cima
+  - Aba "Do jogo (hora em hora)": a cada 1 h o app fotografa o Ranking → Treinadores do jogo (enquanto
+    está aberto, 7 dias de histórico) e mostra, por jogador: XP/h médio, XP da última hora e das últimas
+    24 h, níveis ganhos e posição subindo/caindo — e a média de XP/h do top e do top 10.
   - Top 10 do XP ganho no dia (dados do guia, coleta 2× ao dia), a posição das suas contas (mesmo
     fora do top 10), o XP total com a posição geral e a sua posição dia a dia.
 

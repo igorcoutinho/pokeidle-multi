@@ -69,6 +69,7 @@
   #gx-modal th{text-align:left;color:var(--ouro);padding:4px 6px;white-space:nowrap}
   #gx-modal td{padding:5px 6px;border-top:1px solid #4a2a2a;vertical-align:top}
   #gx-modal tr.eu td{background:#4a2a5a;font-weight:700}
+  #gx-modal header button.on{background:var(--roxo);border-color:var(--ouro);color:#fff}
   #gx-modal .ajuda{opacity:.7;font-size:12px}
   #ia-modal input,#ia-modal select{background:#2a1515;border:1px solid #8a5a4a;color:var(--texto);border-radius:6px;padding:4px 8px;font:inherit}#gx-modal .ok{color:#7fdc8f;font-weight:700}#gx-modal .ruim{color:#ff8a8a;font-weight:700}
   #aviso{position:fixed;left:50%;top:48px;transform:translateX(-50%);z-index:10;background:#2a1515;border:2px solid var(--ouro);border-radius:10px;padding:8px 14px;font-weight:600;display:none}
@@ -540,16 +541,110 @@
         <p class="ajuda">Cálculo do <b>guiapokeidlehardtocapture.site</b> (aba "Onde caçar"), com a ficha do pokémon ATIVO desta conta: espécie, nível, potência, qualidade, shiny, IVs, refino, TM e VIP. ${r?.coleta ? escH(r.coleta) : ''}</p></section>`;
   }
 
+  // ---------------------------------------------------------------- ranking de XP do JOGO, de hora em hora
+  // A cada 1 h a janela pede o Ranking → Treinadores (`ranking.pedir` aba "nivel": nick, nível, XP total)
+  // por uma conta logada e guarda a foto (7 dias). Comparando as fotos: XP na última hora, nas últimas
+  // 24 h, média de XP/h, níveis ganhos e quem subiu/caiu de posição.
+  const CHAVE_RK = 'multi.rankingJogo.v1';
+  const RK_MAX_MS = 7 * 24 * 3600_000;
+  let fotosRk = (() => { try { return JSON.parse(localStorage.getItem(CHAVE_RK)) ?? []; } catch { return []; } })();
+  const salvarFotosRk = () => { try { localStorage.setItem(CHAVE_RK, JSON.stringify(fotosRk)); } catch {} };
+  const JS_RANKING = `new Promise((res) => {
+    const core = window.__pokebotCore; const ws = core?.ws;
+    if (!ws || !core.logado) return res(null);
+    const t = setTimeout(() => { ws.removeEventListener('message', f); res(null); }, 9000);
+    function f(ev) {
+      if (typeof ev.data !== 'string' || !ev.data.includes('"ranking"')) return;
+      let m; try { m = JSON.parse(ev.data); } catch { return; }
+      if (m.t !== 'ranking' || m.aba !== 'nivel') return;
+      clearTimeout(t); ws.removeEventListener('message', f);
+      res((m.linhas ?? []).map((l, i) => ({ nick: l.nick, level: Number(l.level) || 0, xp: Number(l.valor) || 0, pos: i + 1 })));
+    }
+    ws.addEventListener('message', f);
+    core.send({ t: 'ranking.pedir', aba: 'nivel' });
+  })`;
+  let rkLendo = false;
+  async function fotografarRanking() {
+    if (rkLendo) return null;
+    rkLendo = true;
+    try {
+      for (const c of contas) {
+        const linhas = await naConta(c, JS_RANKING);
+        if (linhas?.length) {
+          fotosRk.push({ em: Date.now(), linhas });
+          fotosRk = fotosRk.filter((f) => Date.now() - f.em <= RK_MAX_MS);
+          salvarFotosRk();
+          return linhas.length;
+        }
+      }
+      return null;
+    } finally { rkLendo = false; }
+  }
+  // de hora em hora (a primeira 1 min depois de abrir, se a última foto tiver mais de 50 min)
+  setInterval(() => { if (!fotosRk.length || Date.now() - fotosRk.at(-1).em > 59 * 60_000) fotografarRanking(); }, 60_000);
+
+  /** A foto mais perto de `alvo` ms atrás (com no máximo `folga` de diferença). */
+  function fotoAntes(ms, folga) {
+    const alvo = Date.now() - ms;
+    let melhor = null;
+    for (const f of fotosRk) if (!melhor || Math.abs(f.em - alvo) < Math.abs(melhor.em - alvo)) melhor = f;
+    return melhor && Math.abs(melhor.em - alvo) <= folga ? melhor : null;
+  }
+  const fmtXp = (n) => { const a = Math.abs(n); return a >= 1e9 ? `${(n / 1e9).toFixed(2)} bi` : a >= 1e6 ? `${(n / 1e6).toFixed(1)} mi` : fmtN(n); };
+  const fmtDur = (ms) => { const h = ms / 3600_000; return h >= 1 ? `${h.toFixed(h >= 10 ? 0 : 1)} h` : `${Math.round(ms / 60_000)} min`; };
+
+  async function htmlRankingJogo() {
+    const agora = fotosRk.at(-1);
+    if (!agora) return '<section><span class="ajuda">Ainda sem fotos do ranking — clique em "📸 fotografar agora" (as próximas saem sozinhas, de hora em hora).</span></section>';
+    const meus = new Set((await Promise.all(contas.map((c) => naConta(c, 'window.__pokebotCore?.eu?.nick ?? null')))).filter(Boolean).map((n) => n.toLowerCase()));
+    const f1 = fotoAntes(60 * 60_000, 25 * 60_000);
+    const primeira = fotosRk[0];
+    const f24 = fotoAntes(24 * 3600_000, 3 * 3600_000) ?? (agora.em - primeira.em >= 30 * 60_000 ? primeira : null);
+    const porNick = (f) => new Map((f?.linhas ?? []).map((l) => [l.nick.toLowerCase(), l]));
+    const m1 = porNick(f1), m24 = porNick(f24);
+    const horas24 = f24 ? (agora.em - f24.em) / 3600_000 : 0;
+    const linhas = agora.linhas.map((l) => {
+      const k = l.nick.toLowerCase(), a1 = m1.get(k), a24 = m24.get(k);
+      const g24 = a24 ? l.xp - a24.xp : null;
+      return { ...l, g1: a1 ? l.xp - a1.xp : null, g24, lv24: a24 ? l.level - a24.level : null, xph: g24 != null && horas24 ? g24 / horas24 : null, dPos: a24 ? a24.pos - l.pos : null, eu: meus.has(k) };
+    });
+    const ord = [...linhas].sort((a, b) => (b.xph ?? -1) - (a.xph ?? -1));
+    const comXph = ord.filter((x) => x.xph != null);
+    const media = comXph.length ? comXph.reduce((t, x) => t + x.xph, 0) / comXph.length : null;
+    const top10 = comXph.slice(0, 10);
+    const media10 = top10.length ? top10.reduce((t, x) => t + x.xph, 0) / top10.length : null;
+    const seta = (d) => (d == null || d === 0 ? '' : d > 0 ? `<span class="ok">▲${d}</span>` : `<span class="ruim">▼${-d}</span>`);
+    return `<section>
+        <div class="linha"><button data-rk="foto" ${rkLendo ? 'disabled' : ''}>📸 fotografar agora</button>
+          <span class="ajuda">${fotosRk.length} foto(s) · última ${new Date(agora.em).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })} · janela de comparação: ${f24 ? fmtDur(agora.em - f24.em) : 'ainda sem'}${f1 ? '' : ' · sem foto de 1 h atrás ainda'}</span></div>
+        <div class="linha">Média de XP/h do top ${comXph.length}: <b>${media != null ? fmtXp(media) : '—'}</b> · do top 10 (mais rápidos): <b>${media10 != null ? fmtXp(media10) : '—'}</b>
+          ${linhas.filter((x) => x.eu).map((x) => ` · <b>${escH(x.nick)}</b>: #${x.pos} geral, #${ord.indexOf(x) + 1} em XP/h${x.xph != null && media10 ? ` (${Math.round((x.xph / media10) * 100)}% da média do top 10)` : ''}`).join('')}</div>
+      </section>
+      <section><table><tr><th>XP/h</th><th>Jogador</th><th>Nível</th><th>XP/h (média ${f24 ? fmtDur(agora.em - f24.em) : '—'})</th><th>Última hora</th><th>${f24 ? fmtDur(agora.em - f24.em) : '24 h'}</th><th>Níveis</th><th>Posição</th></tr>
+        ${ord.map((x, i) => `<tr class="${x.eu ? 'eu' : ''}"><td>#${i + 1}</td><td>${escH(x.nick)}</td><td>${fmtN(x.level)}</td>
+          <td><b>${x.xph != null ? fmtXp(x.xph) : '—'}</b></td><td>${x.g1 != null ? `+${fmtXp(x.g1)}` : '—'}</td><td>${x.g24 != null ? `+${fmtXp(x.g24)}` : '—'}</td>
+          <td>${x.lv24 != null ? `+${x.lv24}` : '—'}</td><td>#${x.pos} ${seta(x.dPos)}</td></tr>`).join('')}
+      </table><p class="ajuda">Do Ranking → Treinadores do próprio jogo, fotografado de hora em hora (enquanto o app está aberto). "XP/h" = XP ganho na janela ÷ horas da janela. Quem entrou no top depois da foto antiga fica sem comparação (—).</p></section>`;
+  }
+
+  let rkAba = 'jogo';
   async function gxRanking() {
     gxFundo.classList.add('aberto');
-    gxModal.innerHTML = '<header><span>🏆 Ranking de XP do dia</span><button data-gx="fechar">×</button></header><section><span class="ajuda">Lendo o ranking do guia…</span></section>';
+    const abas = `<span><button data-rk="aba" data-v="jogo" class="${rkAba === 'jogo' ? 'on' : ''}">Do jogo (hora em hora)</button> <button data-rk="aba" data-v="guia" class="${rkAba === 'guia' ? 'on' : ''}">Do guia (por dia)</button></span>`;
+    if (rkAba === 'jogo') {
+      gxModal.innerHTML = `<header><span>🏆 Ranking de XP — treinadores</span>${abas}<button data-gx="fechar">×</button></header><section><span class="ajuda">Montando…</span></section>`;
+      if (!fotosRk.length) await fotografarRanking();
+      gxModal.innerHTML = `<header><span>🏆 Ranking de XP — treinadores</span>${abas}<button data-gx="fechar">×</button></header>${await htmlRankingJogo()}`;
+      return;
+    }
+    gxModal.innerHTML = `<header><span>🏆 Ranking de XP do dia</span>${abas}<button data-gx="fechar">×</button></header><section><span class="ajuda">Lendo o ranking do guia…</span></section>`;
     const nicks = (await Promise.all(contas.map((c) => naConta(c, 'window.__pokebotCore?.eu?.nick ?? null')))).filter(Boolean);
     const r = await window.multi.guiaRankingXp(nicks.length ? nicks : ['Bekazin']);
     if (r?.erro) { gxModal.querySelector('section').innerHTML = `<span class="ruim">${escH(r.erro)}</span>`; return; }
     const meusSet = new Set(r.meus.map((m) => m.nick.toLowerCase()));
     const linha = (l) => `<tr class="${meusSet.has(l.nick.toLowerCase()) ? 'eu' : ''}"><td>#${l.pos}</td><td>${escH(l.nick)}</td><td>+${fmtGrande(l.ganho)}</td><td>${fmtGrande(l.total)}<span class="ajuda"> (#${l.posTotal ?? '?'} geral)</span></td></tr>`;
     const foraTop = r.meus.filter((m) => m.pos > 10);
-    gxModal.innerHTML = `<header><span>🏆 Ranking de XP do dia — ${r.dia.slice(8, 10)}/${r.dia.slice(5, 7)}</span><button data-gx="fechar">×</button></header>
+    gxModal.innerHTML = `<header><span>🏆 Ranking de XP do dia — ${r.dia.slice(8, 10)}/${r.dia.slice(5, 7)}</span>${abas}<button data-gx="fechar">×</button></header>
       <section><div class="linha">${r.meus.map((m) => `<b>${escH(m.nick)}</b>: <span class="ok">#${m.pos}</span> de ${fmtN(r.jogadores)} (+${fmtGrande(m.ganho)} XP)`).join(' · ') || '<span class="ajuda">Suas contas não aparecem no ranking de hoje.</span>'}</div>
         <span class="ajuda">XP ganho de ${r.diaAnt.slice(8, 10)}/${r.diaAnt.slice(5, 7)} para ${r.dia.slice(8, 10)}/${r.dia.slice(5, 7)} · dados do guia (coleta 2× ao dia${r.geradoEm ? `, última ${new Date(r.geradoEm).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}` : ''})</span></section>
       <section><table><tr><th>Pos.</th><th>Jogador</th><th>XP do dia</th><th>XP total</th></tr>${r.top.map(linha).join('')}
@@ -563,6 +658,12 @@
     const a = e.target.closest('[data-gx]')?.dataset.gx;
     if (a === 'fechar') gxFundo.classList.remove('aberto');
     else if (a === 'recalc' && gx.conta) gxHunts(gx.conta);
+  });
+  gxFundo.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-rk]');
+    if (!b) return;
+    if (b.dataset.rk === 'aba') { rkAba = b.dataset.v; gxRanking(); }
+    else if (b.dataset.rk === 'foto') { b.disabled = true; b.textContent = 'fotografando…'; await fotografarRanking(); gxRanking(); }
   });
   gxFundo.addEventListener('change', (e) => {
     const k = e.target.dataset.gxc;
