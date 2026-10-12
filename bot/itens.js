@@ -10,7 +10,7 @@
 // TM) e o histórico paginado. Tudo salvo por conta.
 (() => {
   'use strict';
-  const VERSAO_ITENS = '1.5.1';
+  const VERSAO_ITENS = '1.5.2';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -421,6 +421,30 @@
   const segura = (p) => Number(p?.heldItemId) === XSH_ID;
   const noDeposito = (p) => p && p.slot == null; // só pokémon guardado (fora da equipe) recebe pela automação
   const nomePk = (p) => `${p.shiny ? '✨' : ''}${p.apelido || p.nick || p.nome} Nv ${fmt(p.level)}`;
+  /** O que diferencia dois pokémon da mesma espécie: potência, qualidade e IV somado. */
+  const idPk = (p) => {
+    const iv = Object.values(p.ivs ?? {}).reduce((t, v) => t + (Number(v) || 0), 0);
+    const q = Number(p.quality ?? p.qualidade);
+    return [`P${Number(p.potencia) || 1}`, q ? `Q ${q.toFixed(3).replace('.', ',')}` : '', iv ? `IV ${iv}` : ''].filter(Boolean).join(' · ');
+  };
+  /** 👁 Abre a FICHA oficial do jogo (o mesmo link de pokémon do chat): sprite, stats, IVs, golpes. */
+  function verFicha(id) {
+    const chat = document.getElementById('chat-msgs');
+    const nick = core.eu?.nick;
+    if (!chat || !nick) return false;
+    fechar();
+    const el = document.createElement('span');
+    el.className = 'm-pk-link';
+    el.dataset.nick = nick;
+    el.dataset.pk = String(id);
+    el.style.display = 'none';
+    chat.appendChild(el);
+    el.click();
+    el.remove();
+    return true;
+  }
+  const btFicha = (p) => `<button class="pit-bt" data-a="xshFicha" data-v="${p.id}" title="abrir a ficha do pokémon no jogo">👁 ficha</button>`;
+  const celNome = (p) => `<b>${esc(nomePk(p))}</b><br><small>${esc(idPk(p))}</small>`;
   const xshNota = (txt) => { xsh.log.unshift({ em: Date.now(), txt }); xsh.log = xsh.log.slice(0, 30); salvarXsh(); console.log('[Exp Share]', txt); if (estaAberto() && cfg.aba === 'xsh') pintar(); };
 
   function xshAcao(tipo, p, motivo) {
@@ -479,13 +503,13 @@
       <section>
         <h4>Usando (${usando.length})</h4>
         ${usando.length ? `<table class="pit-tab"><tr><th>Pokémon</th><th>Onde</th><th>Tirar no nível</th><th></th></tr>
-          ${usando.map((p) => `<tr><td><b>${esc(nomePk(p))}</b></td><td>${p.slot != null ? `equipe #${p.slot + 1}` : 'guardado'}</td><td>${inAlvo(p)}${xsh.alvos[p.id] ? `<small>faltam ${fmt(Math.max(0, xsh.alvos[p.id] - p.level))} níveis</small>` : ''}</td>
+          ${usando.map((p) => `<tr><td>${celNome(p)} ${btFicha(p)}</td><td>${p.slot != null ? `equipe #${p.slot + 1}` : 'guardado'}</td><td>${inAlvo(p)}${xsh.alvos[p.id] ? `<small>faltam ${fmt(Math.max(0, xsh.alvos[p.id] - p.level))} níveis</small>` : ''}</td>
             <td><button class="pit-bt" data-a="xshTirar" data-v="${p.id}">➖ tirar agora</button></td></tr>`).join('')}</table>`
           : '<span class="pit-ajuda">Ninguém segura Exp Share agora.</span>'}
       </section>
       <section>
         <h4>Fila para receber (${filaNomes.length})</h4>
-        ${filaNomes.length ? `<table class="pit-tab">${filaNomes.map((p, i) => `<tr><td>${i + 1}º</td><td style="text-align:left"><b>${esc(nomePk(p))}</b></td><td>tirar no nível ${inAlvo(p)}</td>
+        ${filaNomes.length ? `<table class="pit-tab">${filaNomes.map((p, i) => `<tr><td>${i + 1}º</td><td style="text-align:left">${celNome(p)} ${btFicha(p)}</td><td>tirar no nível ${inAlvo(p)}</td>
           <td><button class="pit-bt" data-a="xshSobe" data-v="${p.id}" ${i === 0 ? 'disabled' : ''}>↑</button><button class="pit-bt" data-a="xshFila" data-v="${p.id}">✕</button></td></tr>`).join('')}</table>`
           : '<span class="pit-ajuda">Vazia — use "➕ fila" na lista abaixo.</span>'}
       </section>
@@ -493,7 +517,7 @@
         <h4>Podem usar — depósito</h4>
         <div class="pit-linha"><input class="pit-in" data-c="xshBusca" placeholder="buscar pokémon…" value="${esc(xsh.busca ?? '')}" spellcheck="false" style="width:220px"><span class="pit-ajuda">só do depósito · mostrando ${podem.length} (menor nível primeiro)</span></div>
         <table class="pit-tab"><tr><th>Pokémon</th><th>Onde</th><th>Tirar no nível</th><th></th></tr>
-          ${podem.map((p) => `<tr><td><b>${esc(nomePk(p))}</b></td><td>${p.slot != null ? `equipe #${p.slot + 1}` : 'guardado'}</td><td>${inAlvo(p)}</td>
+          ${podem.map((p) => `<tr><td>${celNome(p)} ${btFicha(p)}</td><td>${p.slot != null ? `equipe #${p.slot + 1}` : 'guardado'}</td><td>${inAlvo(p)}</td>
             <td><button class="pit-bt ${xsh.fila.includes(p.id) ? 'on' : ''}" data-a="xshFila" data-v="${p.id}">${xsh.fila.includes(p.id) ? `na fila (${xsh.fila.indexOf(p.id) + 1}º)` : '➕ fila'}</button>
               <button class="pit-bt" data-a="xshColocar" data-v="${p.id}" ${naBolsa < 1 ? 'disabled title="sem Exp Share na bolsa"' : ''}>colocar agora</button></td></tr>`).join('')}
         </table>
@@ -673,6 +697,7 @@
       const pk = pokes().find((x) => x.id === Number(b.dataset.v));
       if (pk) { const r = xshAcao(a === 'xshTirar' ? 'tirar' : 'colocar', pk, 'na mão'); if (!r.ok) xshNota(`não deu: ${r.msg}`); }
     }
+    else if (a === 'xshFicha') { if (!verFicha(Number(b.dataset.v))) alert('Não deu para abrir a ficha (o chat do jogo ainda não carregou).'); return; }
     else if (a === 'xshFila') { const id = Number(b.dataset.v); xsh.fila = xsh.fila.includes(id) ? xsh.fila.filter((x) => x !== id) : [...xsh.fila, id]; salvarXsh(); }
     else if (a === 'xshSobe') { const id = Number(b.dataset.v); const i = xsh.fila.indexOf(id); if (i > 0) { xsh.fila.splice(i, 1); xsh.fila.splice(i - 1, 0, id); salvarXsh(); } }
     salvarCfg();
