@@ -17,7 +17,7 @@
 // pelo mesmo preço. Só junta evidência para VOCÊ reportar — não faz nada com as contas.
 (() => {
   'use strict';
-  const VERSAO_ITENS = '1.3.3';
+  const VERSAO_ITENS = '1.4.0';
   const LITE = window.__pokeVariante === 'lite'; // versão Lite do app: sem a aba Multi-acc
 
   const core = window.__pokebotCore;
@@ -695,6 +695,98 @@
       </section>`;
   }
 
+  // ---------------------------------------------------------------- 🎒 Exp Share (item segurado)
+  // Quem segura o Exp. Share (item 70050, `heldItemId`) ganha uma % do XP de cada abate do pokémon de
+  // batalha. O jogo só deixa mexer 1× por minuto (equipar OU remover). A automação: quem chega no
+  // "tirar no nível N" perde o item e, no minuto seguinte, o próximo da FILA recebe — uma ação por minuto.
+  const XSH_ID = 70050;
+  const CHAVE_XSH = 'pokeitens.xpshare.v1';
+  const xsh = { ativo: false, alvos: {}, fila: [], log: [], busca: '', ...ler(CHAVE_XSH, {}) };
+  const salvarXsh = () => gravar(CHAVE_XSH, { ...xsh, log: xsh.log.slice(0, 30), busca: '' });
+  let xshUltimaAcao = 0;
+  const XSH_ESPERA = 61_000; // 1 min do jogo + 1 s de garantia
+  const pokes = () => core.eu?.pokemons ?? [];
+  const segura = (p) => Number(p?.heldItemId) === XSH_ID;
+  const nomePk = (p) => `${p.shiny ? '✨' : ''}${p.apelido || p.nick || p.nome} Nv ${fmt(p.level)}`;
+  const xshNota = (txt) => { xsh.log.unshift({ em: Date.now(), txt }); xsh.log = xsh.log.slice(0, 30); salvarXsh(); console.log('[Exp Share]', txt); if (estaAberto() && cfg.aba === 'xsh') pintar(); };
+
+  function xshAcao(tipo, p, motivo) {
+    const falta = XSH_ESPERA - (Date.now() - xshUltimaAcao);
+    if (falta > 0) return { ok: false, msg: `espere ${Math.ceil(falta / 1000)} s (o jogo só deixa mexer 1× por minuto)` };
+    if (!core.send({ t: tipo === 'tirar' ? 'xpshareheld.remover' : 'xpshareheld.equipar', pokemonId: p.id })) return { ok: false, msg: 'conta desconectada' };
+    xshUltimaAcao = Date.now();
+    clearTimeout(xshAcao.t); xshAcao.t = setTimeout(xshPasso, XSH_ESPERA + 50); // o próximo passo sai assim que o jogo liberar (61 s)
+    xshNota(`${tipo === 'tirar' ? '➖ tirei de' : '➕ coloquei em'} ${nomePk(p)}${motivo ? ` — ${motivo}` : ''}`);
+    return { ok: true };
+  }
+
+  /** Um passo da automação (no máximo 1 ação por minuto). */
+  function xshPasso() {
+    if (!xsh.ativo || !core.logado || Date.now() - xshUltimaAcao < XSH_ESPERA) return;
+    const lista = pokes();
+    // 1) quem já chegou no nível-alvo sai
+    for (const p of lista.filter(segura)) {
+      const alvo = Number(xsh.alvos[p.id]) || 0;
+      if (alvo && p.level >= alvo) { xshAcao('tirar', p, `chegou no Nv ${fmt(alvo)}`); return; }
+    }
+    // 2) sobrou Exp Share na bolsa: o próximo da fila (que ainda não chegou no alvo dele) recebe
+    if ((Number(core.eu?.items?.[XSH_ID]) || 0) < 1) return;
+    xsh.fila = xsh.fila.filter((id) => lista.some((p) => p.id === id));
+    for (const id of xsh.fila) {
+      const p = lista.find((x) => x.id === id);
+      if (!p || segura(p)) continue;
+      const alvo = Number(xsh.alvos[p.id]) || 0;
+      if (alvo && p.level >= alvo) continue;
+      const r = xshAcao('colocar', p, 'próximo da fila');
+      if (r.ok) { xsh.fila = xsh.fila.filter((x) => x !== id); salvarXsh(); }
+      return;
+    }
+  }
+  const vigiaXsh = setInterval(xshPasso, 10_000);
+  limpezas.push(() => clearInterval(vigiaXsh));
+
+  function htmlXsh() {
+    const lista = pokes();
+    const naBolsa = Number(core.eu?.items?.[XSH_ID]) || 0;
+    const usando = lista.filter(segura).sort((a, b) => b.level - a.level);
+    const q = String(xsh.busca ?? '').trim().toLowerCase();
+    const podem = lista.filter((p) => !segura(p) && (!q || String(p.apelido || p.nick || p.nome).toLowerCase().includes(q)))
+      .sort((a, b) => (xsh.fila.includes(b.id) - xsh.fila.includes(a.id)) || ((a.slot ?? 99) - (b.slot ?? 99)) || b.level - a.level).slice(0, 40);
+    const falta = Math.max(0, XSH_ESPERA - (Date.now() - xshUltimaAcao));
+    const inAlvo = (p) => `<input type="number" class="pit-in" data-c="xshAlvo" data-v="${p.id}" min="1" value="${esc(xsh.alvos[p.id] ?? '')}" placeholder="—" style="width:80px">`;
+    const filaNomes = xsh.fila.map((id) => lista.find((p) => p.id === id)).filter(Boolean);
+    return `<section>
+        <div class="pit-linha">
+          <button class="pit-sw ${xsh.ativo ? 'on' : ''}" data-a="xshAtivo"></button> <b>Automação</b>
+          <span class="pit-ajuda">Na bolsa: <b>${naBolsa}</b> · equipados: <b>${usando.length}</b> · ${falta ? `próxima mexida liberada em ${Math.ceil(falta / 1000)} s` : 'pode mexer agora'}</span>
+        </div>
+        <p class="pit-ajuda">Quem chega no <b>"tirar no nível"</b> perde o Exp Share e, no minuto seguinte, o <b>próximo da fila</b> recebe (o jogo só deixa mexer 1× por minuto — o bot espera sozinho). Sobrou Exp Share na bolsa? O próximo da fila recebe também. Pokémon no posto da casa não pode segurar (o jogo recusa).</p>
+      </section>
+      <section>
+        <h4>Usando (${usando.length})</h4>
+        ${usando.length ? `<table class="pit-tab"><tr><th>Pokémon</th><th>Onde</th><th>Tirar no nível</th><th></th></tr>
+          ${usando.map((p) => `<tr><td><b>${esc(nomePk(p))}</b></td><td>${p.slot != null ? `equipe #${p.slot + 1}` : 'guardado'}</td><td>${inAlvo(p)}${xsh.alvos[p.id] ? `<small>faltam ${fmt(Math.max(0, xsh.alvos[p.id] - p.level))} níveis</small>` : ''}</td>
+            <td><button class="pit-bt" data-a="xshTirar" data-v="${p.id}">➖ tirar agora</button></td></tr>`).join('')}</table>`
+          : '<span class="pit-ajuda">Ninguém segura Exp Share agora.</span>'}
+      </section>
+      <section>
+        <h4>Fila para receber (${filaNomes.length})</h4>
+        ${filaNomes.length ? `<table class="pit-tab">${filaNomes.map((p, i) => `<tr><td>${i + 1}º</td><td style="text-align:left"><b>${esc(nomePk(p))}</b></td><td>tirar no nível ${inAlvo(p)}</td>
+          <td><button class="pit-bt" data-a="xshSobe" data-v="${p.id}" ${i === 0 ? 'disabled' : ''}>↑</button><button class="pit-bt" data-a="xshFila" data-v="${p.id}">✕</button></td></tr>`).join('')}</table>`
+          : '<span class="pit-ajuda">Vazia — use "➕ fila" na lista abaixo.</span>'}
+      </section>
+      <section>
+        <h4>Podem usar</h4>
+        <div class="pit-linha"><input class="pit-in" data-c="xshBusca" placeholder="buscar pokémon…" value="${esc(xsh.busca ?? '')}" spellcheck="false" style="width:220px"><span class="pit-ajuda">mostrando ${podem.length} (equipe primeiro)</span></div>
+        <table class="pit-tab"><tr><th>Pokémon</th><th>Onde</th><th>Tirar no nível</th><th></th></tr>
+          ${podem.map((p) => `<tr><td><b>${esc(nomePk(p))}</b></td><td>${p.slot != null ? `equipe #${p.slot + 1}` : 'guardado'}</td><td>${inAlvo(p)}</td>
+            <td><button class="pit-bt ${xsh.fila.includes(p.id) ? 'on' : ''}" data-a="xshFila" data-v="${p.id}">${xsh.fila.includes(p.id) ? `na fila (${xsh.fila.indexOf(p.id) + 1}º)` : '➕ fila'}</button>
+              <button class="pit-bt" data-a="xshColocar" data-v="${p.id}" ${naBolsa < 1 ? 'disabled title="sem Exp Share na bolsa"' : ''}>colocar agora</button></td></tr>`).join('')}
+        </table>
+      </section>
+      ${xsh.log.length ? `<section><h4>Registro</h4><table class="pit-tab">${xsh.log.slice(0, 12).map((l) => `<tr><td>${quando(l.em)}</td><td style="text-align:left">${esc(l.txt)}</td></tr>`).join('')}</table></section>` : ''}`;
+  }
+
   function montarUI() {
     const css = document.createElement('style');
     css.textContent = CSS;
@@ -707,6 +799,8 @@
     fundo.addEventListener('change', (e) => {
       const c = e.target.dataset.c;
       if (c === 'boss') { cfg.boss = e.target.value; pagina = 0; salvarCfg(); pintar(); }
+      if (c === 'xshAlvo') { const v = e.target.value; if (v === '') delete xsh.alvos[e.target.dataset.v]; else xsh.alvos[e.target.dataset.v] = Math.max(1, Number(v) || 1); salvarXsh(); pintar(); }
+      if (c === 'xshBusca') { xsh.busca = e.target.value; pintar(); }
       if (c === 'tokenGemas') { cfg.tokenGemas = e.target.value === '' ? null : Math.max(0, Number(e.target.value) || 0); salvarCfg(); pintar(); }
       if (c === 'tokensPadrao') { cfg.tokensPadrao = Math.max(0, Math.min(20, Number(e.target.value) || 0)); salvarCfg(); pintar(); }
       if (c === 'cadaMin') { cfg.cadaMin = Math.max(5, Math.min(120, Number(e.target.value) || 10)); salvarCfg(); pintar(); }
@@ -840,8 +934,9 @@
           <button class="pit-bt ${cfg.aba === 'principais' ? 'on' : ''}" data-a="aba" data-v="principais">Principais</button>
           <button class="pit-bt ${cfg.aba === 'boss' ? 'on' : ''}" data-a="aba" data-v="boss">Boss</button>
           ${LITE ? '' : `<button class="pit-bt ${cfg.aba === 'multi' ? 'on' : ''}" data-a="aba" data-v="multi">🕵 Multi-acc</button>`}
+          <button class="pit-bt ${cfg.aba === 'xsh' ? 'on' : ''}" data-a="aba" data-v="xsh">🎒 Exp Share</button>
           <button class="pit-x" data-a="fechar" title="Fechar">×</button></span></header>
-      ${cfg.aba === 'boss' ? htmlBoss() : cfg.aba === 'multi' && !LITE ? htmlMulti() : htmlPrincipais()}`;
+      ${cfg.aba === 'boss' ? htmlBoss() : cfg.aba === 'multi' && !LITE ? htmlMulti() : cfg.aba === 'xsh' ? htmlXsh() : htmlPrincipais()}`;
   }
 
   function aoClicar(e) {
@@ -862,6 +957,13 @@
     }
     else if (a === 'pag') pagina = Math.max(0, pagina + Number(b.dataset.v));
     else if (a === 'limparBoss') { bosses = []; gravar(CHAVE_BOSS, bosses); }
+    else if (a === 'xshAtivo') { xsh.ativo = !xsh.ativo; salvarXsh(); xshNota(xsh.ativo ? 'automação LIGADA' : 'automação desligada'); }
+    else if (a === 'xshTirar' || a === 'xshColocar') {
+      const pk = pokes().find((x) => x.id === Number(b.dataset.v));
+      if (pk) { const r = xshAcao(a === 'xshTirar' ? 'tirar' : 'colocar', pk, 'na mão'); if (!r.ok) xshNota(`não deu: ${r.msg}`); }
+    }
+    else if (a === 'xshFila') { const id = Number(b.dataset.v); xsh.fila = xsh.fila.includes(id) ? xsh.fila.filter((x) => x !== id) : [...xsh.fila, id]; salvarXsh(); }
+    else if (a === 'xshSobe') { const id = Number(b.dataset.v); const i = xsh.fila.indexOf(id); if (i > 0) { xsh.fila.splice(i, 1); xsh.fila.splice(i - 1, 0, id); salvarXsh(); } }
     else if (a === 'monitor') { cfg.monitor = !cfg.monitor; if (cfg.monitor && Date.now() - varre.ultima > 5 * 60_000) varrer(); }
     else if (a === 'varrer') varrer();
     else if (a === 'marcar') { const v = vend[b.dataset.v]; if (v) { v.marcado = b.checked; salvarVend(); } }

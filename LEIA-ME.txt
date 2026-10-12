@@ -33,6 +33,9 @@ ITENS E BOSS — botão 📦 Itens
     com o perfil público (nível, capturas, Pokédex, guild) e quem anuncia pelo mesmo preço.
     "Monitorar nesta conta" varre a cada N min (ligue em UMA conta). Lista própria de nicks
     suspeitos, ☑ para escolher e "📋 copiar relatório" com o texto pronto para a moderação.
+  - Aba 🎒 Exp Share: quem segura o Exp. Share (com nível) e quem pode usar. Para cada um, "tirar no nível";
+    e a FILA de quem recebe. Com a automação ligada, quem chega no nível perde o item e, 61 s depois (o jogo
+    só deixa mexer 1× por minuto), o próximo da fila recebe. Também dá para tirar/colocar na mão.
   - Aba Boss → 💰 Lucro do boss (no período): custo = itens de entrada de cada luta (Boss Token;
     medido na entrada ou pela ficha do boss) × o que você PAGOU neles (média do extrato de
     compras; sem compra, o mercado). Vendido = suas vendas dos itens que caíram no boss (só a
