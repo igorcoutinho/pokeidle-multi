@@ -694,7 +694,8 @@
       <div class="conta-alerta">conta <b>${escH(x.c.nome)}</b> · ${new Date(x.em).toLocaleTimeString('pt-BR')}</div>
       <div class="texto">${escH(x.a.texto)}</div>
       ${resto.length ? `<div class="mais">avisos anteriores: ${resto.slice(0, 3).map((r) => `${new Date(r.em).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })} — ${escH(r.a.texto.slice(0, 80))}`).join('<br>')}</div>` : ''}
-      <div class="bts"><button data-al="abrir">abrir a conta ${escH(x.c.nome)}</button><button class="prim" data-al="ok">OK</button></div></div>`;
+      <div class="bts">${x.a.anuncioId ? '<button data-al="ver">👁 ver o anúncio</button>' : ''}<button data-al="abrir">abrir a conta ${escH(x.c.nome)}</button><button class="prim" data-al="ok">OK</button></div></div>`;
+    alertaFundo.dataset.anuncio = x.a.anuncioId ? String(x.a.anuncioId) : '';
     alertaFundo.classList.add('aberto');
     alertaFundo.dataset.n = String(x.c.n);
     tocarAlerta();
@@ -703,7 +704,7 @@
   alertaFundo.addEventListener('click', (e) => {
     const a = e.target.closest('[data-al]')?.dataset.al;
     if (!a && e.target !== alertaFundo) return;
-    if (a === 'abrir') { const c = contas.find((y) => y.n === Number(alertaFundo.dataset.n)); if (c) focar(c); }
+    if (a === 'abrir' || a === 'ver') { const c = contas.find((y) => y.n === Number(alertaFundo.dataset.n)); if (c) focar(c); if (c && a === 'ver' && alertaFundo.dataset.anuncio) naConta(c, `window.__pokeVendas?.verAnuncio(${Number(alertaFundo.dataset.anuncio)})`); }
     alertaFundo.classList.remove('aberto');
     alertas = [];
   });

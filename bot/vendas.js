@@ -7,7 +7,7 @@
 // A comissão é a do jogo: `shared/taxa-mercado.mjs`, o mesmo arquivo que o servidor usa.
 (() => {
   'use strict';
-  const VERSAO_VENDAS = '1.6.0';
+  const VERSAO_VENDAS = '1.7.0';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -25,6 +25,8 @@
     rebaixarAgora: (o) => rebaixarAgora(o),
     /** Baixa o extrato (compras e vendas). `desde` = 0 → tudo. Usado pelo 📦 Itens → Boss (lucro). */
     garantirDados: (forcar = false, desde = null) => garantirDados(forcar, desde),
+    /** Abre o card oficial do anúncio no jogo (pokémon, "Ver ficha", "Comprar"). A janela do app usa no aviso grande. */
+    verAnuncio: (id) => verAnuncio(id),
     fechar: () => fechar(),
   };
   window.__pokeVendas = V;
@@ -341,6 +343,26 @@
       </section>`;
   }
 
+  /**
+   * 👁 Abre o anúncio na tela do PRÓPRIO jogo: o link de anúncio do chat (o do alto-falante do Mercado)
+   * abre o card oficial, com o pokémon, "Ver ficha" e "Comprar". Aqui um link desses é criado
+   * escondido no chat e clicado — o jogo faz o resto (e avisa se o anúncio já saiu).
+   */
+  function verAnuncio(id) {
+    const n = Number(id);
+    const chat = document.getElementById('chat-msgs');
+    if (!n || !chat) return false;
+    fechar(); // o painel do bot fica por cima da folha do Mercado
+    const el = document.createElement('span');
+    el.className = 'm-anuncio-link';
+    el.dataset.anuncio = String(n);
+    el.style.display = 'none';
+    chat.appendChild(el);
+    el.click();
+    el.remove();
+    return true;
+  }
+
   // ---------------------------------------------------------------- ⭐ favoritos vigiados
   // Os anúncios que você favoritou no Mercado (a ★ do card): a cada N min o bot pede a lista
   // (`market.favoritos`) e avisa quando o PREÇO muda ou o anúncio SAI (vendido / retirado).
@@ -396,7 +418,8 @@
       }
     } catch {}
     // Aviso GRANDE na janela do app (por cima das 4 contas) + notificação do Windows: vai pelo preload.
-    window.postMessage({ __pbAlerta: { titulo: '⭐ Favorito do Mercado', texto: txt } }, '*');
+    window.postMessage({ __pbAlerta: { titulo: '⭐ Favorito do Mercado', texto: txt, anuncioId: alertaFav.anuncio ?? null } }, '*');
+    alertaFav.anuncio = null;
     if (document.getElementById('pv-fundo')?.classList.contains('aberto') && modo === 'favoritos') pintar();
   }
 
@@ -490,6 +513,7 @@
           if (fav.snipe[k] && baixou) {
             await snipar(a, k, antes, precoAntes);
           } else {
+            alertaFav.anuncio = a.id;
             alertaFav(`${nome} (de ${a.vendedor ?? antes.vendedor}) ${baixou ? 'BAIXOU' : 'subiu'}: ${precoTxt(precoAntes, antes.moeda)} → ${precoTxt(preco, moeda)} (${pct > 0 ? '+' : ''}${pct}%)`);
           }
         } else if (!aberto && antes.aberto) {
@@ -530,7 +554,7 @@
         <p class="pv-ajuda">Vigia os anúncios que você favoritou (★ no card do Mercado) NESTA conta e avisa — aviso grande no app, som e notificação do Windows — quando o preço muda ou o anúncio sai. Com <b>🛒 comprar se baixar</b> marcado, ele COMPRA aquele anúncio sozinho quando o preço ficar MENOR que o anterior, só se for o mesmo pokémon que você favoritou e dentro do teto da moeda. Se outro comprador for mais rápido, ele avisa que não deu.</p>
         ${itens.length ? `<table class="pv-tab"><tr><th>Anúncio</th><th>Vendedor</th><th>Preço agora</th><th>Antes</th><th>Mudou</th><th>Situação</th><th>🛒 Snipe</th></tr>
           ${itens.map(([k, v]) => `<tr><td style="text-align:left"><b>${esc(v.nome)}</b></td><td>${esc(v.vendedor)}</td><td><b>${precoTxt(v.preco, v.moeda)}</b></td><td>${v.antes != null ? precoTxt(v.antes, v.moeda) : '—'}</td><td>${v.mudouEm ? dataHora(v.mudouEm) : '—'}</td><td>${v.aberto ? 'à venda' : '<span class="pv-neg">fora do Mercado</span>'}</td>
-            <td>${v.stats?.qualidade ? `<button class="pv-bt" data-a="prMarcarFav" data-v="${esc(k)}" title="salvar os stats e procurar este pokémon em qualquer anúncio">📌 caçar</button><br>` : ''}${v.aberto ? `<label><input type="checkbox" data-a="favSnipe" data-v="${esc(k)}" ${fav.snipe[k] ? 'checked' : ''}> comprar se baixar</label><br><small>só de <b>${esc(fav.snipe[k]?.vendedor ?? v.vendedor)}</b> · até ${precoTxt(Math.min(tetoDe(v.moeda), Math.max(0, v.preco - 1)), v.moeda)}</small>` : '—'}</td></tr>`).join('')}</table>`
+            <td>${v.aberto ? `<button class="pv-bt" data-a="verAnuncio" data-v="${esc(k)}" title="abrir o anúncio no jogo">👁 ver</button> ` : ''}${v.stats?.qualidade ? `<button class="pv-bt" data-a="prMarcarFav" data-v="${esc(k)}" title="salvar os stats e procurar este pokémon em qualquer anúncio">📌 caçar</button><br>` : ''}${v.aberto ? `<label><input type="checkbox" data-a="favSnipe" data-v="${esc(k)}" ${fav.snipe[k] ? 'checked' : ''}> comprar se baixar</label><br><small>só de <b>${esc(fav.snipe[k]?.vendedor ?? v.vendedor)}</b> · até ${precoTxt(Math.min(tetoDe(v.moeda), Math.max(0, v.preco - 1)), v.moeda)}</small>` : '—'}</td></tr>`).join('')}</table>`
           : '<p class="pv-ajuda">Nenhum favorito lido ainda — clique em "ler agora".</p>'}
         ${fav.log.length ? `<h4 class="pv-rot">Avisos</h4><table class="pv-tab">${fav.log.slice(0, 12).map((l) => `<tr><td>${dataHora(l.em)}</td><td style="text-align:left;white-space:normal">${esc(l.txt)}</td></tr>`).join('')}</table>` : ''}
       </section>`;
@@ -651,7 +675,7 @@
           r.desde = antes[k]?.desde ?? Date.now();
           const pr = esp.procurados.find((x) => !x.comprado && x.especieId === especieId && ehProcurado(r, x.alvo));
           if (pr) {
-            pr.ultimo = { vendedor: r.vendedor, preco: r.preco, moeda: r.moeda, em: Date.now() };
+            pr.ultimo = { vendedor: r.vendedor, preco: r.preco, moeda: r.moeda, em: Date.now(), anuncioId: r.id };
             const lim = Number(pr.limite?.[r.moeda === 'orb' ? 'orb' : 'gold']) || 0;
             const chaveTent = `${k}:${r.preco}`;
             if (pr.comprar && lim && r.preco <= lim && !esp.tentados[chaveTent]) {
@@ -662,7 +686,7 @@
               esp.avisados[k] = Date.now();
               const txt = `O ${vg.nome} PROCURADO está à venda! Nv ${fmt(r.nivel)} · P${r.potencia} · Q ${r.qualidade.toFixed(3).replace('.', ',')} · IV ${r.iv} — de ${r.vendedor} por ${precoTxt(r.preco, r.moeda)}${lim ? ` (seu limite: ${precoTxt(lim, r.moeda)}${r.preco <= lim ? ' — DENTRO' : ' — acima'})` : ''}`;
               esp.log.unshift({ em: Date.now(), txt });
-              window.postMessage({ __pbAlerta: { titulo: `🔎 ${vg.nome} procurado no Mercado`, texto: txt } }, '*');
+              window.postMessage({ __pbAlerta: { titulo: `🔎 ${vg.nome} procurado no Mercado`, texto: txt, anuncioId: r.id } }, '*');
             }
           } else if (!antes[k] && Object.keys(antes).length) {
             esp.log.unshift({ em: Date.now(), txt: `novo ${vg.nome}: Nv ${fmt(r.nivel)} · P${r.potencia} · Q ${r.qualidade.toFixed(3).replace('.', ',')} · IV ${r.iv} — ${r.vendedor} · ${precoTxt(r.preco, r.moeda)}` });
@@ -705,7 +729,7 @@
             <td><input type="number" class="pv-in" data-c="prLimOrb" data-v="${esc(pr.id)}" min="0" value="${esc(pr.limite?.orb ?? '')}" placeholder="—" style="width:80px"></td>
             <td><input type="number" class="pv-in" data-c="prLimGold" data-v="${esc(pr.id)}" min="0" value="${esc(pr.limite?.gold ?? '')}" placeholder="—" style="width:120px"></td>
             <td>${pr.comprado ? `<span class="pv-pos">✅ comprado ${dataHora(pr.comprado.em)} por ${precoTxt(pr.comprado.preco, pr.comprado.moeda)}</span>` : `<label><input type="checkbox" data-a="prComprar" data-v="${esc(pr.id)}" ${pr.comprar ? 'checked' : ''}> comprar se ≤ limite</label>`}</td>
-            <td>${pr.ultimo ? `${esc(pr.ultimo.vendedor)} · ${precoTxt(pr.ultimo.preco, pr.ultimo.moeda)}<br><small>${dataHora(pr.ultimo.em)}</small>` : '<small>ainda não apareceu</small>'}</td>
+            <td>${pr.ultimo ? `${esc(pr.ultimo.vendedor)} · ${precoTxt(pr.ultimo.preco, pr.ultimo.moeda)}<br><small>${dataHora(pr.ultimo.em)}</small>${pr.ultimo.anuncioId ? ` <button class="pv-bt" data-a="verAnuncio" data-v="${esc(pr.ultimo.anuncioId)}" title="abrir o anúncio no jogo">👁 ver</button>` : ''}` : '<small>ainda não apareceu</small>'}</td>
             <td><button class="pv-bt" data-a="prRemover" data-v="${esc(pr.id)}" title="parar de procurar">✕</button></td></tr>`).join('')}</table>`
           : '<p class="pv-ajuda">Nenhum. Marque um com 📌 (num favorito abaixo ou na lista de anúncios).</p>'}
         <p class="pv-ajuda">Com "comprar sozinho", o bot compra o procurado quando ele aparecer a um preço <b>igual ou menor que o SEU limite</b> naquela moeda (e nunca acima do teto geral de ${precoTxt(tetoDe('orb'), 'orb')} / ${precoTxt(tetoDe('gold'), 'gold')}). Sem limite na moeda do anúncio, só avisa.</p>
@@ -716,7 +740,7 @@
         <h4 class="pv-rot">🔎 Todos os ${esc(nomeEsp)} à venda</h4>
         ${lista.length ? `<table class="pv-tab"><tr><th></th><th>Vendedor</th><th>Preço</th><th>Nv</th><th>P</th><th>Qualidade</th><th>IV</th><th>Visto desde</th><th></th></tr>
           ${lista.map((r) => { const alvo = esp.procurados.some((x) => x.especieId === especieId && ehProcurado(r, x.alvo)); return `<tr style="${alvo ? 'background:#1e3a1e;font-weight:800' : ''}"><td>${alvo ? '🎯' : r.shiny ? '✨' : ''}</td><td style="text-align:left">${esc(r.vendedor)}</td><td><b>${precoTxt(r.preco, r.moeda)}</b></td><td>${fmt(r.nivel)}</td><td>P${r.potencia || '?'}</td><td>${fmtQ(r.qualidade)}</td><td>${r.iv || '?'}</td><td>${r.desde ? dataHora(r.desde) : '—'}</td>
-            <td>${alvo ? '' : `<button class="pv-bt" data-a="prMarcarAnuncio" data-v="${esc(nomeEsp.toLowerCase())}|${esc(r.id)}" title="marcar este pokémon como procurado">📌</button>`}</td></tr>`; }).join('')}</table>`
+            <td><button class="pv-bt" data-a="verAnuncio" data-v="${esc(r.id)}" title="abrir o anúncio no jogo (pokémon, ficha, comprar)">👁</button>${alvo ? '' : `<button class="pv-bt" data-a="prMarcarAnuncio" data-v="${esc(nomeEsp.toLowerCase())}|${esc(r.id)}" title="marcar este pokémon como procurado">📌</button>`}</td></tr>`; }).join('')}</table>`
           : `<p class="pv-ajuda">${espUltima ? `Nenhum ${esc(nomeEsp)} à venda agora.` : 'Ainda não listado — clique em "procurar agora".'}</p>`}
       </section>`;
     }).join('');
@@ -1151,6 +1175,7 @@
     else if (a === 'rebAuto') { reb.desconto = null; pintar(); }
     else if (a === 'rebPrecos') carregarMercadoReb();
     else if (a === 'rebPublicar') publicarReb();
+    else if (a === 'verAnuncio') { if (!verAnuncio(b.dataset.v)) alert('Não deu para abrir o anúncio (o chat do jogo ainda não carregou).'); return; }
     else if (a === 'favAtivo') { fav.ativo = !fav.ativo; salvarFav(); }
     else if (a === 'favAgora') { vigiarFavoritos(true); }
     else if (a === 'espAtivo') { esp.ativo = !esp.ativo; salvarEsp(); }

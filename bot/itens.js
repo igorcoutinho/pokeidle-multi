@@ -10,7 +10,7 @@
 // TM) e o histórico paginado. Tudo salvo por conta.
 (() => {
   'use strict';
-  const VERSAO_ITENS = '1.5.0';
+  const VERSAO_ITENS = '1.5.1';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -419,6 +419,7 @@
   const XSH_ESPERA = 61_000; // 1 min do jogo + 1 s de garantia
   const pokes = () => core.eu?.pokemons ?? [];
   const segura = (p) => Number(p?.heldItemId) === XSH_ID;
+  const noDeposito = (p) => p && p.slot == null; // só pokémon guardado (fora da equipe) recebe pela automação
   const nomePk = (p) => `${p.shiny ? '✨' : ''}${p.apelido || p.nick || p.nome} Nv ${fmt(p.level)}`;
   const xshNota = (txt) => { xsh.log.unshift({ em: Date.now(), txt }); xsh.log = xsh.log.slice(0, 30); salvarXsh(); console.log('[Exp Share]', txt); if (estaAberto() && cfg.aba === 'xsh') pintar(); };
 
@@ -446,7 +447,7 @@
     xsh.fila = xsh.fila.filter((id) => lista.some((p) => p.id === id));
     for (const id of xsh.fila) {
       const p = lista.find((x) => x.id === id);
-      if (!p || segura(p)) continue;
+      if (!p || segura(p) || !noDeposito(p)) continue;
       const alvo = Number(xsh.alvos[p.id]) || 0;
       if (alvo && p.level >= alvo) continue;
       const r = xshAcao('colocar', p, 'próximo da fila');
@@ -462,10 +463,11 @@
     const naBolsa = Number(core.eu?.items?.[XSH_ID]) || 0;
     const usando = lista.filter(segura).sort((a, b) => b.level - a.level);
     const q = String(xsh.busca ?? '').trim().toLowerCase();
-    const podem = lista.filter((p) => !segura(p) && (!q || String(p.apelido || p.nick || p.nome).toLowerCase().includes(q)))
-      .sort((a, b) => (xsh.fila.includes(b.id) - xsh.fila.includes(a.id)) || ((a.slot ?? 99) - (b.slot ?? 99)) || b.level - a.level).slice(0, 40);
+    const podem = lista.filter((p) => !segura(p) && noDeposito(p) && (!q || String(p.apelido || p.nick || p.nome).toLowerCase().includes(q)))
+      .sort((a, b) => (xsh.fila.includes(b.id) - xsh.fila.includes(a.id)) || a.level - b.level).slice(0, 40);
     const falta = Math.max(0, XSH_ESPERA - (Date.now() - xshUltimaAcao));
     const inAlvo = (p) => `<input type="number" class="pit-in" data-c="xshAlvo" data-v="${p.id}" min="1" value="${esc(xsh.alvos[p.id] ?? '')}" placeholder="—" style="width:80px">`;
+    xsh.fila = xsh.fila.filter((id) => noDeposito(lista.find((p) => p.id === id)) || !lista.some((p) => p.id === id));
     const filaNomes = xsh.fila.map((id) => lista.find((p) => p.id === id)).filter(Boolean);
     return `<section>
         <div class="pit-linha">
@@ -488,8 +490,8 @@
           : '<span class="pit-ajuda">Vazia — use "➕ fila" na lista abaixo.</span>'}
       </section>
       <section>
-        <h4>Podem usar</h4>
-        <div class="pit-linha"><input class="pit-in" data-c="xshBusca" placeholder="buscar pokémon…" value="${esc(xsh.busca ?? '')}" spellcheck="false" style="width:220px"><span class="pit-ajuda">mostrando ${podem.length} (equipe primeiro)</span></div>
+        <h4>Podem usar — depósito</h4>
+        <div class="pit-linha"><input class="pit-in" data-c="xshBusca" placeholder="buscar pokémon…" value="${esc(xsh.busca ?? '')}" spellcheck="false" style="width:220px"><span class="pit-ajuda">só do depósito · mostrando ${podem.length} (menor nível primeiro)</span></div>
         <table class="pit-tab"><tr><th>Pokémon</th><th>Onde</th><th>Tirar no nível</th><th></th></tr>
           ${podem.map((p) => `<tr><td><b>${esc(nomePk(p))}</b></td><td>${p.slot != null ? `equipe #${p.slot + 1}` : 'guardado'}</td><td>${inAlvo(p)}</td>
             <td><button class="pit-bt ${xsh.fila.includes(p.id) ? 'on' : ''}" data-a="xshFila" data-v="${p.id}">${xsh.fila.includes(p.id) ? `na fila (${xsh.fila.indexOf(p.id) + 1}º)` : '➕ fila'}</button>

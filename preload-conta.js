@@ -38,8 +38,8 @@ try {
 // mostra por cima das 4 contas (com notificação do Windows).
 window.addEventListener('message', (ev) => {
   if (ev.source !== window || !ev.data?.__pbAlerta) return;
-  const { titulo, texto } = ev.data.__pbAlerta;
-  ipcRenderer.sendToHost('pb:alerta', { titulo: String(titulo ?? '').slice(0, 120), texto: String(texto ?? '').slice(0, 400) });
+  const { titulo, texto, anuncioId } = ev.data.__pbAlerta;
+  ipcRenderer.sendToHost('pb:alerta', { titulo: String(titulo ?? '').slice(0, 120), texto: String(texto ?? '').slice(0, 400), anuncioId: Number(anuncioId) || null });
 });
 
 // Ponte do agente de IA: a página pede com postMessage({ __pbIA: { id, pedido } }) e recebe
