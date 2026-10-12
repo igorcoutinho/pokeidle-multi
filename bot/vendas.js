@@ -7,7 +7,7 @@
 // A comissão é a do jogo: `shared/taxa-mercado.mjs`, o mesmo arquivo que o servidor usa.
 (() => {
   'use strict';
-  const VERSAO_VENDAS = '1.7.1';
+  const VERSAO_VENDAS = '1.8.0';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -560,6 +560,123 @@
       </section>`;
   }
 
+  // ---------------------------------------------------------------- 💥 sniper de TM AoE
+  // A cada 20 s lista os anúncios MAIS RECENTES de pokémon com TM AoE (`market.listar` soTmAoe, ordem
+  // "recentes") e olha só os que acabaram de entrar (a 1ª leitura só memoriza o que já estava lá):
+  //  - em Coins até 1 bi → compra sozinho;  - em Gemas abaixo de 1.000 → compra sozinho;
+  //  - em Gemas de 1.000 a 2.000 → aviso grande (não compra).
+  // Travas: 1 unidade, nunca de conta sua, respeita a retenção, no máximo N compras por dia.
+  const CHAVE_AOE = 'pokevendas.aoe.v1';
+  const aoe = (() => {
+    const padrao = { ativo: false, tetoGold: 1_000_000_000, compraOrb: 1000, alertaOrb: 2000, maxDia: 5, vistos: {}, compras: [], log: [] };
+    try { const x = JSON.parse(localStorage.getItem(CHAVE_AOE)) ?? {}; return { ...padrao, ...x, vistos: x.vistos ?? {}, compras: x.compras ?? [], log: x.log ?? [] }; } catch { return padrao; }
+  })();
+  const salvarAoe = () => { try { localStorage.setItem(CHAVE_AOE, JSON.stringify({ ...aoe, log: aoe.log.slice(0, 40) })); } catch {} };
+  let aoeUltima = 0, aoeLendo = false, aoeMsg = '', aoeBase = false;
+  const aoeNota = (txt) => { aoe.log.unshift({ em: Date.now(), txt }); aoe.log = aoe.log.slice(0, 40); salvarAoe(); console.log('[Sniper AoE]', txt); };
+  const aoeAviso = (titulo, txt, anuncioId) => { aoeNota(txt); window.postMessage({ __pbAlerta: { titulo, texto: txt, anuncioId: anuncioId ?? null } }, '*'); };
+  const comprasHoje = () => aoe.compras.filter((c) => Date.now() - c.em < 24 * 3600_000).length;
+
+  async function aoeComprar(a, r, nome) {
+    const desvio = core.eu?.servidorAgora ? Date.now() - Number(core.eu.servidorAgora) : 0;
+    const falta = r.compravelEm ? r.compravelEm - (Date.now() - desvio) : 0;
+    if (falta > 0) {
+      if (falta > 20 * 60_000) return aoeAviso('💥 TM AoE no Mercado', `${nome} por ${precoTxt(r.preco, r.moeda)} — em retenção por mais de 20 min, NÃO vou esperar`, r.id);
+      aoeNota(`${nome} por ${precoTxt(r.preco, r.moeda)} — em RETENÇÃO, compro quando liberar (${Math.ceil(falta / 1000)} s)`);
+      await dormir(falta + 600);
+      if (!aoe.ativo) return aoeNota(`${nome}: sniper desligado enquanto esperava — não comprei`);
+    }
+    if (comprasHoje() >= aoe.maxDia) return aoeAviso('💥 TM AoE no Mercado', `${nome} por ${precoTxt(r.preco, r.moeda)} — NÃO comprei: já foram ${aoe.maxDia} compras nas últimas 24 h`, r.id);
+    core.send({ t: 'market.comprar', id: r.id, qtd: 1, preco: r.preco, moeda: r.moeda });
+    const ok = await new Promise((res) => {
+      const ws = core.ws;
+      const t = setTimeout(() => { ws?.removeEventListener('message', f); res(false); }, 8000);
+      function f(e) {
+        if (typeof e.data !== 'string' || !e.data.includes('marketComprado')) return;
+        let m; try { m = JSON.parse(e.data); } catch { return; }
+        if (!(m.ev ?? []).some((x) => x.k === 'marketComprado')) return;
+        clearTimeout(t); ws?.removeEventListener('message', f); res(true);
+      }
+      ws?.addEventListener('message', f);
+    });
+    if (ok) aoe.compras.push({ em: Date.now(), nome, preco: r.preco, moeda: r.moeda, vendedor: r.vendedor });
+    aoeAviso(ok ? '🛒 TM AoE comprado' : '💥 TM AoE no Mercado', ok ? `🛒 COMPREI ${nome} de ${r.vendedor} por ${precoTxt(r.preco, r.moeda)}`
+      : `${nome} de ${r.vendedor} por ${precoTxt(r.preco, r.moeda)} — tentei comprar e NÃO deu (outro comprador levou ou o anúncio saiu)`, ok ? null : r.id);
+  }
+
+  async function vigiarAoe() {
+    if (aoeLendo || !core.logado) return;
+    aoeLendo = true;
+    try {
+      const app = dadosApp();
+      const meus = new Set([...(app?.meusNicks ?? []), core.eu?.nick].filter(Boolean).map((n) => String(n).toLowerCase()));
+      const novos = [];
+      const agora = Date.now();
+      const primeira = !aoeBase;
+      for (let pagina = 0; pagina < 2; pagina++) {
+        const m = await pedir({ t: 'market.listar', tipo: 'pokemon', moeda: '', busca: '', ordem: 'recentes', criterios: [], elemento: '', categoria: '',
+          soShiny: false, soP5: false, soTmElemental: false, soTmAoe: true, semOutland: false, pagina, especieId: 0 },
+        (x) => x.aba === 'vitrine', 9000);
+        const linhas = (m.linhas ?? []).filter((a) => a.id != null);
+        for (const a of linhas) {
+          const k = String(a.id);
+          if (aoe.vistos[k]) continue;
+          aoe.vistos[k] = agora;
+          if (aoeBase) novos.push(a);
+        }
+        if (!m.temMais || !linhas.length) break;
+        await dormir(600);
+      }
+      // esquece ids com mais de 3 dias
+      for (const [k, em] of Object.entries(aoe.vistos)) if (agora - em > 3 * 24 * 3600_000) delete aoe.vistos[k];
+      aoeBase = true;
+      for (const a of novos) {
+        const f = a.ficha ?? {};
+        if (f.tmAoe === false || f.tm_aoe === false) continue; // o filtro do servidor já garante; isso é só a reconferência
+        const r = resumoFicha(a);
+        const nome = `${nomeAnuncio(a)} (AoE${f.tmElemental ? ` + ${f.tmElemental}` : ''})`;
+        if (!r.preco) continue;
+        if (meus.has(String(r.vendedor).toLowerCase())) { aoeNota(`${nome} — anúncio de conta sua (${r.vendedor}), ignorei`); continue; }
+        const orb = r.moeda === 'orb';
+        const compra = orb ? r.preco < aoe.compraOrb : r.preco <= aoe.tetoGold;
+        if (compra && r.qtd === 1 && (!a.estado || a.estado === 'aberto')) {
+          aoeNota(`novo: ${nome} de ${r.vendedor} por ${precoTxt(r.preco, r.moeda)} — dentro do limite, comprando`);
+          await aoeComprar(a, r, nome);
+        } else if (orb && r.preco >= aoe.compraOrb && r.preco <= aoe.alertaOrb) {
+          aoeAviso('💥 TM AoE no Mercado', `${nome} de ${r.vendedor} por ${precoTxt(r.preco, r.moeda)} (entre ${fmt(aoe.compraOrb)} e ${fmt(aoe.alertaOrb)} 💎 — não comprei)`, r.id);
+        } else {
+          aoeNota(`novo: ${nome} de ${r.vendedor} por ${precoTxt(r.preco, r.moeda)}${compra ? ` — ${r.qtd} unidades, não comprei` : ''}`);
+        }
+      }
+      aoeUltima = Date.now();
+      aoeMsg = primeira ? `1ª leitura ${dataHora(aoeUltima)}: memorizei os anúncios que já estavam lá — de agora em diante, só os novos`
+        : `lido ${dataHora(aoeUltima)}${novos.length ? ` · ${novos.length} novo(s)` : ''}`;
+      salvarAoe();
+    } catch (e) {
+      aoeMsg = `não deu para listar: ${e.message}`;
+    } finally {
+      aoeLendo = false;
+      if (document.getElementById('pv-fundo')?.classList.contains('aberto') && modo === 'favoritos') pintar();
+    }
+  }
+  const vigiaAoe = setInterval(() => { if (aoe.ativo && Date.now() - aoeUltima > 19_000) vigiarAoe(); }, 5_000);
+  limpezas.push(() => clearInterval(vigiaAoe));
+
+  function htmlAoe() {
+    return `<section>
+        <h4 class="pv-rot">💥 Sniper de TM AoE — anúncios novos de pokémon com AoE</h4>
+        <div class="pv-linha">
+          <button class="pv-bt ${aoe.ativo ? 'on' : ''}" data-a="aoeAtivo">${aoe.ativo ? '● vigiando (20 s)' : 'parado'}</button>
+          compra até <input type="number" class="pv-in" data-c="aoeTetoGold" min="1" value="${esc(aoe.tetoGold)}" style="width:120px"> 🪙
+          · abaixo de <input type="number" class="pv-in" data-c="aoeCompraOrb" min="1" value="${esc(aoe.compraOrb)}" style="width:70px"> 💎
+          · avisa até <input type="number" class="pv-in" data-c="aoeAlertaOrb" min="1" value="${esc(aoe.alertaOrb)}" style="width:70px"> 💎
+          · máx <input type="number" class="pv-in" data-c="aoeMaxDia" min="0" value="${esc(aoe.maxDia)}" style="width:44px"> compras/24 h
+        </div>
+        <p class="pv-ajuda">Ligue em UMA conta só (senão as contas disputam o mesmo anúncio). Compra sozinho anúncio NOVO de 1 pokémon com TM AoE em Coins até o teto ou em Gemas abaixo do limite; entre o limite e o "avisa até" em Gemas dá o aviso grande com 👁 ver o anúncio. Nunca compra de conta sua e espera a retenção. Compras nas últimas 24 h: <b>${comprasHoje()}</b>/${aoe.maxDia}. ${esc(aoeMsg)}</p>
+        ${aoe.log.length ? `<table class="pv-tab">${aoe.log.slice(0, 10).map((l) => `<tr><td>${dataHora(l.em)}</td><td style="text-align:left;white-space:normal">${esc(l.txt)}</td></tr>`).join('')}</table>` : ''}
+      </section>`;
+  }
+
   // ---------------------------------------------------------------- 🔎 vigiar uma espécie no Mercado
   // Lista TODOS os anúncios da espécie (`market.listar` com `especieId`) a cada N min e avisa — com o
   // aviso grande do app — quando aparece o pokémon PROCURADO, reconhecido pelo que não muda: potência,
@@ -1052,7 +1169,7 @@
         <button class="pv-bt ${modo === 'favoritos' ? 'on' : ''}" data-a="modo" data-v="favoritos">⭐ Favoritos</button>
         <button data-a="fechar" title="Fechar">×</button></span></header>`;
     if (modo === 'rebaixar') { modal.innerHTML = cab + htmlRepor() + htmlRebaixar(); return; }
-    if (modo === 'favoritos') { modal.innerHTML = cab + htmlEspecies() + htmlFavoritos(); if (!favUltima && !favLendo) vigiarFavoritos(true); if (!espUltima && !espLendo) vigiarEspecies(); return; }
+    if (modo === 'favoritos') { modal.innerHTML = cab + htmlAoe() + htmlEspecies() + htmlFavoritos(); if (!favUltima && !favLendo) vigiarFavoritos(true); if (!espUltima && !espLendo) vigiarEspecies(); return; }
     const foco = document.activeElement?.dataset?.c;
     const cursor = document.activeElement?.selectionStart;
 
@@ -1152,6 +1269,7 @@
     if (c === 'favTetoOrb' || c === 'favTetoGold') { if (e.type === 'change') { fav[c === 'favTetoOrb' ? 'tetoOrb' : 'tetoGold'] = Math.max(1, Number(e.target.value) || 1); salvarFav(); pintar(); } return; }
     if (c === 'prLimOrb' || c === 'prLimGold') { if (e.type === 'change') { const pr = esp.procurados.find((x) => x.id === e.target.dataset.v); if (pr) { pr.limite ??= {}; pr.limite[c === 'prLimOrb' ? 'orb' : 'gold'] = e.target.value === '' ? null : Math.max(0, Number(e.target.value) || 0); salvarEsp(); pintar(); } } return; }
     if (c === 'espCada') { if (e.type === 'change') { esp.cadaMin = Math.max(1, Math.min(60, Number(e.target.value) || 2)); salvarEsp(); pintar(); } return; }
+    if (['aoeTetoGold', 'aoeCompraOrb', 'aoeAlertaOrb', 'aoeMaxDia'].includes(c)) { if (e.type === 'change') { const k = { aoeTetoGold: 'tetoGold', aoeCompraOrb: 'compraOrb', aoeAlertaOrb: 'alertaOrb', aoeMaxDia: 'maxDia' }[c]; aoe[k] = Math.max(c === 'aoeMaxDia' ? 0 : 1, Number(e.target.value) || 0); salvarAoe(); pintar(); } return; }
     if (c === 'favCada') { if (e.type === 'change') { fav.cadaMin = Math.max(1, Math.min(60, Number(e.target.value) || 2)); salvarFav(); pintar(); } return; }
     if (c === 'reporTeto') { if (e.type === 'change') { repor.teto = Math.max(0, Math.min(1000, Number(e.target.value) || 0)); salvarRepor(); pintar(); } return; }
     if (c === 'rebDesc') { if (e.type === 'change') { reb.desconto = e.target.value === '' ? null : Number(e.target.value); pintar(); } return; }
@@ -1177,6 +1295,7 @@
     else if (a === 'rebPrecos') carregarMercadoReb();
     else if (a === 'rebPublicar') publicarReb();
     else if (a === 'verAnuncio') { if (!verAnuncio(b.dataset.v)) alert('Não deu para abrir o anúncio (o chat do jogo ainda não carregou).'); return; }
+    else if (a === 'aoeAtivo') { aoe.ativo = !aoe.ativo; if (aoe.ativo) { aoeBase = false; aoeUltima = 0; } aoeNota(aoe.ativo ? 'sniper LIGADO' : 'sniper desligado'); }
     else if (a === 'favAtivo') { fav.ativo = !fav.ativo; salvarFav(); }
     else if (a === 'favAgora') { vigiarFavoritos(true); }
     else if (a === 'espAtivo') { esp.ativo = !esp.ativo; salvarEsp(); }

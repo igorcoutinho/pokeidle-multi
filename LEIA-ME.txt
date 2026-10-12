@@ -99,6 +99,11 @@ COMPRAS E VENDAS — botão 💰 Vendas
     médio de compra (ou a margem escolhida) DEPOIS da taxa do Mercado.
   - Taxa: Coins 15%; Gemas 15% em itens e por faixas em pokémon (13% · 10% · 7,5%).
   - Clique num item para ver cada compra e venda.
+  - 💥 Sniper de TM AoE (aba ⭐ Favoritos, por conta — ligue em UMA só): a cada 20 s lê os anúncios
+    mais recentes de pokémon com TM AoE. Anúncio NOVO de 1 pokémon em Coins até 1 bi ou em Gemas
+    abaixo de 1.000: compra sozinho. Em Gemas de 1.000 a 2.000: aviso grande com 👁 ver o anúncio.
+    Nunca compra de conta sua, espera a retenção e para em 5 compras por 24 h (tudo editável).
+    Ao ligar, a 1ª leitura só memoriza o que já estava à venda.
 
 PvP — botão ⚔ PvP
   - A cada duelo, guarda a ORDEM em que o rival colocou os pokémon (e a sua), tirada da fita
