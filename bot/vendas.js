@@ -7,7 +7,7 @@
 // A comissão é a do jogo: `shared/taxa-mercado.mjs`, o mesmo arquivo que o servidor usa.
 (() => {
   'use strict';
-  const VERSAO_VENDAS = '1.7.0';
+  const VERSAO_VENDAS = '1.7.1';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -984,6 +984,7 @@
   .pv-bt{background:#5a3232;border:1px solid #8a5a4a;color:#f6e7d4;border-radius:6px;padding:4px 9px;cursor:pointer;font:inherit}
   .pv-bt:hover{background:#6e3d3d}.pv-bt.on{background:#b04ad0;border-color:#f3c77a;color:#fff}.pv-bt:disabled{opacity:.5;cursor:default}
   .pv-in{background:#2a1515;border:1px solid #8a5a4a;color:#f6e7d4;border-radius:6px;padding:4px 8px;font:inherit}
+  .pv-in::-webkit-outer-spin-button,.pv-in::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}.pv-in[type=number]{-moz-appearance:textfield;appearance:textfield}
   .pv-in[type=number]{width:64px}.pv-in[type=search]{width:200px}
   .pv-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px}
   .pv-card{background:#2a1515;border-radius:10px;padding:8px 10px}

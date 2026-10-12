@@ -10,7 +10,7 @@
 // TM) e o histórico paginado. Tudo salvo por conta.
 (() => {
   'use strict';
-  const VERSAO_ITENS = '1.5.2';
+  const VERSAO_ITENS = '1.5.4';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -388,6 +388,7 @@
   .pit-bt{background:#5a3232;border:1px solid #8a5a4a;color:#f6e7d4;border-radius:6px;padding:4px 9px;cursor:pointer;font:inherit}
   .pit-bt:hover{background:#6e3d3d}.pit-bt.on{background:#b04ad0;border-color:#f3c77a;color:#fff}.pit-bt:disabled{opacity:.5;cursor:default}
   .pit-in{background:#2a1515;border:1px solid #8a5a4a;color:#f6e7d4;border-radius:6px;padding:4px 8px;font:inherit}
+  .pit-in::-webkit-outer-spin-button,.pit-in::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}.pit-in[type=number]{-moz-appearance:textfield;appearance:textfield}
   .pit-sw{position:relative;width:44px;height:24px;border-radius:12px;background:#6a4a4a;cursor:pointer;border:none;flex:none}
   .pit-sw::after{content:'';position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#fff;transition:left .15s}
   .pit-sw.on{background:#2f9a4a}.pit-sw.on::after{left:23px}
@@ -419,7 +420,9 @@
   const XSH_ESPERA = 61_000; // 1 min do jogo + 1 s de garantia
   const pokes = () => core.eu?.pokemons ?? [];
   const segura = (p) => Number(p?.heldItemId) === XSH_ID;
-  const noDeposito = (p) => p && p.slot == null; // só pokémon guardado (fora da equipe) recebe pela automação
+  // Só pokémon da COLEÇÃO recebe: o jogo guarda a Coleção em `automation.pokemonTravado` (ids), fora da equipe.
+  const colecaoIds = () => new Set((core.eu?.automation?.pokemonTravado ?? []).map(Number));
+  const noDeposito = (p, col = colecaoIds()) => !!p && p.slot == null && col.has(Number(p.id));
   const nomePk = (p) => `${p.shiny ? '✨' : ''}${p.apelido || p.nick || p.nome} Nv ${fmt(p.level)}`;
   /** O que diferencia dois pokémon da mesma espécie: potência, qualidade e IV somado. */
   const idPk = (p) => {
@@ -503,21 +506,21 @@
       <section>
         <h4>Usando (${usando.length})</h4>
         ${usando.length ? `<table class="pit-tab"><tr><th>Pokémon</th><th>Onde</th><th>Tirar no nível</th><th></th></tr>
-          ${usando.map((p) => `<tr><td>${celNome(p)} ${btFicha(p)}</td><td>${p.slot != null ? `equipe #${p.slot + 1}` : 'guardado'}</td><td>${inAlvo(p)}${xsh.alvos[p.id] ? `<small>faltam ${fmt(Math.max(0, xsh.alvos[p.id] - p.level))} níveis</small>` : ''}</td>
+          ${usando.map((p) => `<tr><td>${celNome(p)} ${btFicha(p)}</td><td>${p.slot != null ? `equipe #${p.slot + 1}` : colecaoIds().has(Number(p.id)) ? 'coleção' : 'depósito'}</td><td>${inAlvo(p)}${xsh.alvos[p.id] ? `<small>faltam ${fmt(Math.max(0, xsh.alvos[p.id] - p.level))} níveis</small>` : ''}</td>
             <td><button class="pit-bt" data-a="xshTirar" data-v="${p.id}">➖ tirar agora</button></td></tr>`).join('')}</table>`
           : '<span class="pit-ajuda">Ninguém segura Exp Share agora.</span>'}
       </section>
       <section>
         <h4>Fila para receber (${filaNomes.length})</h4>
         ${filaNomes.length ? `<table class="pit-tab">${filaNomes.map((p, i) => `<tr><td>${i + 1}º</td><td style="text-align:left">${celNome(p)} ${btFicha(p)}</td><td>tirar no nível ${inAlvo(p)}</td>
-          <td><button class="pit-bt" data-a="xshSobe" data-v="${p.id}" ${i === 0 ? 'disabled' : ''}>↑</button><button class="pit-bt" data-a="xshFila" data-v="${p.id}">✕</button></td></tr>`).join('')}</table>`
+          <td>posição <input type="number" class="pit-in" data-c="xshPos" data-v="${p.id}" min="1" max="${filaNomes.length}" value="${i + 1}" style="width:48px"> <button class="pit-bt" data-a="xshFila" data-v="${p.id}" title="tirar da fila">✕</button></td></tr>`).join('')}</table>`
           : '<span class="pit-ajuda">Vazia — use "➕ fila" na lista abaixo.</span>'}
       </section>
       <section>
-        <h4>Podem usar — depósito</h4>
-        <div class="pit-linha"><input class="pit-in" data-c="xshBusca" placeholder="buscar pokémon…" value="${esc(xsh.busca ?? '')}" spellcheck="false" style="width:220px"><span class="pit-ajuda">só do depósito · mostrando ${podem.length} (menor nível primeiro)</span></div>
+        <h4>Podem usar — Coleção</h4>
+        <div class="pit-linha"><input class="pit-in" data-c="xshBusca" placeholder="buscar pokémon…" value="${esc(xsh.busca ?? '')}" spellcheck="false" style="width:220px"><span class="pit-ajuda">só da Coleção · mostrando ${podem.length} (menor nível primeiro)${colecaoIds().size ? '' : ' — sua Coleção está vazia (no jogo: Depot → mover para a Coleção)'}</span></div>
         <table class="pit-tab"><tr><th>Pokémon</th><th>Onde</th><th>Tirar no nível</th><th></th></tr>
-          ${podem.map((p) => `<tr><td>${celNome(p)} ${btFicha(p)}</td><td>${p.slot != null ? `equipe #${p.slot + 1}` : 'guardado'}</td><td>${inAlvo(p)}</td>
+          ${podem.map((p) => `<tr><td>${celNome(p)} ${btFicha(p)}</td><td>coleção</td><td>${inAlvo(p)}</td>
             <td><button class="pit-bt ${xsh.fila.includes(p.id) ? 'on' : ''}" data-a="xshFila" data-v="${p.id}">${xsh.fila.includes(p.id) ? `na fila (${xsh.fila.indexOf(p.id) + 1}º)` : '➕ fila'}</button>
               <button class="pit-bt" data-a="xshColocar" data-v="${p.id}" ${naBolsa < 1 ? 'disabled title="sem Exp Share na bolsa"' : ''}>colocar agora</button></td></tr>`).join('')}
         </table>
@@ -538,6 +541,7 @@
       const c = e.target.dataset.c;
       if (c === 'boss') { cfg.boss = e.target.value; pagina = 0; salvarCfg(); pintar(); }
       if (c === 'xshAlvo') { const v = e.target.value; if (v === '') delete xsh.alvos[e.target.dataset.v]; else xsh.alvos[e.target.dataset.v] = Math.max(1, Number(v) || 1); salvarXsh(); pintar(); }
+      if (c === 'xshPos') { const id = Number(e.target.dataset.v); const de = xsh.fila.indexOf(id); const para = Math.max(0, Math.min(xsh.fila.length - 1, (Number(e.target.value) || 1) - 1)); if (de >= 0) { xsh.fila.splice(de, 1); xsh.fila.splice(para, 0, id); salvarXsh(); } pintar(); }
       if (c === 'xshBusca') { xsh.busca = e.target.value; pintar(); }
       if (c === 'tokenGemas') { cfg.tokenGemas = e.target.value === '' ? null : Math.max(0, Number(e.target.value) || 0); salvarCfg(); pintar(); }
       if (c === 'tokensPadrao') { cfg.tokensPadrao = Math.max(0, Math.min(20, Number(e.target.value) || 0)); salvarCfg(); pintar(); }
@@ -699,7 +703,6 @@
     }
     else if (a === 'xshFicha') { if (!verFicha(Number(b.dataset.v))) alert('Não deu para abrir a ficha (o chat do jogo ainda não carregou).'); return; }
     else if (a === 'xshFila') { const id = Number(b.dataset.v); xsh.fila = xsh.fila.includes(id) ? xsh.fila.filter((x) => x !== id) : [...xsh.fila, id]; salvarXsh(); }
-    else if (a === 'xshSobe') { const id = Number(b.dataset.v); const i = xsh.fila.indexOf(id); if (i > 0) { xsh.fila.splice(i, 1); xsh.fila.splice(i - 1, 0, id); salvarXsh(); } }
     salvarCfg();
     pintar();
   }

@@ -18,7 +18,7 @@
 //    (vitórias > derrotas), encerra de vez. Enquanto a sessão roda, ela substitui a trava do item 2.
 (() => {
   'use strict';
-  const VERSAO_PVP = '1.20.0';
+  const VERSAO_PVP = '1.20.1';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -1604,6 +1604,7 @@
   .ppvp-sw::after{content:'';position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#fff;transition:left .15s}
   .ppvp-sw.on{background:#2f9a4a}.ppvp-sw.on::after{left:23px}
   .ppvp-in{background:#2a1515;border:1px solid #8a5a4a;color:#f6e7d4;border-radius:6px;padding:4px 8px;font:inherit}
+  .ppvp-in::-webkit-outer-spin-button,.ppvp-in::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}.ppvp-in[type=number]{-moz-appearance:textfield;appearance:textfield}
   .ppvp-in[type=number]{width:56px}
   .ppvp-bt{background:#5a3232;border:1px solid #8a5a4a;color:#f6e7d4;border-radius:6px;padding:3px 8px;cursor:pointer;font:inherit}
   .ppvp-tab{width:100%;border-collapse:collapse;font-size:12px}
