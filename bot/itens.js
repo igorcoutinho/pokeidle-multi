@@ -8,17 +8,9 @@
 // Aba "Boss": cada luta contra boss fica gravada — o evento `bossMorto` traz o nome e os drops,
 // `bossPerdeu` marca a derrota. Resumo por boss (lutas, vitórias, drops por luta, % com peça de
 // TM) e o histórico paginado. Tudo salvo por conta.
-//
-// Aba "Multi-acc": lê as TRANSAÇÕES desses itens na tabela de preços global do Mercado
-// (`market.historicoGlobal`: vendedor, comprador, valor, hora) e os anúncios abertos
-// (`market.item`), e marca TODOS os nicks com cara de
-// gerados (PalavraPalavra + números, ex.: KantoHeart857, wingmenLegate4B). Para os suspeitos,
-// lê o perfil público (`ranking.perfil`: nível, capturas, Pokédex, guild) e junta quem anuncia
-// pelo mesmo preço. Só junta evidência para VOCÊ reportar — não faz nada com as contas.
 (() => {
   'use strict';
-  const VERSAO_ITENS = '1.4.0';
-  const LITE = window.__pokeVariante === 'lite'; // versão Lite do app: sem a aba Multi-acc
+  const VERSAO_ITENS = '1.5.0';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -57,8 +49,11 @@
 
   const ler = (k, padrao) => { try { return JSON.parse(localStorage.getItem(k)) ?? padrao; } catch { return padrao; } };
   const gravar = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
-  const NICKS_INICIAIS = ['wingmenLegate4B', 'emeraldLogouts2q', 'KantoHeart857', 'BlazeRider497', 'AceWave299'];
-  const cfg = { aba: 'principais', periodo: '7d', boss: '', tokensPadrao: 1, custoBoss: {}, moedaLucro: 'orb', tokenGemas: 5, monitor: false, cadaMin: 10, conhecidos: NICKS_INICIAIS.join('\n'), ...ler(CHAVE_CFG, {}) };
+  const cfg = { aba: 'principais', periodo: '7d', boss: '', tokensPadrao: 1, custoBoss: {}, moedaLucro: 'orb', tokenGemas: 5, ...ler(CHAVE_CFG, {}) };
+  // O antigo 🕵 Multi-acc saiu (pesava): limpa o que ele guardou e a aba, se estava aberta nela.
+  for (const k of ['pokeitens.vendedores.v1', 'pokeitens.transacoes.v1', 'pokeitens.varredura.em']) { try { localStorage.removeItem(k); } catch {} }
+  for (const k of ['monitor', 'cadaMin', 'conhecidos']) delete cfg[k];
+  if (cfg.aba === 'multi') cfg.aba = 'principais';
   const salvarCfg = () => gravar(CHAVE_CFG, cfg);
   let drops = ler(CHAVE_DROPS, {});
   let bosses = ler(CHAVE_BOSS, []);
@@ -319,18 +314,6 @@
           salvarCfg();
         }
       }, 0);
-    } else if (esperas.size && d.includes('"t":"market"') && d.includes('"aba":"item"')) {
-      let m;
-      try { m = JSON.parse(d); } catch { return; }
-      esperas.get(`item:${m.itemId}:${m.moeda}`)?.(m);
-    } else if (esperas.size && d.includes('"t":"market"') && d.includes('"aba":"historicoGlobal"')) {
-      let m;
-      try { m = JSON.parse(d); } catch { return; }
-      esperas.get('hist')?.(m);
-    } else if (esperas.size && d.includes('"t":"perfil"')) {
-      let m;
-      try { m = JSON.parse(d); } catch { return; }
-      esperas.get(`perfil:${String(m.perfil?.nick ?? '').toLowerCase()}`)?.(m);
     } else if (d.includes('"t":"market"') && d.includes('"aba":"itens"')) {
       let m;
       try { m = JSON.parse(d); } catch { return; }
@@ -423,277 +406,6 @@
   .pit-v{color:#7fdc8f;font-weight:800}.pit-d{color:#ff8a8a;font-weight:800}
   .pit-ajuda{opacity:.65;font-size:11px}
   .pit-pags{display:flex;gap:8px;align-items:center;justify-content:center;margin-top:8px}`;
-
-  // ---------------------------------------------------------------- multi-acc (vendedores suspeitos)
-  const CHAVE_VEND = 'pokeitens.vendedores.v1'; // { nick minúsculo: { nick, primeiro, ultimo, varreduras, itens, perfil, marcado } }
-  const VIGIADOS = [
-    { id: 70000, nome: 'Bronze Boss Token' }, { id: 70011, nome: 'Key Fragment' }, { id: 70012, nome: 'Shiny Stone Fragment' },
-    { id: 70015, nome: 'Mega Shiny Fragment' }, { id: 70040, nome: 'Chave (comum)' }, { id: 70041, nome: 'Chave (incomum)' },
-    { id: 70042, nome: 'Chave (rara)' }, { id: 70043, nome: 'Chave (mítica)' }, { id: 70044, nome: 'Chave (lendária)' },
-  ];
-  const nomeVigiado = (id) => nomeItem(id, VIGIADOS.find((x) => x.id === Number(id))?.nome);
-  let vend = ler(CHAVE_VEND, {});
-  // As transações lidas: [{ k, em, item, desc, vendedor, comprador, valor, moeda }] (as mais novas primeiro).
-  const CHAVE_TRANS = 'pokeitens.transacoes.v1';
-  const TRANS_MAX = 4000;
-  let trans = ler(CHAVE_TRANS, []);
-  const chaveTrans = (l) => `${l.em}|${l.vendedor}|${l.comprador}|${l.bruto}|${l.descricao}`;
-  const salvarVend = () => gravar(CHAVE_VEND, vend);
-  const varre = { rodando: false, msg: '', ultima: Number(ler('pokeitens.varredura.em', 0)) || 0 };
-  const esperas = new Map(); // 'item:ID:moeda' | 'perfil:nick' → resolve
-
-  /** Cara de nick gerado: duas palavras coladas + 1–4 números (às vezes com uma letra no fim). */
-  function nickEstranho(n) {
-    const s = String(n ?? '');
-    const motivos = [];
-    if (/^[a-z]+[A-Z][a-z]+\d{1,3}[A-Za-z]$/.test(s)) motivos.push('palavra+Palavra+número+letra');
-    else if (/^[A-Za-z][a-z]+[A-Z][a-z]+\d{2,4}$/.test(s)) motivos.push('PalavraPalavra+número');
-    else if (/^[A-Za-z]{4,}\d{3,4}$/.test(s)) motivos.push('nome+3-4 números');
-    return motivos;
-  }
-  const conhecidos = () => new Set(String(cfg.conhecidos ?? '').split(/[\s,;]+/).map((x) => x.trim().toLowerCase()).filter(Boolean));
-
-  /** Pontos de suspeita e os porquês (para o relatório). */
-  function suspeita(v) {
-    const motivos = [...nickEstranho(v.nick)];
-    let pts = !motivos.length ? 0 : motivos[0] === 'nome+3-4 números' ? 1 : 2; // "Pedro123" é comum: pesa menos
-    if (conhecidos().has(v.nick.toLowerCase())) { pts += 3; motivos.push('na sua lista'); }
-    const itens = Object.keys(v.itens ?? {}).length;
-    if (itens >= 2) { pts += 1; motivos.push(`vende ${itens} dos itens vigiados`); }
-    const pf = v.perfil;
-    if (pf && !pf.erro) {
-      if ((pf.dex ?? 0) <= 30) { pts += 1; motivos.push(`Pokédex ${pf.dex ?? 0}`); }
-      if (!pf.guild) { pts += 1; motivos.push('sem guild'); }
-      if ((pf.conquistas ?? 0) <= 3) { pts += 1; motivos.push(`${pf.conquistas ?? 0} conquistas`); }
-    }
-    const mesmos = mesmoPreco(v);
-    if (mesmos.length) { pts += 2; motivos.push(`mesmo preço que ${mesmos.slice(0, 3).join(', ')}`); }
-    const t = v.trans;
-    if (t?.vendas + t?.compras >= 3) { pts += 1; motivos.push(`${t.vendas} vendas / ${t.compras} compras desses itens`); }
-    const g = grupoDe(v.nick);
-    if (g) { pts += 3; motivos.push(`ligado a ${g.estranhos.filter((n) => !mesmoNickI(n, v.nick)).slice(0, 3).join(', ')} via ${g.hub}`); }
-    return { pts, motivos };
-  }
-
-  /** Outros vendedores com nick estranho anunciando o MESMO item pelo MESMO preço. */
-  function mesmoPreco(v) {
-    const out = new Set();
-    for (const [id, it] of Object.entries(v.itens ?? {})) {
-      for (const o of Object.values(vend)) {
-        if (o === v || !nickEstranho(o.nick).length && !conhecidos().has(o.nick.toLowerCase())) continue;
-        const x = o.itens?.[id];
-        if (x && x.precos?.some((pr) => it.precos?.includes(pr))) out.add(o.nick);
-      }
-    }
-    return [...out];
-  }
-
-  const mesmoNickI = (a, b) => String(a ?? '').toLowerCase() === String(b ?? '').toLowerCase();
-  const suspeitoNick = (n) => nickEstranho(n).length > 0 && nickEstranho(n)[0] !== 'nome+3-4 números' || conhecidos().has(String(n).toLowerCase());
-
-  /**
-   * GRUPOS: quem negocia com 2+ contas de nick estranho (o "hub" — a conta principal que recebe
-   * os itens, ou a que abastece as outras). Cada grupo: o hub, as contas estranhas ligadas a ele e
-   * as transações entre eles.
-   */
-  let gruposCache = null;
-  function grupos() {
-    if (gruposCache) return gruposCache;
-    const lig = new Map(); // hub → Map(estranho → { n, valor, vende, compra })
-    for (const t of trans) {
-      for (const [a, b, papel] of [[t.vendedor, t.comprador, 'vende'], [t.comprador, t.vendedor, 'compra']]) {
-        if (!a || !b || !suspeitoNick(a)) continue;
-        const m = lig.get(b.toLowerCase()) ?? new Map();
-        const x = m.get(a.toLowerCase()) ?? { nick: a, n: 0, valor: 0, vende: 0, compra: 0 };
-        x.n++; x.valor += Number(t.valor) || 0; x[papel]++;
-        m.set(a.toLowerCase(), x);
-        lig.set(b.toLowerCase(), m);
-      }
-    }
-    const nickReal = (k) => trans.find((t) => mesmoNickI(t.vendedor, k))?.vendedor ?? trans.find((t) => mesmoNickI(t.comprador, k))?.comprador ?? k;
-    gruposCache = [...lig.entries()].filter(([, m]) => m.size >= 2)
-      .map(([hub, m]) => ({ hub: nickReal(hub), hubEstranho: suspeitoNick(nickReal(hub)), estranhos: [...m.values()].map((x) => x.nick), lig: [...m.values()].sort((a, b) => b.n - a.n),
-        n: [...m.values()].reduce((t, x) => t + x.n, 0) }))
-      .sort((a, b) => b.estranhos.length - a.estranhos.length || b.n - a.n);
-    return gruposCache;
-  }
-  const grupoDe = (nick) => grupos().find((g) => mesmoNickI(g.hub, nick) || g.estranhos.some((n) => mesmoNickI(n, nick))) ?? null;
-
-  /** Recalcula o resumo de transações de cada nick (e cria a ficha de quem só aparece nelas). */
-  function resumirTransacoes() {
-    gruposCache = null;
-    for (const v of Object.values(vend)) v.trans = { vendas: 0, compras: 0, com: [] };
-    for (const t of trans) {
-      for (const [nick, papel, outro] of [[t.vendedor, 'vendas', t.comprador], [t.comprador, 'compras', t.vendedor]]) {
-        if (!nick) continue;
-        const k = nick.toLowerCase();
-        if (!vend[k] && !suspeitoNick(nick) && !grupoDe(nick)) continue; // gente normal sem ligação: não guarda ficha
-        const v = (vend[k] ??= { nick, primeiro: t.em, ultimo: 0, varreduras: 0, itens: {}, perfil: null, marcado: false });
-        v.trans ??= { vendas: 0, compras: 0, com: [] };
-        v.trans[papel]++;
-        v.primeiro = Math.min(v.primeiro, t.em);
-        if (outro && !v.trans.com.includes(outro) && v.trans.com.length < 8) v.trans.com.push(outro);
-      }
-    }
-  }
-
-  function esperar(chave, ms = 7000) {
-    return new Promise((res) => {
-      const t = setTimeout(() => { esperas.delete(chave); res(null); }, ms);
-      esperas.set(chave, (m) => { clearTimeout(t); esperas.delete(chave); res(m); });
-    });
-  }
-  const dormir = (ms) => new Promise((r) => setTimeout(r, ms));
-
-  function anotarAnuncio(itemId, moeda, a) {
-    const nick = String(a.vendedor ?? '').trim();
-    if (!nick || nick.toLowerCase() === String(core.eu?.nick ?? '').toLowerCase()) return;
-    const k = nick.toLowerCase();
-    const v = (vend[k] ??= { nick, primeiro: Date.now(), ultimo: 0, varreduras: 0, itens: {}, perfil: null, marcado: false });
-    v.nick = nick;
-    v.ultimo = Date.now();
-    const it = (v.itens[itemId] ??= { anuncios: 0, qtdMax: 0, precos: [], moedas: [] });
-    it.anuncios++;
-    it.qtdMax = Math.max(it.qtdMax, Number(a.qtd) || 0);
-    const pr = `${moeda === 'orb' ? '💎' : '🪙'}${Number(a.preco) || 0}`;
-    if (!it.precos.includes(pr)) it.precos = [pr, ...it.precos].slice(0, 6);
-  }
-
-  async function lerPerfil(v) {
-    if (!core.send({ t: 'ranking.perfil', nick: v.nick })) return;
-    const m = await esperar(`perfil:${v.nick.toLowerCase()}`);
-    setTimeout(() => document.getElementById('perfil')?.classList.add('hidden'), 0);
-    const p = m?.perfil;
-    v.perfil = p
-      ? { em: Date.now(), level: p.level ?? null, capturas: p.capturas ?? null, dex: p.capturasEsp ?? null, guild: p.guildTag || p.guildNome || '',
-          conquistas: Array.isArray(p.conquistas) ? p.conquistas.length : (Number(p.conquistas) || 0), pvp: p.pvpRank ?? null, shinys: p.shinysVistos ?? null }
-      : { em: Date.now(), erro: 'perfil não respondeu' };
-  }
-
-  async function varrer() {
-    if (varre.rodando || !core.logado) return;
-    varre.rodando = true;
-    try {
-      // 1) TRANSAÇÕES: a tabela de preços global, filtrada por item, até achar o que já foi lido.
-      const conhecidas = new Set(trans.map((t) => t.k));
-      const novas = [];
-      for (const it of VIGIADOS) {
-        const paginasMax = trans.length ? 4 : 10; // a primeira varredura vai mais fundo
-        for (let pg = 0; pg < paginasMax; pg++) {
-          varre.msg = `transações de ${nomeVigiado(it.id)} (página ${pg + 1})…`;
-          if (estaAberto() && cfg.aba === 'multi') pintar();
-          if (!core.send({ t: 'market.historicoGlobal', pagina: pg, tipo: 'item', itemId: it.id })) break;
-          const m = await esperar('hist');
-          const linhas = m?.linhas ?? [];
-          let repetidas = 0;
-          for (const l of linhas) {
-            const k = chaveTrans(l);
-            if (conhecidas.has(k)) { repetidas++; continue; }
-            conhecidas.add(k);
-            novas.push({ k, em: Number(l.em) || Date.now(), item: it.id, desc: l.descricao ?? '', vendedor: l.vendedor ?? '', comprador: l.comprador ?? '', valor: Number(l.bruto) || 0, moeda: l.moeda ?? 'gold' });
-          }
-          await dormir(1200);
-          if (!m?.temMais || !linhas.length || repetidas === linhas.length) break;
-        }
-      }
-      trans = [...novas, ...trans].sort((a, b) => b.em - a.em).slice(0, TRANS_MAX);
-      gravar(CHAVE_TRANS, trans);
-      resumirTransacoes();
-      // 2) ANÚNCIOS abertos agora.
-      const vistosAgora = new Set();
-      for (const it of VIGIADOS) {
-        for (const moeda of ['gold', 'orb']) {
-          varre.msg = `lendo ${nomeItem(it.id, it.nome)} (${moeda === 'orb' ? 'Gemas' : 'Coins'})…`;
-          if (estaAberto() && cfg.aba === 'multi') pintar();
-          if (!core.send({ t: 'market.item', itemId: it.id, moeda })) continue;
-          const m = await esperar(`item:${it.id}:${moeda}`);
-          for (const a of m?.linhas ?? []) { anotarAnuncio(it.id, moeda, a); vistosAgora.add(String(a.vendedor ?? '').toLowerCase()); }
-          await dormir(1200);
-        }
-      }
-      for (const k of vistosAgora) if (vend[k]) vend[k].varreduras++;
-      // Perfil dos suspeitos (nick estranho ou da sua lista), no máximo 1 vez por dia cada.
-      const fila = Object.values(vend).filter((v) => (nickEstranho(v.nick).length || conhecidos().has(v.nick.toLowerCase()))
-        && (!v.perfil || Date.now() - v.perfil.em > DIA)).slice(0, 15);
-      for (const v of fila) {
-        varre.msg = `perfil de ${v.nick}…`;
-        if (estaAberto() && cfg.aba === 'multi') pintar();
-        await lerPerfil(v);
-        await dormir(2500);
-      }
-      // Os nicks da sua lista que não estão vendendo agora: lê o perfil mesmo assim (uma vez por dia).
-      for (const k of conhecidos()) {
-        if (vend[k]?.perfil && Date.now() - vend[k].perfil.em < DIA) continue;
-        const v = (vend[k] ??= { nick: String(cfg.conhecidos).split(/[\s,;]+/).find((x) => x.toLowerCase() === k) ?? k, primeiro: Date.now(), ultimo: 0, varreduras: 0, itens: {}, perfil: null, marcado: false });
-        varre.msg = `perfil de ${v.nick}…`;
-        await lerPerfil(v);
-        await dormir(2500);
-      }
-      varre.ultima = Date.now();
-      gravar('pokeitens.varredura.em', varre.ultima);
-      varre.msg = `varredura feita: ${novas.length} transações novas (${trans.length} guardadas) · ${vistosAgora.size} vendedores com anúncio aberto`;
-      salvarVend();
-    } finally {
-      varre.rodando = false;
-      if (estaAberto()) pintar();
-    }
-  }
-  // Monitor: com ele ligado NESTA conta, varre a cada N minutos.
-  const relogio = setInterval(() => {
-    if (LITE) return; // versão Lite: sem o monitor de multi-acc
-    if (cfg.monitor && !varre.rodando && Date.now() - varre.ultima > Math.max(5, Number(cfg.cadaMin) || 10) * 60_000) varrer();
-  }, 30_000);
-  limpezas.push(() => clearInterval(relogio));
-
-  function relatorio(lista) {
-    const linhas = lista.map(({ v, s: sp }) => {
-      const pf = v.perfil && !v.perfil.erro ? `Nv ${v.perfil.level ?? '?'}, ${fmt(v.perfil.capturas ?? 0)} capturas, Pokédex ${v.perfil.dex ?? '?'}, guild: ${v.perfil.guild || 'nenhuma'}` : 'perfil não lido';
-      const itens = Object.entries(v.itens).map(([id, it]) => `${nomeVigiado(id)} (até ${it.qtdMax} un., ${it.precos.join(' / ')})`).join('; ') || 'nenhum anúncio visto';
-      const tr = v.trans ? `${v.trans.vendas} vendas e ${v.trans.compras} compras desses itens${v.trans.com.length ? ` (com: ${v.trans.com.join(', ')})` : ''}` : 'sem transações lidas';
-      return `• ${v.nick} — ${pf}\n  Anúncios: ${itens}\n  Transações: ${tr}\n  Visto de ${quando(v.primeiro)} a ${quando(v.ultimo || v.primeiro)} · indícios: ${sp.motivos.join(', ') || '—'}`;
-    });
-    const gs = grupos().filter((g) => lista.some(({ v }) => grupoDe(v.nick) === g)).slice(0, 8);
-    const txtGrupos = gs.length ? `\n\nGrupos (contas de nick gerado que negociam com a mesma conta):\n${gs.map((g) => `• ${g.hub} ⇄ ${g.lig.map((x) => `${x.nick} (${x.vende ? `vendeu ${x.vende}× para ele` : ''}${x.vende && x.compra ? ', ' : ''}${x.compra ? `comprou ${x.compra}× dele` : ''})`).join(', ')}`).join('\n')}` : '';
-    return `Possíveis multi-contas negociando itens raros no Mercado (levantamento automático, ${quando(Date.now())}):\n\n${linhas.join('\n\n')}${txtGrupos}\n\nObs.: indícios, não prova — peço que a moderação confira IP/dispositivo.`;
-  }
-
-  function htmlMulti() {
-    const todos = Object.values(vend).map((v) => ({ v, s: suspeita(v) }))
-      .filter((x) => x.s.pts >= 2 || x.v.marcado)
-      .sort((a, b) => Number(b.v.marcado) - Number(a.v.marcado) || b.s.pts - a.s.pts || (b.v.ultimo - a.v.ultimo));
-    const total = Object.keys(vend).length;
-    return `<section>
-        <div class="pit-linha">
-          <button class="pit-sw ${cfg.monitor ? 'on' : ''}" data-a="monitor"></button>
-          <b>Monitorar nesta conta</b> · a cada <input type="number" class="pit-in" data-c="cadaMin" min="5" max="120" value="${esc(cfg.cadaMin)}"> min
-          <button class="pit-bt" data-a="varrer" ${varre.rodando ? 'disabled' : ''}>${varre.rodando ? 'varrendo…' : '🔎 varrer agora'}</button>
-          <button class="pit-bt" data-a="copiarRel" ${todos.length ? '' : 'disabled'}>📋 copiar relatório</button>
-          <span class="pit-ajuda">${esc(varre.msg)}${varre.ultima ? ` · última: ${quando(varre.ultima)}` : ''} · ${total} contas com ficha · ${trans.length} transações</span>
-        </div>
-        <p class="pit-ajuda" style="margin:2px 0">Vigia: ${VIGIADOS.map((x) => esc(nomeItem(x.id, x.nome))).join(', ')}. Ligue o monitor em UMA conta só (cada varredura lê as transações desses itens na tabela de preços global e os anúncios abertos — ~1 a 2 min).</p>
-        <details><summary class="pit-ajuda">Nicks que você já desconfia (um por linha)</summary>
-          <textarea class="pit-in" data-c="conhecidos" rows="5" style="width:100%;font-family:monospace">${esc(cfg.conhecidos)}</textarea></details>
-      </section>
-      ${(() => { const gs = grupos().slice(0, 10); return gs.length ? `<section><h4 style="margin:0 0 4px;color:#f3c77a">🔗 Grupos — contas de nick gerado que negociam com a mesma conta</h4>
-        <table class="pit-tab"><tr><th>Conta central</th><th>Contas ligadas</th><th>Transações</th></tr>
-        ${gs.map((g) => `<tr><td><b>${esc(g.hub)}</b>${g.hubEstranho ? ' <small style="color:#ff8a8a">(nick gerado)</small>' : ''}</td>
-          <td style="white-space:normal;text-align:left">${g.lig.map((x) => `${esc(x.nick)} <small>(${x.vende ? `vendeu ${x.vende}×` : ''}${x.vende && x.compra ? ' · ' : ''}${x.compra ? `comprou ${x.compra}×` : ''})</small>`).join(', ')}</td>
-          <td>${g.n}</td></tr>`).join('')}</table></section>` : ''; })()}
-      <section>
-        ${todos.length ? `<table class="pit-tab"><tr><th></th><th>Vendedor</th><th>Pontos</th><th>Indícios</th><th>Anúncios</th><th>Transações</th><th>Perfil</th><th>Visto</th></tr>
-          ${todos.map(({ v, s: sp }) => `<tr>
-            <td><input type="checkbox" data-a="marcar" data-v="${esc(v.nick.toLowerCase())}" ${v.marcado ? 'checked' : ''} title="incluir no relatório"></td>
-            <td><b>${esc(v.nick)}</b></td>
-            <td><b style="color:${sp.pts >= 5 ? '#ff8a8a' : sp.pts >= 3 ? '#f3c77a' : '#ddd'}">${sp.pts}</b></td>
-            <td style="white-space:normal;max-width:220px">${esc(sp.motivos.join(' · '))}</td>
-            <td style="white-space:normal;max-width:240px">${Object.entries(v.itens).map(([id, it]) => `${esc(nomeVigiado(id))}: ${it.qtdMax} un. ${esc(it.precos.join(' / '))}`).join('<br>') || '<span class="pit-ajuda">—</span>'}</td>
-            <td style="white-space:normal;max-width:200px">${v.trans && (v.trans.vendas || v.trans.compras) ? `${v.trans.vendas} vendas · ${v.trans.compras} compras${v.trans.com.length ? `<br><small>com: ${esc(v.trans.com.slice(0, 4).join(', '))}</small>` : ''}` : '<span class="pit-ajuda">—</span>'}</td>
-            <td>${v.perfil ? (v.perfil.erro ? `<span class="pit-ajuda">${esc(v.perfil.erro)}</span>` : `Nv ${esc(v.perfil.level ?? '?')} · ${fmt(v.perfil.capturas ?? 0)} capt. · dex ${esc(v.perfil.dex ?? '?')} · ${v.perfil.guild ? esc(v.perfil.guild) : 'sem guild'}`) : '<span class="pit-ajuda">—</span>'}</td>
-            <td><small>${quando(v.primeiro)}<br>${v.ultimo ? quando(v.ultimo) : 'não vendendo'} · ${v.varreduras}×</small></td></tr>`).join('')}</table>`
-          : '<span class="pit-ajuda">Nenhum suspeito ainda — clique em "varrer agora".</span>'}
-        <p class="pit-ajuda">Pontos: ligado a outras contas de nick gerado pela mesma conta central (+3), 3+ transações desses itens (+1), nick com cara de gerado (+2), na sua lista (+3), vende 2+ itens vigiados (+1), Pokédex ≤ 30 (+1), sem guild (+1), ≤ 3 conquistas (+1), mesmo preço de outro suspeito no mesmo item (+2). São INDÍCIOS para a moderação conferir — não prova.</p>
-      </section>`;
-  }
 
   // ---------------------------------------------------------------- 🎒 Exp Share (item segurado)
   // Quem segura o Exp. Share (item 70050, `heldItemId`) ganha uma % do XP de cada abate do pokémon de
@@ -803,8 +515,6 @@
       if (c === 'xshBusca') { xsh.busca = e.target.value; pintar(); }
       if (c === 'tokenGemas') { cfg.tokenGemas = e.target.value === '' ? null : Math.max(0, Number(e.target.value) || 0); salvarCfg(); pintar(); }
       if (c === 'tokensPadrao') { cfg.tokensPadrao = Math.max(0, Math.min(20, Number(e.target.value) || 0)); salvarCfg(); pintar(); }
-      if (c === 'cadaMin') { cfg.cadaMin = Math.max(5, Math.min(120, Number(e.target.value) || 10)); salvarCfg(); pintar(); }
-      if (c === 'conhecidos') { cfg.conhecidos = e.target.value; salvarCfg(); pintar(); }
     });
     const aoEsc = (e) => { if (e.key === 'Escape' && fundo.classList.contains('aberto')) fechar(); };
     document.addEventListener('keydown', aoEsc);
@@ -933,10 +643,9 @@
         <span class="pit-linha" style="margin:0">
           <button class="pit-bt ${cfg.aba === 'principais' ? 'on' : ''}" data-a="aba" data-v="principais">Principais</button>
           <button class="pit-bt ${cfg.aba === 'boss' ? 'on' : ''}" data-a="aba" data-v="boss">Boss</button>
-          ${LITE ? '' : `<button class="pit-bt ${cfg.aba === 'multi' ? 'on' : ''}" data-a="aba" data-v="multi">🕵 Multi-acc</button>`}
           <button class="pit-bt ${cfg.aba === 'xsh' ? 'on' : ''}" data-a="aba" data-v="xsh">🎒 Exp Share</button>
           <button class="pit-x" data-a="fechar" title="Fechar">×</button></span></header>
-      ${cfg.aba === 'boss' ? htmlBoss() : cfg.aba === 'multi' && !LITE ? htmlMulti() : cfg.aba === 'xsh' ? htmlXsh() : htmlPrincipais()}`;
+      ${cfg.aba === 'boss' ? htmlBoss() : cfg.aba === 'xsh' ? htmlXsh() : htmlPrincipais()}`;
   }
 
   function aoClicar(e) {
@@ -964,15 +673,6 @@
     }
     else if (a === 'xshFila') { const id = Number(b.dataset.v); xsh.fila = xsh.fila.includes(id) ? xsh.fila.filter((x) => x !== id) : [...xsh.fila, id]; salvarXsh(); }
     else if (a === 'xshSobe') { const id = Number(b.dataset.v); const i = xsh.fila.indexOf(id); if (i > 0) { xsh.fila.splice(i, 1); xsh.fila.splice(i - 1, 0, id); salvarXsh(); } }
-    else if (a === 'monitor') { cfg.monitor = !cfg.monitor; if (cfg.monitor && Date.now() - varre.ultima > 5 * 60_000) varrer(); }
-    else if (a === 'varrer') varrer();
-    else if (a === 'marcar') { const v = vend[b.dataset.v]; if (v) { v.marcado = b.checked; salvarVend(); } }
-    else if (a === 'copiarRel') {
-      const todos = Object.values(vend).map((v) => ({ v, s: suspeita(v) })).filter((x) => x.s.pts >= 2 || x.v.marcado);
-      const marcados = todos.filter((x) => x.v.marcado);
-      const txt = relatorio((marcados.length ? marcados : todos.filter((x) => x.s.pts >= 4)).sort((x, y) => y.s.pts - x.s.pts));
-      navigator.clipboard?.writeText(txt).then(() => { varre.msg = '📋 relatório copiado'; pintar(); }).catch(() => { varre.msg = 'não deu para copiar'; pintar(); });
-    }
     salvarCfg();
     pintar();
   }

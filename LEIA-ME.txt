@@ -26,13 +26,6 @@ ITENS E BOSS — botão 📦 Itens
     anunciado agora (Coins e Gemas), média de venda de 7 dias, quanto a bolsa vale líquida da
     taxa, quanto você já vendeu (usa o extrato do 💰 Vendas) e quanto caiu na hunt e no boss
     (no período e na sessão, com média por hora).
-  - Aba 🕵 Multi-acc: vigia quem vende Boss Token, fragmentos (Chave, Shiny, Mega Shiny) e chaves de
-    casa — as TRANSAÇÕES (tabela de preços global: vendedor, comprador, valor) e os anúncios
-    abertos — e destaca TODOS os nicks com cara de gerados (ex.: KantoHeart857, wingmenLegate4B).
-    🔗 Grupos: a conta que negocia com 2+ contas de nick gerado (a provável conta principal).
-    com o perfil público (nível, capturas, Pokédex, guild) e quem anuncia pelo mesmo preço.
-    "Monitorar nesta conta" varre a cada N min (ligue em UMA conta). Lista própria de nicks
-    suspeitos, ☑ para escolher e "📋 copiar relatório" com o texto pronto para a moderação.
   - Aba 🎒 Exp Share: quem segura o Exp. Share (com nível) e quem pode usar. Para cada um, "tirar no nível";
     e a FILA de quem recebe. Com a automação ligada, quem chega no nível perde o item e, 61 s depois (o jogo
     só deixa mexer 1× por minuto), o próximo da fila recebe. Também dá para tirar/colocar na mão.
