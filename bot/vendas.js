@@ -7,7 +7,7 @@
 // A comissão é a do jogo: `shared/taxa-mercado.mjs`, o mesmo arquivo que o servidor usa.
 (() => {
   'use strict';
-  const VERSAO_VENDAS = '1.9.1';
+  const VERSAO_VENDAS = '1.9.2';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -557,7 +557,7 @@
         <p class="pv-ajuda">Vigia os anúncios que você favoritou (★ no card do Mercado) NESTA conta e avisa — aviso grande no app, som e notificação do Windows — quando o preço muda ou o anúncio sai. Com <b>🛒 comprar se baixar</b> marcado, ele COMPRA aquele anúncio sozinho quando o preço ficar MENOR que o anterior, só se for o mesmo pokémon que você favoritou e dentro do teto da moeda. Se outro comprador for mais rápido, ele avisa que não deu.</p>
         ${itens.length ? `<table class="pv-tab"><tr><th>Anúncio</th><th>Vendedor</th><th>Preço agora</th><th>Antes</th><th>Mudou</th><th>Situação</th><th>🛒 Snipe</th></tr>
           ${itens.map(([k, v]) => `<tr><td style="text-align:left"><b>${esc(v.nome)}</b></td><td>${esc(v.vendedor)}</td><td><b>${precoTxt(v.preco, v.moeda)}</b></td><td>${v.antes != null ? precoTxt(v.antes, v.moeda) : '—'}</td><td>${v.mudouEm ? dataHora(v.mudouEm) : '—'}</td><td>${v.aberto ? 'à venda' : '<span class="pv-neg">fora do Mercado</span>'}</td>
-            <td>${v.aberto ? `<button class="pv-bt" data-a="verAnuncio" data-v="${esc(k)}" title="abrir o anúncio no jogo">👁 ver</button> ` : ''}${v.stats?.qualidade ? `<button class="pv-bt" data-a="prMarcarFav" data-v="${esc(k)}" title="salvar os stats e procurar este pokémon em qualquer anúncio">📌 caçar</button><br>` : ''}${v.aberto ? `<label><input type="checkbox" data-a="favSnipe" data-v="${esc(k)}" ${fav.snipe[k] ? 'checked' : ''}> comprar se baixar</label><br><small>só de <b>${esc(fav.snipe[k]?.vendedor ?? v.vendedor)}</b> · até ${precoTxt(Math.min(tetoDe(v.moeda), Math.max(0, v.preco - 1)), v.moeda)}</small>` : '—'}</td></tr>`).join('')}</table>`
+            <td><button class="pv-bt" data-a="favExcluir" data-v="${esc(k)}" title="tirar dos favoritos do Mercado (a ★ do jogo)">✕ excluir</button> ${v.aberto ? `<button class="pv-bt" data-a="verAnuncio" data-v="${esc(k)}" title="abrir o anúncio no jogo">👁 ver</button> ` : ''}${v.stats?.qualidade ? `<button class="pv-bt" data-a="prMarcarFav" data-v="${esc(k)}" title="salvar os stats e procurar este pokémon em qualquer anúncio">📌 caçar</button><br>` : ''}${v.aberto ? `<label><input type="checkbox" data-a="favSnipe" data-v="${esc(k)}" ${fav.snipe[k] ? 'checked' : ''}> comprar se baixar</label><br><small>só de <b>${esc(fav.snipe[k]?.vendedor ?? v.vendedor)}</b> · até ${precoTxt(Math.min(tetoDe(v.moeda), Math.max(0, v.preco - 1)), v.moeda)}</small>` : '—'}</td></tr>`).join('')}</table>`
           : '<p class="pv-ajuda">Nenhum favorito lido ainda — clique em "ler agora".</p>'}
         ${fav.log.length ? `<h4 class="pv-rot">Avisos</h4><table class="pv-tab">${fav.log.slice(0, 12).map((l) => `<tr><td>${dataHora(l.em)}</td><td style="text-align:left;white-space:normal">${esc(l.txt)}</td></tr>`).join('')}</table>` : ''}
       </section>`;
@@ -1555,6 +1555,19 @@
     else if (a === 'reporAtivo') { if (!contaProtegida()) { repor.ativo = !repor.ativo; salvarRepor(); reporNota(repor.ativo ? 'reposição LIGADA' : 'reposição desligada'); } }
     else if (a === 'reporPedra') { repor.pedras[b.dataset.v] = b.checked; salvarRepor(); }
     else if (a === 'reporGarantir') { repor.garantir = b.checked; salvarRepor(); }
+    else if (a === 'favExcluir') {
+      const k = b.dataset.v;
+      const v = fav.vistos[k];
+      if (!confirm(`Tirar "${v?.nome ?? `anúncio ${k}`}"${v?.vendedor ? ` de ${v.vendedor}` : ''} dos seus favoritos do Mercado?`)) return;
+      // o mesmo pedido da ★ do card do jogo
+      if (!core.send({ t: 'market.favoritar', id: Number(k), ativo: false })) return alert('A conta está desconectada — não deu para tirar dos favoritos.');
+      delete fav.vistos[k];
+      delete fav.snipe[k];
+      favMsg = `${v?.nome ?? 'anúncio'} tirado dos favoritos`;
+      salvarFav();
+    }
+    // tudo que mudou acima aparece na hora (antes, o ✕ e os botões só "pegavam" na próxima leitura)
+    if (a !== 'fechar' && document.getElementById('pv-fundo')?.classList.contains('aberto')) pintar();
   }
 
   function abrir() {
