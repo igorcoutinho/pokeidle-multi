@@ -7,7 +7,7 @@
 // A comissão é a do jogo: `shared/taxa-mercado.mjs`, o mesmo arquivo que o servidor usa.
 (() => {
   'use strict';
-  const VERSAO_VENDAS = '1.9.0';
+  const VERSAO_VENDAS = '1.9.1';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -27,6 +27,9 @@
     garantirDados: (forcar = false, desde = null) => garantirDados(forcar, desde),
     /** Abre o card oficial do anúncio no jogo (pokémon, "Ver ficha", "Comprar"). A janela do app usa no aviso grande. */
     verAnuncio: (id) => verAnuncio(id),
+    /** ⚡ Sniper: estado e liga/desliga (o botão da barra da conta, na janela do app, usa). */
+    sniperEstado: () => sniperEstado(),
+    sniperLigar: (on) => { if (!!on !== sni.ativo) alternarSniper(); return sniperEstado(); },
     fechar: () => fechar(),
   };
   window.__pokeVendas = V;
@@ -876,6 +879,14 @@
   }, 200);
   limpezas.push(() => { clearInterval(vigiaSni); wsSni?.removeEventListener('message', aoMsgSni); for (const s of sniAnuncios.values()) for (const t of s.timers) clearTimeout(t); });
 
+  function alternarSniper() {
+    sni.ativo = !sni.ativo;
+    if (!sni.ativo) for (const s of sniAnuncios.values()) { s.resultado ??= 'parado'; sniFim(s); }
+    sniNota(sni.ativo ? 'sniper LIGADO' : 'sniper desligado');
+    if (document.getElementById('pv-fundo')?.classList.contains('aberto')) pintar();
+  }
+  const sniperEstado = () => ({ ativo: sni.ativo, regras: regrasSni().map((r) => `${r.nome} ≤ ${[r.gems ? `${fmt(r.gems)} 💎` : '', r.gold ? `${fmt(r.gold)} 🪙` : ''].filter(Boolean).join(' / ')}`), mira: [...sniAnuncios.values()].filter((s) => !s.fim).length });
+
   function htmlSniper() {
     const regras = regrasSni();
     const desvioTxt = sniDesvio == null ? 'ainda medindo…' : `o relógio do PC está ${Math.abs(Math.round(sniDesvio))} ms ${sniDesvio >= 0 ? 'ADIANTADO' : 'ATRASADO'} em relação ao servidor (com a latência) — corrigido`;
@@ -1525,7 +1536,7 @@
     else if (a === 'rebPublicar') publicarReb();
     else if (a === 'verAnuncio') { if (!verAnuncio(b.dataset.v)) alert('Não deu para abrir o anúncio (o chat do jogo ainda não carregou).'); return; }
     else if (a === 'aoeAtivo') { aoe.ativo = !aoe.ativo; if (aoe.ativo) { aoeBase = false; aoeUltima = 0; } aoeNota(aoe.ativo ? 'sniper LIGADO' : 'sniper desligado'); }
-    else if (a === 'sniAtivo') { sni.ativo = !sni.ativo; if (!sni.ativo) for (const s of sniAnuncios.values()) { s.resultado ??= 'parado'; sniFim(s); } sniNota(sni.ativo ? 'sniper LIGADO' : 'sniper desligado'); }
+    else if (a === 'sniAtivo') alternarSniper();
     else if (a === 'sniOutros') { sni.outros = b.checked; salvarSni(); }
     else if (a === 'favAtivo') { fav.ativo = !fav.ativo; salvarFav(); }
     else if (a === 'favAgora') { vigiarFavoritos(true); }

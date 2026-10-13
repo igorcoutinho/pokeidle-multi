@@ -166,6 +166,7 @@
         ${lite ? '' : '<button data-a="pvp" class="eco" title="PvP: ordem que cada rival usou e trava da fila automática">⚔ PvP</button>'}
         ${lite ? '' : '<button data-a="time" title="Análise do time para PvP: quem colocar no lugar de quem">📊 Time</button>'}
         <button data-a="eco" ${basica ? 'style="display:none"' : ''} class="eco" title="Ligar/desligar o Modo Economia do jogo nesta conta">🍃 Eco</button>
+        <button data-a="sniper" ${basica ? 'style="display:none"' : ''} class="eco" title="Ligar/desligar o ⚡ Sniper rápido desta conta (segue as regras do Rotom)">⚡ Sniper</button>
         ${cfg.rotom && !basica ? '<button data-a="rotom" title="Abrir o Cockpit do Rotom Sniper desta conta">🎯 Rotom</button>' : ''}
         <button data-a="menos" title="Diminuir zoom">−</button>
         <span class="zoom"></span>
@@ -205,7 +206,17 @@
     const lerPvp = () => !elPvp ? Promise.resolve() : wv.executeJavaScript('!!window.__pokePvp?.trava')
       .then((on) => { elPvp.classList.toggle('on', on); elPvp.title = on ? 'PvP: trava da fila automática ligada' : 'PvP: ordem que cada rival usou e trava da fila automática'; })
       .catch(() => {});
-    const lerEco = () => { lerShiny(); lerPvp(); return wv.executeJavaScript(JS_ECO_ESTADO).then(pintarEco).catch(() => {}); };
+    const elSni = caixa.querySelector('[data-a="sniper"]');
+    const pintarSni = (st) => {
+      if (!st) return;
+      elSni.classList.toggle('on', !!st.ativo);
+      elSni.textContent = st.ativo ? `⚡ Sniper ON${st.mira ? ` (${st.mira})` : ''}` : '⚡ Sniper';
+      elSni.title = `${st.ativo ? 'Sniper LIGADO' : 'Sniper desligado'} — clique para ${st.ativo ? 'desligar' : 'ligar'}.
+${st.regras.length ? `Segue: ${st.regras.join(' · ')}` : 'Sem regra ativa (no Rotom, ative a do Bronze Boss Token)'}${st.mira ? `
+Na mira: ${st.mira} anúncio(s)` : ''}`;
+    };
+    const lerSni = () => (basica ? Promise.resolve() : wv.executeJavaScript('window.__pokeVendas?.sniperEstado?.() ?? null').then(pintarSni).catch(() => {}));
+    const lerEco = () => { lerShiny(); lerPvp(); lerSni(); return wv.executeJavaScript(JS_ECO_ESTADO).then(pintarEco).catch(() => {}); };
     // O modo também pode ser trocado pelo próprio jogo — o botão acompanha.
     setInterval(lerEco, 3000);
     pintar();
@@ -245,6 +256,13 @@
           lerShiny();
         }
         wv.executeJavaScript(JS_ECO_ALTERNAR).then(pintarEco).catch(() => aviso('Modo Economia: a conta ainda está carregando.'));
+      } else if (a === 'sniper') {
+        const st = await wv.executeJavaScript('window.__pokeVendas?.sniperEstado?.() ?? null').catch(() => null);
+        if (!st) return aviso('Sniper: a conta ainda está carregando (ou o bot é antigo — aguarde a atualização).');
+        if (!st.ativo && !st.regras.length && !confirm(`${c.nome}: o sniper não tem nenhuma regra ativa (no Rotom desta conta, ative a do Bronze Boss Token, ou ponha um teto próprio em 💰 Vendas → ⚡ Sniper).
+
+Ligar mesmo assim?`)) return;
+        wv.executeJavaScript(`window.__pokeVendas.sniperLigar(${!st.ativo})`).then(pintarSni).catch(() => aviso('Sniper: não deu para alternar.'));
       } else if (a === 'rotom') {
         window.multi.abrirCockpit(n);
       } else if (a === 'som') {

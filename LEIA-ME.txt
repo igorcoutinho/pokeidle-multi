@@ -109,6 +109,7 @@ COMPRAS E VENDAS — botão 💰 Vendas
     itens. Pede direto a lista do item a cada 1,5 s, dispara na liberação do anúncio pela hora do
     SERVIDOR (corrige o relógio do PC) e repete dentro do sorteio de 3 s; quando o sorteio fecha,
     relê o anúncio e compra a sobra. Sem regra no Rotom, dá para pôr um teto próprio para o token.
+    Botão ⚡ Sniper na barra de cada conta: liga/desliga (passe o mouse para ver as regras que segue).
 
 PvP — botão ⚔ PvP
   - A cada duelo, guarda a ORDEM em que o rival colocou os pokémon (e a sua), tirada da fita
