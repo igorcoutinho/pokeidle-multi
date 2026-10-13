@@ -104,6 +104,11 @@ COMPRAS E VENDAS — botão 💰 Vendas
     abaixo de 1.000: compra sozinho. Em Gemas de 1.000 a 2.000: aviso grande com 👁 ver o anúncio.
     Nunca compra de conta sua, espera a retenção e para em 5 compras por 24 h (tudo editável).
     Ao ligar, a 1ª leitura só memoriza o que já estava à venda.
+  - ⚡ Sniper (aba própria, por conta): roda JUNTO com o Rotom Sniper e usa as regras do Rotom
+    daquela conta (teto e quantidade) — por padrão só o Bronze Boss Token; marque para os outros
+    itens. Pede direto a lista do item a cada 1,5 s, dispara na liberação do anúncio pela hora do
+    SERVIDOR (corrige o relógio do PC) e repete dentro do sorteio de 3 s; quando o sorteio fecha,
+    relê o anúncio e compra a sobra. Sem regra no Rotom, dá para pôr um teto próprio para o token.
 
 PvP — botão ⚔ PvP
   - A cada duelo, guarda a ORDEM em que o rival colocou os pokémon (e a sua), tirada da fita

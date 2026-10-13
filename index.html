@@ -486,6 +486,8 @@
       const alvos = {};
       for (const x of [...info].sort((a, b) => (b.i?.protegida ? 1 : 0) - (a.i?.protegida ? 1 : 0))) {
         const regras = window.multi.rotomRegras ? await window.multi.rotomRegras(x.c.n).catch(() => null) : null;
+        // o ⚡ Sniper de cada conta segue as regras do Rotom DELA (inclusive a conta protegida: lá ele só compra)
+        if (regras) naConta(x.c, `window.__pokeRotomRegras = ${JSON.stringify({ regras, em: Date.now() })}`);
         for (const r of regras ?? []) {
           const nome = String(r.targetName ?? '').toLowerCase();
           if (nome && Number(r.maxPriceGold) > 0 && !(nome in alvos)) alvos[nome] = Number(r.maxPriceGold);
@@ -500,7 +502,7 @@
       for (const x of info.filter((y) => y.i?.protegida)) naConta(x.c, 'window.__pokeReposicao = null');
     } catch (e) { console.warn('reposição: não sincronizou', e); }
   }
-  setTimeout(sincronizarReposicao, 45_000);
+  setTimeout(sincronizarReposicao, 20_000);
   setInterval(sincronizarReposicao, 10 * 60_000);
 
   // ---------------------------------------------------------------- Guia: onde caçar e ranking de XP
