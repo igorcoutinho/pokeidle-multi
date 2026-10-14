@@ -230,6 +230,8 @@ POKEBOT EMBUTIDO
 
 VIGIA (reabre o app sozinho) — "Vigia (ligar).bat" na pasta do exe
   - Liga uma tarefa do Agendador do Windows que roda a cada 10 min, escondida, o "Vigia PokeIdle.ps1".
+  - Também entra na Inicialização do Windows: ao entrar no Windows, espera 1 min e roda o vigia
+    (que abre o app). O Windows precisa chegar na área de trabalho (login feito).
   - Reabre o PokeIdle Multi (perfil normal; não mexe no Perfil 2 nem na Lite) quando: o app fechou;
     o app travou (sem sinal de vida há mais de 5 min); ou a conta do Bekazin está deslogada há
     mais de 3 min. Mata o app e abre o "PokeIdle Multi 1.x.y.exe" mais novo da pasta.
