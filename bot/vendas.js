@@ -7,7 +7,7 @@
 // A comissão é a do jogo: `shared/taxa-mercado.mjs`, o mesmo arquivo que o servidor usa.
 (() => {
   'use strict';
-  const VERSAO_VENDAS = '1.9.2';
+  const VERSAO_VENDAS = '1.9.3';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -547,7 +547,7 @@
     const itens = Object.entries(fav.vistos).sort((a, b) => (b[1].mudouEm ?? 0) - (a[1].mudouEm ?? 0));
     return `<section>
         <div class="pv-linha">
-          <button class="pv-bt ${fav.ativo ? 'on' : ''}" data-a="favAtivo">${fav.ativo ? '● vigiando' : 'parado'}</button>
+          <button class="pv-bt ${fav.ativo ? 'on' : ''}" data-a="favAtivo" title="liga/para os avisos desta aba: favoritos E procurados">${fav.ativo ? '● vigiando' : 'parado — sem avisos'}</button>
           a cada <input type="number" class="pv-in" data-c="favCada" min="1" max="60" value="${esc(fav.cadaMin)}" style="width:54px"> min
           <button class="pv-bt" data-a="favAgora" ${favLendo ? 'disabled' : ''}>${favLendo ? 'lendo…' : '⟳ ler agora'}</button>
           <span class="pv-ajuda">${esc(favMsg)}</span>
@@ -1009,6 +1009,7 @@
     espLendo = true;
     try {
       let total = 0;
+      const meusEsp = new Set([...(dadosApp()?.meusNicks ?? []), core.eu?.nick].filter(Boolean).map((n) => String(n).toLowerCase()));
       const especies = new Map();
       for (const pr of esp.procurados) if (!pr.comprado && pr.especieId) especies.set(pr.especieId, pr.nome);
       for (const [especieId, nomeEsp] of especies) {
@@ -1028,7 +1029,9 @@
         for (const [k, r] of Object.entries(vistos)) {
           r.desde = antes[k]?.desde ?? Date.now();
           const pr = esp.procurados.find((x) => !x.comprado && x.especieId === especieId && ehProcurado(r, x.alvo));
-          if (pr) {
+          if (pr && meusEsp.has(String(r.vendedor ?? '').toLowerCase())) {
+            pr.ultimo = { vendedor: r.vendedor, preco: r.preco, moeda: r.moeda, em: Date.now(), anuncioId: r.id };
+          } else if (pr) {
             pr.ultimo = { vendedor: r.vendedor, preco: r.preco, moeda: r.moeda, em: Date.now(), anuncioId: r.id };
             const lim = Number(pr.limite?.[r.moeda === 'orb' ? 'orb' : 'gold']) || 0;
             const chaveTent = `${k}:${r.preco}`;
@@ -1062,7 +1065,8 @@
   }
   const vigiaEsp = setInterval(() => {
     const cada = esp.procurados.some((x) => x.comprar && !x.comprado) ? 60_000 : Math.max(1, Number(esp.cadaMin) || 2) * 60_000;
-    if (esp.ativo && Date.now() - espUltima > cada - 1000) vigiarEspecies();
+    // o "parado" dos ⭐ Favoritos para a aba inteira (procurados também)
+    if (esp.ativo && fav.ativo && Date.now() - espUltima > cada - 1000) vigiarEspecies();
   }, 15_000);
   limpezas.push(() => clearInterval(vigiaEsp));
 
@@ -1071,7 +1075,7 @@
     const procurados = `<section>
         <h4 class="pv-rot">📌 Procurados — o app reconhece o pokémon em qualquer anúncio (mesmo se sair e voltar)</h4>
         <div class="pv-linha">
-          <button class="pv-bt ${esp.ativo ? 'on' : ''}" data-a="espAtivo">${esp.ativo ? '● vigiando' : 'parado'}</button>
+          <button class="pv-bt ${esp.ativo && fav.ativo ? 'on' : ''}" data-a="espAtivo">${!fav.ativo ? 'parado (Favoritos parado)' : esp.ativo ? '● vigiando' : 'parado'}</button>
           a cada <input type="number" class="pv-in" data-c="espCada" min="1" max="60" value="${esc(esp.cadaMin)}" style="width:54px"> min <span class="pv-ajuda">(1 min com "comprar sozinho" ligado)</span>
           <button class="pv-bt" data-a="espAgora" ${espLendo ? 'disabled' : ''}>${espLendo ? 'listando…' : '⟳ procurar agora'}</button>
           <span class="pv-ajuda">${esc(espMsg)}</span>
@@ -1408,7 +1412,7 @@
         <button data-a="fechar" title="Fechar">×</button></span></header>`;
     if (modo === 'rebaixar') { modal.innerHTML = cab + htmlRepor() + htmlRebaixar(); return; }
     if (modo === 'sniper') { modal.innerHTML = cab + htmlSniper(); return; }
-    if (modo === 'favoritos') { modal.innerHTML = cab + htmlAoe() + htmlEspecies() + htmlFavoritos(); if (!favUltima && !favLendo) vigiarFavoritos(true); if (!espUltima && !espLendo) vigiarEspecies(); return; }
+    if (modo === 'favoritos') { modal.innerHTML = cab + htmlAoe() + htmlEspecies() + htmlFavoritos(); if (fav.ativo && !favUltima && !favLendo) vigiarFavoritos(true); if (fav.ativo && esp.ativo && !espUltima && !espLendo) vigiarEspecies(); return; }
     const foco = document.activeElement?.dataset?.c;
     const cursor = document.activeElement?.selectionStart;
 

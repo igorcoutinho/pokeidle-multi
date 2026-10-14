@@ -749,7 +749,20 @@ Ligar mesmo assim?`)) return;
     alertaFundo.classList.remove('aberto');
     alertas = [];
   });
-  for (const c of contas) c.wv.addEventListener('ipc-message', (e) => { if (e.channel === 'pb:alerta') mostrarAlerta(c, e.args?.[0] ?? {}); });
+  // O mesmo aviso de Mercado chega de cada conta que vigia (ex.: o mesmo procurado em 2 contas):
+  // mostra uma vez só por 30 min. Compras nunca são filtradas.
+  const alertasVistos = new Map();
+  for (const c of contas) c.wv.addEventListener('ipc-message', (e) => {
+    if (e.channel !== 'pb:alerta') return;
+    const a = e.args?.[0] ?? {};
+    if (!/COMPREI|COMPROU|comprado/i.test(`${a.titulo} ${a.texto}`)) {
+      const k = `${a.titulo}|${a.anuncioId ?? a.texto}`;
+      for (const [x, em] of alertasVistos) if (Date.now() - em > 30 * 60_000) alertasVistos.delete(x);
+      if (alertasVistos.has(k)) return;
+      alertasVistos.set(k, Date.now());
+    }
+    mostrarAlerta(c, a);
+  });
 
   // ---------------------------------------------------------------- 🌐 proxy deste perfil
   const btProxy = document.getElementById('bt-proxy');
