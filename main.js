@@ -271,6 +271,18 @@ ipcMain.handle('pb:ia', (_e, pedido) => (VARIANTE === 'lite' || VARIANTE === 'ba
 ipcMain.handle('multi:abrirCockpit', (_e, n) => abrirCockpit(n));
 ipcMain.handle('multi:rotomRegras', (_e, n) => lerRegrasRotom(n));
 ipcMain.handle('multi:twitchLives', (_e, lives) => abrirLivesNovas(lives));
+// Sinal de vida para o VIGIA (atalhos\Vigia PokeIdle.ps1, rodado pelo Agendador do Windows a cada
+// 10 min): a janela manda, a cada minuto, quem está logado em cada conta; aqui vira o status.json
+// da pasta do perfil, com a hora, o pid e o exe que abriu o app (o portátil, para reabrir).
+ipcMain.on('multi:status', (_e, contas) => {
+  try {
+    const st = { em: Date.now(), pid: process.pid, exe: process.env.PORTABLE_EXECUTABLE_FILE || process.execPath, perfil: PERFIL || null, versao: app.getVersion(), contas: Array.isArray(contas) ? contas : [] };
+    const arq = path.join(app.getPath('userData'), 'status.json');
+    fs.writeFileSync(`${arq}.tmp`, JSON.stringify(st));
+    fs.renameSync(`${arq}.tmp`, arq);
+  } catch (e) { console.warn('status do vigia não gravado', e.message); }
+});
+
 // Notificação do Windows + ícone piscando na barra de tarefas (alertas grandes das contas).
 ipcMain.handle('multi:notificar', (_e, { titulo, texto } = {}) => {
   try {

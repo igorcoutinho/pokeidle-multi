@@ -227,3 +227,13 @@ POKEBOT EMBUTIDO
       * No .exe: o bot fica em Documentos\PokeIdleMulti\bot (botão "Pasta do bot") e o app
         busca a versão nova no GitHub (branch main) a cada 5 minutos. Para desligar, ponha
         "autoAtualizar": false no multi.json (pasta de dados do app).
+
+VIGIA (reabre o app sozinho) — "Vigia (ligar).bat" na pasta do exe
+  - Liga uma tarefa do Agendador do Windows que roda a cada 10 min, escondida, o "Vigia PokeIdle.ps1".
+  - Reabre o PokeIdle Multi (perfil normal; não mexe no Perfil 2 nem na Lite) quando: o app fechou;
+    o app travou (sem sinal de vida há mais de 5 min); ou a conta do Bekazin está deslogada há
+    mais de 3 min. Mata o app e abre o "PokeIdle Multi 1.x.y.exe" mais novo da pasta.
+  - Deslogado que não volta depois de 3 reaberturas seguidas: para de reabrir e só anota no log
+    (faça o login na mão). O app grava o sinal de vida em %APPDATA%\PokeIdle Multi\status.json.
+  - Log: %APPDATA%\PokeIdle Multiigia.log · Para desligar: "Vigia (desligar).bat".
+  - Fechou o app de propósito? Desligue o vigia antes, senão ele reabre em até 10 min.

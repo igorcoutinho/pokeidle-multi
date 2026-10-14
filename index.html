@@ -320,6 +320,26 @@ Ligar mesmo assim?`)) return;
   const fmtN = (n) => Number(n ?? 0).toLocaleString('pt-BR', { maximumFractionDigits: 0 });
   const naConta = (c, js) => c.wv.executeJavaScript(js).catch(() => null);
 
+  // ---------------------------------------------------------------- sinal de vida para o vigia
+  // A cada minuto: quem está logado em cada conta. O nick fica lembrado por conta (deslogado o jogo
+  // não diz mais quem era) — é assim que o vigia sabe que "a conta do Bekazin" caiu e há quanto tempo.
+  const CHAVE_NICKS = 'multi.nickPorConta.v1';
+  const nickPorConta = (() => { try { return JSON.parse(localStorage.getItem(CHAVE_NICKS)) ?? {}; } catch { return {}; } })();
+  const deslogadoDesde = {};
+  async function mandarStatus() {
+    if (!window.multi.status) return;
+    const lista = await Promise.all(contas.map(async (c) => {
+      const r = await naConta(c, '(() => { const k = window.__pokebotCore; return { nick: k?.eu?.nick ?? null, logado: !!(k?.logado && k?.eu?.nick) }; })()');
+      const logado = !!r?.logado;
+      if (logado && r.nick && nickPorConta[c.n] !== r.nick) { nickPorConta[c.n] = r.nick; try { localStorage.setItem(CHAVE_NICKS, JSON.stringify(nickPorConta)); } catch {} }
+      if (logado) delete deslogadoDesde[c.n]; else deslogadoDesde[c.n] ??= Date.now();
+      return { n: c.n, nome: c.nome, nick: r?.nick ?? null, nickUltimo: nickPorConta[c.n] ?? null, logado, deslogadoDesde: deslogadoDesde[c.n] ?? null };
+    }));
+    window.multi.status(lista);
+  }
+  setTimeout(mandarStatus, 15_000);
+  setInterval(mandarStatus, 60_000);
+
   /**
    * Os alvos de compra do Rotom Sniper (item → preço máximo em Coins), lidos das contas. A conta
    * protegida vem primeiro: é nela que você compra, então os alvos dela valem sobre os das outras.

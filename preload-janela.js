@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('multi', {
   iaTestar: () => ipcRenderer.invoke('multi:iaTestar'),
   proxy: (novo) => ipcRenderer.invoke('multi:proxy', novo),
   notificar: (aviso) => ipcRenderer.invoke('multi:notificar', aviso),
+  status: (contas) => ipcRenderer.send('multi:status', contas),
   guiaRankingXp: (nicks) => ipcRenderer.invoke('multi:guiaRankingXp', nicks),
   aoMudarLogica: (fn) => ipcRenderer.on('pb:logicaMudou', (_e, codigo) => fn(codigo)),
   aoMudarCore: (fn) => ipcRenderer.on('pb:coreMudou', () => fn()),
