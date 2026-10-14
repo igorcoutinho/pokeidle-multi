@@ -81,11 +81,38 @@ if (-not $exe) { Log "$motivo - mas NAO achei o exe do PokeIdle Multi em $pasta"
 
 if ($Teste) { Write-Output "TESTE - reabriria: $motivo -> $exe (mataria os pids: $(($principais | ForEach-Object { $_.ProcessId }) -join ', '))"; exit 0 }
 Log "REABRINDO: $motivo"
-foreach ($p in $principais) { & taskkill.exe /PID $p.ProcessId /T /F *> $null }
-Start-Sleep -Seconds 3
-# sobrou algum filho do perfil normal (user-data-dir exato)? mata tambem
-Get-CimInstance Win32_Process | Where-Object { $_.Name -like 'PokeIdle Multi*.exe' -and $_.CommandLine -match 'user-data-dir="?[^"]*\\PokeIdle Multi"' } |
-  ForEach-Object { & taskkill.exe /PID $_.ProcessId /T /F *> $null }
-Start-Sleep -Seconds 2
-Start-Process -FilePath $exe -WorkingDirectory (Split-Path -Parent $exe)
-Log "abri $exe"
+
+# Todos os processos do app do perfil NORMAL (lancador, app, Cockpits do Rotom, renderers...).
+function ProcsDoPerfil {
+  @(Get-CimInstance Win32_Process | Where-Object {
+    $_.Name -like 'PokeIdle Multi*.exe' -and $_.Name -notmatch 'Lite|Basico' -and (
+      ($_.CommandLine -notmatch '--type=' -and $_.CommandLine -notmatch '--perfil=') -or
+      $_.CommandLine -match 'user-data-dir="?[^"]*\PokeIdle Multi"')
+  })
+}
+# Mata tudo e confere que nao sobrou nada: um processo esquecido (ex.: com o Cockpit do Rotom aberto)
+# segura a trava de "uma instancia so" e o app novo fecha na hora.
+function MatarTudo {
+  for ($i = 0; $i -lt 6; $i++) {
+    $ps = ProcsDoPerfil
+    if ($ps.Count -eq 0) { return $true }
+    foreach ($p in $ps) { & taskkill.exe /PID $p.ProcessId /T /F *> $null }
+    Start-Sleep -Seconds 2
+  }
+  $resto = ProcsDoPerfil
+  if ($resto.Count) { Log "AINDA vivos depois de matar: $(($resto | ForEach-Object { "$($_.Name)#$($_.ProcessId)" }) -join ', ')"; return $false }
+  return $true
+}
+
+for ($tentativa = 1; $tentativa -le 2; $tentativa++) {
+  if (-not (MatarTudo)) { Log "nao consegui fechar o app antigo - nao abro outro por cima"; exit 1 }
+  Start-Sleep -Seconds 2
+  Start-Process -FilePath $exe -WorkingDirectory (Split-Path -Parent $exe)
+  Log "abri $exe (tentativa $tentativa) - conferindo se ficou de pe..."
+  Start-Sleep -Seconds 30
+  $vivo = @(ProcsDoPerfil | Where-Object { $_.CommandLine -notmatch '--type=' })
+  if ($vivo.Count) { Log "ok: app aberto (pid $(($vivo | ForEach-Object { $_.ProcessId }) -join ', '))"; exit 0 }
+  Log "o app novo NAO ficou aberto - matando sobras e tentando de novo"
+}
+Log "FALHOU: o app nao ficou aberto depois de 2 tentativas"
+exit 1

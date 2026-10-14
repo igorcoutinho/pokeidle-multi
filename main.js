@@ -82,7 +82,12 @@ if (PERFIL) {
 }
 const instanciaUnica = app.requestSingleInstanceLock();
 if (!instanciaUnica) app.quit();
-app.on('second-instance', () => { if (janela && !janela.isDestroyed()) trazerParaFrente(janela); });
+// Abriram o app de novo: traz a janela. Se ela não existe mais (sobrou só um Cockpit do Rotom, ou a
+// janela caiu), recria — antes a 2ª abertura morria e esta ficava "zumbi" segurando a trava.
+app.on('second-instance', () => {
+  if (janela && !janela.isDestroyed()) trazerParaFrente(janela);
+  else if (app.isReady()) criarJanela();
+});
 
 function criarJanela() {
   const cfg = lerCfg();
@@ -121,6 +126,14 @@ function criarJanela() {
     if (r === 0) podeFechar = true;
     else ev.preventDefault();
   });
+  // A janela principal fechou (ou caiu): fecha os Cockpits do Rotom e encerra o processo. Sem isso
+  // um Cockpit aberto mantinha o app vivo, sem janela, e impedia abrir um novo (instância única).
+  janela.on('closed', () => {
+    janela = null;
+    for (const w of BrowserWindow.getAllWindows()) { try { w.destroy(); } catch {} }
+    app.quit();
+  });
+  janela.webContents.on('render-process-gone', (_e, d) => console.warn('[PokeIdle Multi] a janela caiu:', d?.reason));
 }
 
 // ------------------------------------------------------------------ Rotom Sniper (extensão)

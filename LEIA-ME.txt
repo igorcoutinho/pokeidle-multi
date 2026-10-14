@@ -237,3 +237,6 @@ VIGIA (reabre o app sozinho) — "Vigia (ligar).bat" na pasta do exe
     (faça o login na mão). O app grava o sinal de vida em %APPDATA%\PokeIdle Multi\status.json.
   - Log: %APPDATA%\PokeIdle Multiigia.log · Para desligar: "Vigia (desligar).bat".
   - Fechou o app de propósito? Desligue o vigia antes, senão ele reabre em até 10 min.
+  - Fechar a janela principal agora fecha também os Cockpits do Rotom e encerra o app (antes um
+    Cockpit aberto deixava o app vivo sem janela e impedia abrir outro). O vigia, ao reabrir, confere
+    que não sobrou nenhum processo e que o app novo ficou de pé (tenta 2 vezes).
