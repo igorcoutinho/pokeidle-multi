@@ -7,7 +7,7 @@
 // A comissão é a do jogo: `shared/taxa-mercado.mjs`, o mesmo arquivo que o servidor usa.
 (() => {
   'use strict';
-  const VERSAO_VENDAS = '1.9.3';
+  const VERSAO_VENDAS = '1.10.0';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -690,10 +690,16 @@
   // As respostas de `market.item` que o Rotom pede também passam por aqui (e as nossas, por ele).
   const CHAVE_SNI = 'pokevendas.sniper.v1';
   const sni = (() => {
-    const padrao = { ativo: false, cadaMs: 1500, outros: false, tokenGems: 0, tokenGold: 0, regrasRotom: null, compras: [], log: [] };
+    const padrao = { ativo: false, cadaMs: 1500, outros: false, tokenGems: 0, tokenGold: 0, regrasRotom: null, compras: [], log: [], limiteRotom: true, placar: null, chaves: {} };
     try { const x = JSON.parse(localStorage.getItem(CHAVE_SNI)) ?? {}; return { ...padrao, ...x, compras: x.compras ?? [], log: x.log ?? [] }; } catch { return padrao; }
   })();
   const salvarSni = () => { try { localStorage.setItem(CHAVE_SNI, JSON.stringify({ ...sni, log: sni.log.slice(0, 60), compras: sni.compras.slice(-200) })); } catch {} };
+  // placar do dia: onde as compras estão sendo perdidas
+  const hojeSni = () => new Date().toLocaleDateString('pt-BR');
+  const placarSni = () => {
+    if (sni.placar?.dia !== hojeSni()) sni.placar = { dia: hojeSni(), anuncios: 0, entrou: 0, perdeu: 0, ganhou: 0, sobras: 0, sobraGanha: 0, cedo: 0, semResposta: 0, tokens: 0 };
+    return sni.placar;
+  };
   const sniNota = (txt) => { sni.log.unshift({ em: Date.now(), txt }); sni.log = sni.log.slice(0, 60); salvarSni(); console.log('[Sniper ⚡]', txt); if (estaAbertoSni()) pintar(); };
   const estaAbertoSni = () => document.getElementById('pv-fundo')?.classList.contains('aberto') && modo === 'sniper';
   const SNI_SORTEIO = [40, 450, 1200, 2300]; // ms depois da liberação (o sorteio pega os primeiros 3 s)
@@ -747,14 +753,25 @@
       if (!token && !sni.outros) continue;
       const itemId = r.itemId || idDoItem(r.nome);
       if (!itemId || out.some((o) => o.itemId === itemId)) continue;
-      const resta = r.maxQty > 0 ? Math.max(0, r.maxQty - r.total - (sniCompradoDesde.porItem[itemId] ?? 0)) : Infinity;
-      out.push({ fonte: 'Rotom', itemId, nome: r.nome, gems: r.gems, gold: r.gold, resta });
+      const restaRotom = r.maxQty > 0 ? r.maxQty - r.total - (sniCompradoDesde.porItem[itemId] ?? 0) : Infinity;
+      const resta = sni.limiteRotom ? Math.max(0, restaRotom) : Infinity;
+      out.push({ fonte: 'Rotom', itemId, nome: r.nome, gems: r.gems, gold: r.gold, resta, restaRotom, maxQty: r.maxQty });
     }
     // sem regra do Rotom para o Boss Token: usa o teto próprio (se tiver)
     if (!out.some((o) => /boss token/i.test(o.nome)) && (sni.tokenGems > 0 || sni.tokenGold > 0)) {
       out.push({ fonte: 'teto próprio', itemId: 70000, nome: 'Bronze Boss Token', gems: Number(sni.tokenGems) || 0, gold: Number(sni.tokenGold) || 0, resta: Infinity });
     }
     return out.filter((r) => r.resta > 0 && (r.gems > 0 || r.gold > 0));
+  }
+  /** Regras do Rotom paradas só porque o limite de quantidade dele estourou. */
+  function regrasNoLimite() {
+    const out = [];
+    for (const r of sni.regrasRotom ?? []) {
+      if (!r.ativa || (!/boss token/i.test(r.nome) && !sni.outros) || !(r.maxQty > 0)) continue;
+      const itemId = r.itemId || idDoItem(r.nome);
+      if (r.maxQty - r.total - (sniCompradoDesde.porItem[itemId] ?? 0) <= 0) out.push(r);
+    }
+    return out;
   }
   const sniMeus = () => new Set([...(dadosApp()?.meusNicks ?? []), core.eu?.nick].filter(Boolean).map((n) => String(n).toLowerCase()));
   const sniSaldo = (moeda) => { const v = Number(moeda === 'orb' ? core.eu?.orbs : core.eu?.gold); return Number.isFinite(v) ? v : Infinity; };
@@ -794,6 +811,7 @@
         // a releitura de depois do sorteio: compra a SOBRA (o que ainda está no anúncio)
         if (ja.fase === 'sobra' && !ja.sobraFeita) {
           ja.sobraFeita = true;
+          placarSni().sobras++;
           const qtd = Math.min(qtdAnuncio, regra.resta - (sniPendente(itemId) - ja.qtd), Math.floor(sniSaldo(moeda) / preco));
           if (qtd >= 1) { ja.qtd = qtd; sniDisparar(ja, qtd, `🧺 sobra do sorteio: pedindo ${qtd}× ${regra.nome} de ${a.vendedor} a ${precoTxt(preco, moeda)}`); }
         }
@@ -803,6 +821,7 @@
       if (qtd < 1) continue;
       const s = { id: a.id, chave, itemId, nome: regra.nome, vendedor: a.vendedor ?? '?', preco, moeda, qtd, R, fase: 'agendado', disparos: 0, timers: [], fim: false, criado: Date.now(), repeticoes };
       sniAnuncios.set(chave, s);
+      if (!repeticoes) placarSni().anuncios++;
       const agora = sniAgora();
       const emLocal = (srv) => Math.max(0, srv + sniMargem - agora);
       if (R > agora + 50) {
@@ -825,7 +844,11 @@
     s.fim = true;
     s.fimEm = Date.now();
     for (const t of s.timers) clearTimeout(t);
-    if (!s.resultado) sniNota(`… ${s.nome} de ${s.vendedor}: sem resposta de compra (${s.disparos} pedido(s)) — outro levou ou o anúncio saiu`);
+    if (!s.resultado) {
+      if (s.disparos) placarSni().semResposta++;
+      sniNota(`… ${s.nome} de ${s.vendedor}: ${s.entrou ? 'entrou no sorteio, mas' : ''} sem resposta de compra (${s.disparos} pedido(s)) — outro levou ou o anúncio saiu`);
+    }
+    salvarSni();
   }
 
   function aoMsgSni(ev) {
@@ -844,9 +867,17 @@
       for (const e of m.ev ?? []) {
         if (e.k !== 'marketComprado') continue;
         const desc = String(e.descricao ?? '');
-        const alvo = [...sniAnuncios.values()].filter((s) => s.resultado !== 'ganhou' && s.resultado !== 'parado' && desc.toLowerCase().includes(s.nome.toLowerCase()) && Date.now() - s.criado < 10 * 60_000).sort((a, b) => b.criado - a.criado)[0];
+        const agoraSrv = sniAgora();
+        const alvo = [...sniAnuncios.values()].filter((s) => s.resultado !== 'ganhou' && s.resultado !== 'parado' && s.disparos > 0 && desc.toLowerCase().includes(s.nome.toLowerCase()) && Date.now() - s.criado < 10 * 60_000)
+          .sort((a, b) => Math.abs(agoraSrv - (a.R + 3000)) - Math.abs(agoraSrv - (b.R + 3000)))[0];
         const qtd = Number((/(\d+)\s*×/.exec(desc) ?? [])[1]) || alvo?.qtd || 1;
-        if (alvo) { alvo.resultado = 'ganhou'; sniFim(alvo); }
+        if (alvo) {
+          const pl = placarSni();
+          if (alvo.sobraFeita) pl.sobraGanha++; else pl.ganhou++;
+          pl.tokens += qtd;
+          alvo.resultado = 'ganhou';
+          sniFim(alvo);
+        }
         const itemId = alvo?.itemId ?? idDoItem(desc.replace(/^\d+\s*×\s*/, ''));
         if (itemId && regrasSni().some((r) => r.itemId === itemId)) {
           sniCompradoDesde.porItem[itemId] = (sniCompradoDesde.porItem[itemId] ?? 0) + qtd;
@@ -854,14 +885,37 @@
           sniNota(`🛒 COMPROU ${desc}${alvo ? ` de ${alvo.vendedor} a ${precoTxt(alvo.preco, alvo.moeda)}` : ''} (pelo sniper ou pelo Rotom — a mesma conta)`);
         }
       }
-    } else if (d.includes('"erro"') && d.includes('market.')) {
-      let m; try { m = JSON.parse(d); } catch { return; }
-      const s = sniUltimoDisparo && Date.now() - sniUltimoDisparo.em < 2500 ? sniUltimoDisparo.s : null;
-      if (!s || m.t !== 'erro') return;
-      if (m.chave === 'market.sorteio' && !s.entrou) { s.entrou = true; sniNota(`🎟 entrou no sorteio: ${s.nome} de ${s.vendedor}`); }
-      else if (m.chave === 'market.sorteioPerdeu' && s.resultado !== 'perdeu') { s.resultado = 'perdeu'; sniNota(`❌ perdeu o sorteio: ${s.nome} de ${s.vendedor} (outro jogador levou)`); }
-      else if (m.chave === 'market.retencao' && sniMargem < 1500) { sniMargem += 150; sniNota(`⚠ o servidor disse "ainda em retenção" — passo a disparar ${sniMargem} ms depois`); }
     }
+    if (d.includes('market.')) {
+      let m; try { m = JSON.parse(d); } catch { return; }
+      const chaves = [];
+      if (m.t === 'erro' && m.chave) chaves.push(m.chave);
+      for (const e of m.ev ?? []) if (e.k === 'aviso' && typeof e.msg === 'string' && e.msg.startsWith('market.')) chaves.push(e.msg);
+      for (const k of chaves) sniResposta(k);
+    }
+  }
+  /** O que o servidor respondeu a um pedido de compra (`market.sorteio`, `market.sorteioPerdeu`, ...). */
+  function sniResposta(chave) {
+    sni.chaves[chave] = (sni.chaves[chave] ?? 0) + 1;
+    const agoraSrv = sniAgora();
+    const vivos = [...sniAnuncios.values()].filter((s) => s.disparos > 0 && !s.resultado);
+    // resposta na hora do pedido → o último disparado; resultado do sorteio (~3 s) → o anúncio cujo sorteio fechou agora
+    const recente = sniUltimoDisparo && Date.now() - sniUltimoDisparo.em < 1500 ? sniUltimoDisparo.s : null;
+    const doSorteio = vivos.filter((s) => agoraSrv >= s.R + 2000 && agoraSrv <= s.R + 8000).sort((a, b) => Math.abs(agoraSrv - (a.R + 3000)) - Math.abs(agoraSrv - (b.R + 3000)))[0] ?? null;
+    const pl = placarSni();
+    if (chave === 'market.sorteio' || chave === 'market.sorteioEspera') {
+      const s = recente ?? doSorteio;
+      if (s && !s.entrou) { s.entrou = true; pl.entrou++; sniNota(`🎟 entrou no sorteio: ${s.nome} de ${s.vendedor}`); }
+    } else if (chave === 'market.sorteioPerdeu') {
+      const s = doSorteio ?? recente;
+      if (s && s.resultado !== 'perdeu') { s.resultado = 'perdeu'; pl.perdeu++; sniNota(`❌ perdeu o sorteio: ${s.nome} de ${s.vendedor} (outro jogador levou)`); }
+    } else if (chave === 'market.retencao') {
+      pl.cedo++;
+      if (sniMargem < 1500) { sniMargem += 150; sniNota(`⚠ o servidor disse "ainda em retenção" (pedido cedo demais) — passo a disparar ${sniMargem} ms depois`); }
+    } else if (recente) {
+      sniNota(`ℹ resposta do servidor ao pedido de ${recente.nome} (${recente.vendedor}): ${chave}`);
+    }
+    salvarSni();
   }
   let wsSni = null;
   const vigiaSni = setInterval(() => {
@@ -902,6 +956,16 @@
         <p class="pv-ajuda">Roda JUNTO com o Rotom e usa as regras dele nesta conta (teto e quantidade). Mais rápido porque: pede direto a lista do item, dispara na liberação pela hora do servidor (${esc(desvioTxt)}) e, quando o sorteio de 3 s fecha, compra a sobra do anúncio. O sorteio em si não tem como furar: quem pediu nos 3 s concorre igual.</p>
         <p class="pv-ajuda">Regras do Rotom: ${sni.regrasRotom ? `<b>${sni.regrasRotom.length}</b> lida(s) ${sni.regrasEm ? dataHora(sni.regrasEm) : ''} (${esc(sni.regrasFonte ?? '')})` : '<b>ainda não lidas</b> — a janela do app manda em até 1 min; ou use o teto próprio abaixo'}.
           Sem regra de Boss Token no Rotom, teto próprio: <input type="number" class="pv-in" data-c="sniTokGems" min="0" value="${esc(sni.tokenGems)}" style="width:60px"> 💎 · <input type="number" class="pv-in" data-c="sniTokGold" min="0" value="${esc(sni.tokenGold)}" style="width:110px"> 🪙</p>
+        ${(() => {
+          const lim = regrasNoLimite();
+          return lim.length ? `<p class="pv-neg"><b>⛔ ${lim.map((r) => esc(r.nome)).join(', ')}: o limite de quantidade da regra do Rotom estourou (${lim.map((r) => `${fmt(r.total)} de ${fmt(r.maxQty)}`).join(', ')}) — ${sni.limiteRotom ? 'o sniper PAROU de comprar. Aumente a "Qtd máx." no Rotom ou desmarque abaixo.' : 'o sniper está ignorando esse limite (opção abaixo).'}</b></p>` : '';
+        })()}
+        <div class="pv-linha"><label><input type="checkbox" data-a="sniLimite" ${sni.limiteRotom ? 'checked' : ''}> respeitar a quantidade máxima da regra do Rotom</label></div>
+        ${(() => {
+          const p = placarSni();
+          const pct = (a, b) => (b ? `${Math.round((a / b) * 100)}%` : '—');
+          return `<p class="pv-ajuda"><b>Hoje:</b> ${p.anuncios} anúncio(s) disputado(s) · entrou em ${p.entrou} sorteio(s) · <b>ganhou ${p.ganhou}</b> (${pct(p.ganhou, p.entrou || p.anuncios)}) · perdeu ${p.perdeu} · sobras pedidas ${p.sobras}, <b>ganhas ${p.sobraGanha}</b> · sem resposta ${p.semResposta}${p.cedo ? ` · <span class="pv-neg">cedo demais ${p.cedo}</span>` : ''} · <b>${fmt(p.tokens)} item(ns) comprado(s)</b>${Object.keys(sni.chaves).length ? `<br><small>respostas do servidor (total): ${Object.entries(sni.chaves).map(([k, n]) => `${esc(k)} ×${n}`).join(' · ')}</small>` : ''}</p>`;
+        })()}
         <table class="pv-tab"><tr><th>Item</th><th>De onde</th><th>Teto 💎</th><th>Teto 🪙</th><th>Ainda pode comprar</th></tr>
           ${regras.length ? regras.map((r) => `<tr><td style="text-align:left"><b>${esc(r.nome)}</b></td><td>${esc(r.fonte)}</td><td>${r.gems ? fmt(r.gems) : '—'}</td><td>${r.gold ? fmt(r.gold) : '—'}</td><td>${r.resta === Infinity ? 'sem limite' : fmt(r.resta)}</td></tr>`).join('')
             : '<tr><td colspan="5">Nenhuma regra ativa (no Rotom, ative a do Bronze Boss Token).</td></tr>'}</table>
@@ -1542,6 +1606,7 @@
     else if (a === 'aoeAtivo') { aoe.ativo = !aoe.ativo; if (aoe.ativo) { aoeBase = false; aoeUltima = 0; } aoeNota(aoe.ativo ? 'sniper LIGADO' : 'sniper desligado'); }
     else if (a === 'sniAtivo') alternarSniper();
     else if (a === 'sniOutros') { sni.outros = b.checked; salvarSni(); }
+    else if (a === 'sniLimite') { sni.limiteRotom = b.checked; salvarSni(); }
     else if (a === 'favAtivo') { fav.ativo = !fav.ativo; salvarFav(); }
     else if (a === 'favAgora') { vigiarFavoritos(true); }
     else if (a === 'espAtivo') { esp.ativo = !esp.ativo; salvarEsp(); }
