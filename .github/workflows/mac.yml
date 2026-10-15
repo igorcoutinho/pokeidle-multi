@@ -10,15 +10,22 @@ jobs:
   dmg:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run build:mac
+      - name: npm run build:mac
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          set -o pipefail
+          if ! npm run build:mac 2>&1 | tee build.log; then
+            # o fim do log vira uma anotação (dá para ler sem login, pela API do GitHub)
+            echo "::error title=build:mac falhou::$(tail -40 build.log | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"
+            exit 1
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: PokeIdle-Multi-Mac
