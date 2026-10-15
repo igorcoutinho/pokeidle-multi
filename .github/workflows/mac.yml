@@ -1,0 +1,26 @@
+# Gera o .dmg do PokeIdle Multi para Mac (Intel + Apple Silicon) numa máquina macOS do GitHub.
+# Dispara com uma tag "mac-*" (ex.: git tag mac-1.12.27 && git push origin mac-1.12.27) ou pelo
+# botão "Run workflow" na aba Actions. O .dmg sai em "Artifacts" no fim da execução.
+name: Build Mac (dmg)
+on:
+  workflow_dispatch:
+  push:
+    tags: ['mac-*']
+jobs:
+  dmg:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build:mac
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PokeIdle-Multi-Mac
+          path: dist/*.dmg
+          retention-days: 30

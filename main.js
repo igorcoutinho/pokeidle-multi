@@ -148,7 +148,10 @@ const cockpits = new Map();
 function acharRotom() {
   const manual = path.join(app.getPath('documents'), 'PokeIdleMulti', 'extensoes', 'rotom-sniper');
   if (fs.existsSync(path.join(manual, 'manifest.json'))) return manual;
-  const dadosChrome = path.join(app.getPath('appData'), '..', 'Local', 'Google', 'Chrome', 'User Data');
+  // Windows: %LOCALAPPDATA%\Google\Chrome\User Data · Mac: ~/Library/Application Support/Google/Chrome
+  const dadosChrome = process.platform === 'darwin'
+    ? path.join(app.getPath('appData'), 'Google', 'Chrome')
+    : path.join(app.getPath('appData'), '..', 'Local', 'Google', 'Chrome', 'User Data');
   let perfis = [];
   try { perfis = fs.readdirSync(dadosChrome); } catch { return null; }
   const candidatos = [];
