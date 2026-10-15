@@ -110,6 +110,11 @@ COMPRAS E VENDAS — botão 💰 Vendas
     SERVIDOR (corrige o relógio do PC) e repete dentro do sorteio de 3 s; quando o sorteio fecha,
     relê o anúncio e compra a sobra. Sem regra no Rotom, dá para pôr um teto próprio para o token.
     Botão ⚡ Sniper na barra de cada conta: liga/desliga (passe o mouse para ver as regras que segue).
+  - 💎 Diamante (aba própria, por conta) — SÓ venda de diamantes: a cada 5 min lê a vitrine de
+    diamantes; se o SrErva está vendendo em Coins, deixa o nosso anúncio a 1 coin abaixo do dele
+    (por diamante). Já tem anúncio de diamantes aberto → edita o preço (só quando muda); não tem →
+    cria um de 50. Ele não está vendendo (ou só em Gemas) → não mexe. Vendedor, quantidade e
+    intervalo dá para mudar na aba.
 
 PvP — botão ⚔ PvP
   - A cada duelo, guarda a ORDEM em que o rival colocou os pokémon (e a sua), tirada da fita
