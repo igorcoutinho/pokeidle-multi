@@ -8,7 +8,7 @@
     "start": "electron .",
     "build": "electron-builder --win portable",
     "build:lite": "electron-builder --win portable -c.extraMetadata.variante=lite -c.extraMetadata.productName=\"PokeIdle Multi Lite\" -c.productName=\"PokeIdle Multi Lite\"",
-    "build:mac": "electron-builder --mac dmg --universal",
+    "build:mac": "electron-builder --mac dmg --universal --publish never",
     "build:basica": "electron-builder --win portable -c.extraMetadata.variante=basica -c.extraMetadata.productName=\"PokeIdle Multi Basico\" -c.productName=\"PokeIdle Multi Basico\""
   },
   "build": {
