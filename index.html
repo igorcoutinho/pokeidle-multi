@@ -999,7 +999,7 @@
           <label><input type="radio" name="anu-modo" data-an="modo" value="deixar" ${anu.modo === 'deixar' ? 'checked' : ''}> deixar na bolsa</label>
           <input data-an="n" type="number" min="0" step="1" value="${escH(anu.n)}" style="width:80px" ${anu.modo === 'tudo' ? 'disabled' : ''}></div>
         <table><tr><th>Conta</th><th>Tem</th><th>Vai anunciar</th><th>Agendado</th></tr>
-          ${linhas.map((l) => `<tr><td>${escH(l.x.nome)}</td><td>${l.ok ? fmtK(l.tem) : '<span class="ajuda">sem conexão</span>'}</td><td>${l.vai ? `<b>${fmtK(l.vai)}</b>` : '—'}</td><td>${escH((() => { const g = anu.lista.filter((y) => y.n === l.x.n).sort((p, q) => p.em - q.em)[0]; return g ? `⏰ ${horaCurta(g.em)} · ${fmtK(g.qtd)}× ${g.nome}` : ''; })())}</td></tr>`).join('')}
+          ${linhas.map((l) => `<tr><td>${escH(l.x.nome)}</td><td>${l.ok ? fmtK(l.tem) : '<span class="ajuda">sem conexão</span>'}</td><td data-vai-n="${l.x.n}">${l.vai ? `<b>${fmtK(l.vai)}</b>` : '—'}</td><td>${escH((() => { const g = anu.lista.filter((y) => y.n === l.x.n).sort((p, q) => p.em - q.em)[0]; return g ? `⏰ ${horaCurta(g.em)} · ${fmtK(g.qtd)}× ${g.nome}` : ''; })())}</td></tr>`).join('')}
         </table>
         <div class="linha" style="margin-top:8px"><button data-an="publicar" class="on" ${anu.rodando || !vao.length || preco < 1 ? 'disabled' : ''}>📢 Publicar ${fmtK(totalQtd)} em ${vao.length} conta(s) a ${preco ? fmtK(preco) : '?'} ${moedaTxt} cada</button>
           ${anu.lista.length ? `<button data-an="cancelar">✖ Cancelar ${anu.lista.length} agendado(s)</button>` : ''}
@@ -1015,10 +1015,31 @@
     if (!k) return;
     if (k === 'item') { anu.itemId = Number(e.target.value); anu.ref = null; }
     else if (k === 'moeda') { anu.moeda = e.target.value; anu.ref = null; }
-    else if (k === 'preco') anu.preco = e.target.value;
+    else if (k === 'preco' || k === 'n') return; // tratados no 'input', sem redesenhar
     else if (k === 'modo') anu.modo = e.target.value;
-    else if (k === 'n') anu.n = e.target.value;
     abrirAnunciar();
+  });
+  // Digitar preço/quantidade só atualiza o estado, a coluna "Vai anunciar" e o botão. Redesenhar a
+  // janela no 'change' (que dispara ao sair do campo — isto é, no clique em Publicar) trocava o
+  // botão entre o mousedown e o mouseup, e o clique se perdia.
+  gxFundo.addEventListener('input', (e) => {
+    const k = e.target.dataset.an;
+    if (k !== 'preco' && k !== 'n') return;
+    anu[k] = e.target.value;
+    const tem = (n) => (anu.bolsas.get(n) ?? []).find(([id]) => id === anu.itemId)?.[1] ?? 0;
+    let contasVao = 0, total = 0;
+    for (const x of contas) {
+      const vai = qtdAnunciar(tem(x.n));
+      if (vai > 0) { contasVao++; total += vai; }
+      const td = gxModal.querySelector(`[data-vai-n="${x.n}"]`);
+      if (td) td.innerHTML = vai ? `<b>${fmtK(vai)}</b>` : '—';
+    }
+    const preco = Math.floor(Number(anu.preco) || 0);
+    const bt = gxModal.querySelector('[data-an="publicar"]');
+    if (bt) {
+      bt.disabled = !!anu.rodando || !contasVao || preco < 1;
+      bt.textContent = `📢 Publicar ${fmtK(total)} em ${contasVao} conta(s) a ${preco ? fmtK(preco) : '?'} ${anu.moeda === 'orb' ? 'Gemas' : 'Coins'} cada`;
+    }
   });
   gxFundo.addEventListener('click', async (e) => {
     const k = e.target.closest('[data-an]')?.dataset.an;
@@ -1127,7 +1148,7 @@
     if (!k) return;
     if (k === 'moeda') { bons.moeda = e.target.value; return abrirBons(); }
     if (k === 'dias') { bons.dias = Math.min(30, Math.max(1, Math.floor(Number(e.target.value) || 1))); return abrirBons(); }
-    if (k === 'precoTodos') { bons.precoTodos = e.target.value; return abrirBons(); }
+    if (k === 'precoTodos') return; // tratado no 'input'
     if (k === 'de' || k === 'ate') {
       bons[k] = Math.min(720, Math.max(1, Math.floor(Number(e.target.value) || 1)));
       if (bons.ate < bons.de) [bons.de, bons.ate] = [bons.ate, bons.de];
@@ -1136,7 +1157,7 @@
     const chave = e.target.dataset.k;
     const atual = bons.escolha.get(chave) ?? {};
     if (k === 'marca') bons.escolha.set(chave, { ...atual, marcado: e.target.checked });
-    if (k === 'preco') bons.escolha.set(chave, { ...atual, preco: e.target.value, marcado: atual.marcado || Number(e.target.value) > 0 });
+    if (k === 'preco') return; // tratado no 'input'
     abrirBons();
   });
   gxFundo.addEventListener('click', async (e) => {
@@ -1174,6 +1195,25 @@
       salvarAnu(); btAnu();
       return abrirBons(`<span class="ok">programados ${plano.length}: o primeiro às ${horaCurta(plano[0].em)}, o último às ${horaCurta(plano.at(-1).em)} — acompanhe em 📢 Anunciar</span>`);
     }
+  });
+  gxFundo.addEventListener('input', (e) => {
+    const k = e.target.dataset.bn;
+    if (k === 'precoTodos') {
+      bons.precoTodos = e.target.value;
+      const bt = gxModal.querySelector('[data-bn="aplicarTodos"]');
+      if (bt) bt.disabled = !(Number(bons.precoTodos) > 0);
+      return;
+    }
+    if (k !== 'preco') return;
+    const chave = e.target.dataset.k;
+    const atual = bons.escolha.get(chave) ?? {};
+    const marcado = atual.marcado || Number(e.target.value) > 0;
+    bons.escolha.set(chave, { ...atual, preco: e.target.value, marcado });
+    const caixa = gxModal.querySelector(`[data-bn="marca"][data-k="${chave}"]`);
+    if (caixa && marcado) caixa.checked = true;
+    const n = [...bons.escolha.entries()].filter(([kk, v]) => v.marcado && Number(v.preco) > 0 && !gxModal.querySelector(`[data-bn="marca"][data-k="${kk}"]`)?.disabled).length;
+    const bt = gxModal.querySelector('[data-bn="programar"]');
+    if (bt) { bt.disabled = !n; bt.textContent = `⏰ Programar ${n} anúncio(s)`; }
   });
   document.getElementById('bt-bons').onclick = () => abrirBons('', true);
 
