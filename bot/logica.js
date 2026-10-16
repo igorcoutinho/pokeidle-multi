@@ -452,11 +452,26 @@
   //   3. trava por nota do jogo em 3,5 e trava de shiny: o servidor manda para a Coleção (nunca
   //      vendida) todo pokémon de nota 3,5+ — os que já existem e os que forem capturados;
   //   4. o time inteiro na Coleção também, para nunca entrar numa venda;
-  //   5. a cada 10 min, vende ao NPC os pokémon soltos — que, com a trava ligada, são os de nota < 3,5.
+  //   5. DUAS VEZES POR DIA, em horários sorteados por conta (um entre 7h e 14h, outro entre 17h e
+  //      23h30), vende ao NPC os pokémon soltos — que, com a trava ligada, são os de nota < 3,5.
+  //      Vender a cada captura tinha cara de bot. A proteção dos bons (passo 3) roda o tempo todo.
   // Os pedidos de cadeado/Coleção são INTERRUPTORES no servidor: um mesmo pedido mandado duas
   // vezes destranca. Por isso cada um é lembrado e só reenviado depois de 2 min sem confirmação.
   const VENDA_NOTA_MIN = 3.5;
-  const VENDA_PK_MS = 10 * 60 * 1000;
+  const CHAVE_VENDA_DIA = 'pokebot.vendaPk.v1'; // { dia, horas: [ms, ms], feitas: [bool, bool] }
+  const diaHoje = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+  function planoVendaDoDia() {
+    let p = null;
+    try { p = JSON.parse(localStorage.getItem(CHAVE_VENDA_DIA)); } catch {}
+    if (p?.dia === diaHoje() && Array.isArray(p.horas)) return p;
+    const base = new Date(); base.setHours(0, 0, 0, 0);
+    const sorteio = (deH, ateH) => base.getTime() + Math.round((deH + Math.random() * (ateH - deH)) * 3_600_000);
+    p = { dia: diaHoje(), horas: [sorteio(7, 14), sorteio(17, 23.5)], feitas: [false, false] };
+    try { localStorage.setItem(CHAVE_VENDA_DIA, JSON.stringify(p)); } catch {}
+    const hm = (ms) => new Date(ms).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    registrar(`vendas de pokémon de hoje sorteadas: ${hm(p.horas[0])} e ${hm(p.horas[1])}`);
+    return p;
+  }
   const ITENS_GUARDAR = [70000, 59194, 40530, 70011, 70012, 70013, 70014, 70015];
   mem.vendaPkEm ??= 0;
   mem.pedidosTrava ??= {}; // 'loot:ID' | 'pk:ID' → quando foi pedido
@@ -490,7 +505,6 @@
       for (const p of timeSolto) if (podePedir(`pk:${p.id}`)) { core.send({ t: 'colecao.mover', pokemonId: p.id, para: 'colecao' }); mem.pedidosTrava[`pk:${p.id}`] = Date.now(); }
       return; // vende só com o time inteiro protegido
     }
-    if (Date.now() - mem.vendaPkEm < VENDA_PK_MS) return;
     const soltos = e.pokemons.filter((p) => p.slot == null && !pkTrav.has(Number(p.id)));
     if (!soltos.length) return;
     // Os bons que ainda estão soltos (capturados antes da trava, ou ela só vale para os novos):
@@ -505,9 +519,14 @@
     // Segurança: algum solto ainda com nota 3,5+ (trava não aplicada), shiny, sem nota ou segurando
     // item = espera a próxima rodada em vez de arriscar vender.
     if (soltos.some((p) => p.nota == null || Number(p.nota) >= VENDA_NOTA_MIN || p.shiny || p.heldItemId)) return;
+    const plano = planoVendaDoDia();
+    const vez = plano.horas.findIndex((t, i) => !plano.feitas[i] && Date.now() >= t);
+    if (vez < 0) return; // ainda não é a hora de nenhuma das vendas de hoje
     const ateId = Math.max(...soltos.map((p) => Number(p.id)));
     if (core.send({ t: 'shop.sellAllPokemons', ateId })) {
       mem.vendaPkEm = Date.now();
+      plano.feitas[vez] = true;
+      try { localStorage.setItem(CHAVE_VENDA_DIA, JSON.stringify(plano)); } catch {}
       const melhor = Math.max(...soltos.map((p) => Number(p.nota)));
       registrar(`vendeu ${soltos.length} pokémon de nota < ${String(VENDA_NOTA_MIN).replace('.', ',')} (a melhor era ${melhor.toFixed(2).replace('.', ',')})`);
     }

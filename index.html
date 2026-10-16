@@ -96,7 +96,7 @@
   #gx-modal td{padding:5px 6px;border-top:1px solid #4a2a2a;vertical-align:top}
   #gx-modal tr.eu td{background:#4a2a5a;font-weight:700}
   #gx-modal .ajuda{opacity:.7;font-size:12px}
-  #ia-modal input,#ia-modal select,#px-modal input,#anu-modal input,#anu-modal select{background:#2a1515;border:1px solid #8a5a4a;color:var(--texto);border-radius:6px;padding:4px 8px;font:inherit}#gx-modal .ok{color:#7fdc8f;font-weight:700}#gx-modal .ruim{color:#ff8a8a;font-weight:700}
+  #ia-modal input,#ia-modal select,#px-modal input,#anu-modal input,#anu-modal select,#bons-modal input,#bons-modal select{background:#2a1515;border:1px solid #8a5a4a;color:var(--texto);border-radius:6px;padding:4px 8px;font:inherit}#gx-modal .ok{color:#7fdc8f;font-weight:700}#gx-modal .ruim{color:#ff8a8a;font-weight:700}
   #aviso{position:fixed;left:50%;top:48px;transform:translateX(-50%);z-index:10;background:#2a1515;border:2px solid var(--ouro);border-radius:10px;padding:8px 14px;font-weight:600;display:none}
 </style>
 </head>
@@ -107,6 +107,7 @@
   <button id="bt-1x1" title="Uma conta por vez, ocupando a janela toda — troque pelas abas">1×1</button>
   <span id="paginas"></span>
   <button id="bt-painel" title="Painel: o estado de cada conta e os comandos, sem desenhar o jogo (o mais leve para a VPS)">📋<span class="rot"> Painel</span></button>
+  <button id="bt-bons" title="Os pokémon bons (Coleção) de todas as contas, para programar o anúncio de cada um no Mercado">⭐<span class="rot"> Bons</span></button>
   <button id="bt-anunciar" title="Anunciar no Mercado um item escolhido, em todas as contas de uma vez">📢<span class="rot"> Anunciar</span></button>
   <button id="bt-ocultar" title="Esconde as telas das contas para poupar a VPS — elas continuam jogando">🙈<span class="rot"> Ocultar telas</span></button>
   <span id="abas-1x1"></span>
@@ -550,6 +551,7 @@
         `<span class="rot">Onde</span> ${d.centro ? '🏥 Centro Pokémon' : `🗺 ${escH(d.hunt)}`}`,
         `<span class="rot">Bolsa</span> Ultra ${fmtK(d.ultra)} · Poções ${fmtK(d.pocoes)} · Water Stone ${fmtK(d.water)} · ${d.semParar ? 'lançar sem parar ✓' : 'lançar sem parar ✗'}`,
         `<span class="rot">Rota</span> ${d.rota ? (d.rota.on ? `✓ ${escH(d.rota.st)}` : 'desligada') : '—'}`,
+        ...(cfg.spotsDoDia?.porConta?.[x.n] && cfg.spotsDoDia.dia === diaLocal() ? [`<span class="rot">Spot de hoje</span> 🗺 ${escH(cfg.spotsDoDia.porConta[x.n].nome)}${cfg.spotsDoDia.porConta[x.n].xph ? ` · ~${escH(cfg.spotsDoDia.porConta[x.n].xph)} XP/h` : ''}`] : []),
         `<span class="drops"><span class="rot">Caiu hoje</span> ${d.drops?.hoje?.length ? d.drops.hoje.map((x) => `${escH(x.nome)} <b>×${fmtK(x.qtd)}</b>`).join(' · ') : '<span class="rot">nada ainda</span>'}</span>`,
         ...(d.drops?.ontem?.length ? [`<span class="rot">Ontem</span> ${d.drops.ontem.map((x) => `${escH(x.nome)} ×${fmtK(x.qtd)}`).join(' · ')}`] : []),
         ...(d.drops?.bolsa?.length ? [`<span class="rot">Na bolsa</span> ${d.drops.bolsa.map((x) => `${escH(x.nome)} ${fmtK(x.qtd)}`).join(' · ')}`] : []),
@@ -888,6 +890,57 @@
   // pedidos vão pelo WebSocket de cada conta e a resposta ("criado" ou erro) é lida dele.
   const anu = { itemId: null, moeda: 'gold', preco: '', modo: 'tudo', n: 1, bolsas: new Map(), ref: null, rodando: '', resultado: null, agenda: new Map() };
   const horaCurta = (ms) => new Date(ms).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  // Agendados salvos no multi.json (sobrevivem a reiniciar o app) e o histórico dos últimos.
+  anu.lista = Array.isArray(cfg.anunciosAgendados) ? cfg.anunciosAgendados : [];
+  anu.historico = Array.isArray(cfg.anunciosHistorico) ? cfg.anunciosHistorico : [];
+  const timersAnu = new Map(); // id → setTimeout
+  const salvarAnu = () => window.multi.salvar({ anunciosAgendados: anu.lista, anunciosHistorico: anu.historico.slice(0, 40) });
+  const btAnu = () => { const b = document.getElementById('bt-anunciar'); if (b) b.innerHTML = `📢<span class="rot"> Anunciar</span>${anu.lista.length ? ` <b>(${anu.lista.length})</b>` : ''}`; };
+  function agendarAnuncio(ag) {
+    // Venceu com o app fechado: sai entre 1 e 5 min depois de abrir (não todas juntas).
+    const espera = ag.em > Date.now() ? ag.em - Date.now() : Math.round((1 + Math.random() * 4) * 60_000);
+    if (ag.em <= Date.now()) ag.em = Date.now() + espera;
+    clearTimeout(timersAnu.get(ag.id));
+    timersAnu.set(ag.id, setTimeout(() => publicarAgendado(ag), espera));
+  }
+  async function publicarAgendado(ag) {
+    timersAnu.delete(ag.id);
+    const x = contas.find((y) => y.n === ag.n);
+    let txt;
+    if (ag.tipo === 'pokemon') {
+      // Pokémon: um anúncio por bicho (qtd 1), com os dias de pensão da feira.
+      const ainda = x ? await naConta(x, `!!window.__pokebotCore?.eu?.pokemons?.find((p) => p.id === ${Number(ag.pokemonId)})`) : null;
+      if (ainda == null) txt = '✗ conta sem conexão na hora';
+      else if (!ainda) txt = '✗ o pokémon não está mais na conta';
+      else {
+        const pedido = { t: 'market.criar', tipo: 'pokemon', itemId: null, pokemonId: ag.pokemonId, caixaId: null, casaId: null, bicicletaId: null, qtd: 1, preco: ag.preco, moeda: ag.moeda, dias: ag.dias };
+        const r = await naConta(x, jsPedir(pedido, "m.t === 'market' && m.aba === 'criado'"));
+        txt = r && !r.erro ? `✓ anunciado por ${ag.dias} dia(s)` : `✗ ${r?.erro ?? 'sem resposta'}`;
+        if (r && !r.erro) {
+          cfg.pokemonsAnunciados = { ...(cfg.pokemonsAnunciados ?? {}) };
+          (cfg.pokemonsAnunciados[ag.n] ??= []).push(ag.pokemonId);
+          window.multi.salvar({ pokemonsAnunciados: cfg.pokemonsAnunciados });
+        }
+      }
+    } else {
+    const bolsa = x ? (await naConta(x, JS_BOLSA)) : null;
+    if (!bolsa) txt = '✗ conta sem conexão na hora';
+    else {
+      const qtd = Math.min(ag.qtd, bolsa.find(([id]) => id === ag.itemId)?.[1] ?? 0);
+      if (!qtd) txt = '✗ na hora não tinha mais o item';
+      else {
+        const pedido = { t: 'market.criar', tipo: 'item', itemId: ag.itemId, pokemonId: null, caixaId: null, casaId: null, bicicletaId: null, qtd, preco: ag.preco, moeda: ag.moeda, dias: null };
+        const r = await naConta(x, jsPedir(pedido, "m.t === 'market' && m.aba === 'criado'"));
+        txt = r && !r.erro ? `✓ ${fmtK(qtd)} anunciado(s)` : `✗ ${r?.erro ?? 'sem resposta'}`;
+      }
+    }
+    }
+    anu.lista = anu.lista.filter((y) => y.id !== ag.id);
+    anu.historico.unshift({ em: Date.now(), conta: x?.nome ?? `conta ${ag.n}`, nome: ag.nome, preco: ag.preco, moeda: ag.moeda, txt });
+    salvarAnu(); btAnu();
+    aviso(`📢 ${x?.nome ?? ag.n}: ${ag.nome} — ${txt}`, 7000);
+    if (gxFundo.classList.contains('aberto') && gxModal.querySelector('#anu-modal')) abrirAnunciar();
+  }
   const JS_BOLSA = `(() => { const c = window.__pokebotCore, e = c?.eu; if (!e || !c.logado) return null;
     return Object.entries(e.items || {}).filter(([, q]) => q > 0).map(([id, q]) => { const it = c.itens.get(Number(id)); return [Number(id), Math.floor(q), it?.name ?? it?.nome ?? ('item ' + id), it?.category ?? '']; }); })()`;
   // Pergunta algo ao servidor por uma conta e espera a resposta que `casa` reconhece.
@@ -945,20 +998,22 @@
           <label><input type="radio" name="anu-modo" data-an="modo" value="fixo" ${anu.modo === 'fixo' ? 'checked' : ''}> até</label>
           <label><input type="radio" name="anu-modo" data-an="modo" value="deixar" ${anu.modo === 'deixar' ? 'checked' : ''}> deixar na bolsa</label>
           <input data-an="n" type="number" min="0" step="1" value="${escH(anu.n)}" style="width:80px" ${anu.modo === 'tudo' ? 'disabled' : ''}></div>
-        <table><tr><th>Conta</th><th>Tem</th><th>Vai anunciar</th><th>Resultado</th></tr>
-          ${linhas.map((l) => `<tr><td>${escH(l.x.nome)}</td><td>${l.ok ? fmtK(l.tem) : '<span class="ajuda">sem conexão</span>'}</td><td>${l.vai ? `<b>${fmtK(l.vai)}</b>` : '—'}</td><td>${escH(anu.resultado?.get(l.x.n) ?? '')}</td></tr>`).join('')}
+        <table><tr><th>Conta</th><th>Tem</th><th>Vai anunciar</th><th>Agendado</th></tr>
+          ${linhas.map((l) => `<tr><td>${escH(l.x.nome)}</td><td>${l.ok ? fmtK(l.tem) : '<span class="ajuda">sem conexão</span>'}</td><td>${l.vai ? `<b>${fmtK(l.vai)}</b>` : '—'}</td><td>${escH((() => { const g = anu.lista.filter((y) => y.n === l.x.n).sort((p, q) => p.em - q.em)[0]; return g ? `⏰ ${horaCurta(g.em)} · ${fmtK(g.qtd)}× ${g.nome}` : ''; })())}</td></tr>`).join('')}
         </table>
         <div class="linha" style="margin-top:8px"><button data-an="publicar" class="on" ${anu.rodando || !vao.length || preco < 1 ? 'disabled' : ''}>📢 Publicar ${fmtK(totalQtd)} em ${vao.length} conta(s) a ${preco ? fmtK(preco) : '?'} ${moedaTxt} cada</button>
-          ${anu.agenda.size ? `<button data-an="cancelar">✖ Cancelar ${anu.agenda.size} agendado(s)</button>` : ''}
+          ${anu.lista.length ? `<button data-an="cancelar">✖ Cancelar ${anu.lista.length} agendado(s)</button>` : ''}
           ${anu.rodando ? `<span class="ajuda">${escH(anu.rodando)}</span>` : ''}</div>
         ${msg ? `<div class="linha">${msg}</div>` : ''}
-        <p class="ajuda">Ao publicar, cada conta é agendada para um momento diferente, sorteado entre 1 e 30 minutos depois (fica na coluna Resultado). O agendamento vive nesta janela do app: fechar o app cancela os que ainda não foram. Cada conta publica um anúncio com a quantidade da coluna "Vai anunciar". O Mercado cobra a taxa dele na venda. Itens trancados pela venda automática (Boss Token, fragmentos, peças de TM) podem ser anunciados normalmente — o cadeado só os protege da venda automática ao NPC.</p>
+        ${anu.lista.length ? `<div style="margin-top:8px"><b>⏰ Agendados</b><table>${[...anu.lista].sort((p, q) => p.em - q.em).map((g) => `<tr><td>${horaCurta(g.em)}</td><td>${escH(contas.find((y) => y.n === g.n)?.nome ?? g.n)}</td><td>${fmtK(g.qtd)}× ${escH(g.nome)}</td><td>${fmtK(g.preco)} ${g.moeda === 'orb' ? 'Gemas' : 'Coins'}</td></tr>`).join('')}</table></div>` : ''}
+        ${anu.historico.length ? `<div style="margin-top:8px"><b>Últimos anúncios</b><table>${anu.historico.slice(0, 10).map((h) => `<tr><td>${new Date(h.em).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</td><td>${escH(h.conta)}</td><td>${escH(h.nome)} a ${fmtK(h.preco)} ${h.moeda === 'orb' ? 'Gemas' : 'Coins'}</td><td>${escH(h.txt)}</td></tr>`).join('')}</table></div>` : ''}
+        <p class="ajuda">Ao publicar, cada conta é agendada para um momento diferente, sorteado entre 1 e 30 minutos depois (fica na coluna Resultado). Os agendados ficam salvos: se o app fechar, ao abrir de novo eles voltam (os que venceram com o app fechado saem entre 1 e 5 min depois de abrir). Cada conta publica um anúncio com a quantidade da coluna "Vai anunciar". O Mercado cobra a taxa dele na venda. Itens trancados pela venda automática (Boss Token, fragmentos, peças de TM) podem ser anunciados normalmente — o cadeado só os protege da venda automática ao NPC.</p>
       </section>`;
   }
   gxFundo.addEventListener('change', (e) => {
     const k = e.target.dataset.an;
     if (!k) return;
-    if (k === 'item') { anu.itemId = Number(e.target.value); anu.ref = null; if (!anu.agenda.size) anu.resultado = null; }
+    if (k === 'item') { anu.itemId = Number(e.target.value); anu.ref = null; }
     else if (k === 'moeda') { anu.moeda = e.target.value; anu.ref = null; }
     else if (k === 'preco') anu.preco = e.target.value;
     else if (k === 'modo') anu.modo = e.target.value;
@@ -968,7 +1023,7 @@
   gxFundo.addEventListener('click', async (e) => {
     const k = e.target.closest('[data-an]')?.dataset.an;
     if (!k || e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
-    if (k === 'recarregar') { anu.ref = null; if (!anu.agenda.size) anu.resultado = null; return abrirAnunciar('recarregar'); }
+    if (k === 'recarregar') { anu.ref = null; return abrirAnunciar('recarregar'); }
     if (k === 'ref') {
       const x = contas.find((y) => (anu.bolsas.get(y.n) ?? null) != null);
       if (!x) return abrirAnunciar('<span class="ruim">nenhuma conta conectada</span>');
@@ -997,40 +1052,194 @@
       const agora = Date.now();
       const plano = lista.map((l, i) => ({ ...l, em: agora + Math.round(minutos[i] * 60_000) })).sort((a, b) => a.em - b.em);
       if (!confirm(`Anunciar ${nome} a ${fmtK(preco)} ${moedaTxt} cada?\n\nCada conta publica num momento diferente, sorteado entre 1 e 30 min:\n${plano.map((l) => `• ${l.x.nome}: ${fmtK(l.vai)} às ${horaCurta(l.em)}`).join('\n')}\n\nTotal: ${fmtK(plano.reduce((s, l) => s + l.vai, 0))} unidades.${alerta}`)) return;
-      anu.resultado ??= new Map();
       const itemId = anu.itemId, moeda = anu.moeda;
       for (const l of plano) {
-        const antigo = anu.agenda.get(l.x.n);
-        if (antigo) clearTimeout(antigo.timer);
-        anu.resultado.set(l.x.n, `⏰ agendado às ${horaCurta(l.em)} (${fmtK(l.vai)}× ${nome})`);
-        const timer = setTimeout(async () => {
-          anu.agenda.delete(l.x.n);
-          // Na hora, confere a bolsa de novo: se a conta já não tem tanto, anuncia o que tiver.
-          const bolsa = (await naConta(l.x, JS_BOLSA)) ?? [];
-          const temAgora = bolsa.find(([id]) => id === itemId)?.[1] ?? 0;
-          const qtd = Math.min(l.vai, temAgora);
-          let txt;
-          if (!qtd) txt = '✗ na hora não tinha mais o item';
-          else {
-            const pedido = { t: 'market.criar', tipo: 'item', itemId, pokemonId: null, caixaId: null, casaId: null, bicicletaId: null, qtd, preco, moeda, dias: null };
-            const r = await naConta(l.x, jsPedir(pedido, "m.t === 'market' && m.aba === 'criado'"));
-            txt = r && !r.erro ? `✓ ${fmtK(qtd)} anunciado(s) às ${horaCurta(Date.now())}` : `✗ ${r?.erro ?? 'sem resposta'} (${horaCurta(Date.now())})`;
-          }
-          anu.resultado.set(l.x.n, txt);
-          aviso(`📢 ${l.x.nome}: ${txt}`, 6000);
-          if (gxFundo.classList.contains('aberto') && gxModal.querySelector('#anu-modal')) abrirAnunciar();
-        }, l.em - agora);
-        anu.agenda.set(l.x.n, { timer, em: l.em });
+        anu.lista = anu.lista.filter((g) => !(g.n === l.x.n && g.itemId === itemId)); // reagendar substitui
+        const ag = { id: `${Date.now()}-${l.x.n}-${Math.random().toString(36).slice(2, 7)}`, n: l.x.n, itemId, nome, moeda, qtd: l.vai, preco, em: l.em };
+        anu.lista.push(ag);
+        agendarAnuncio(ag);
       }
+      salvarAnu(); btAnu();
       return abrirAnunciar(`<span class="ok">agendado: ${plano.length} conta(s), a primeira às ${horaCurta(plano[0].em)} e a última às ${horaCurta(plano.at(-1).em)}</span>`);
     }
     if (k === 'cancelar') {
-      for (const [n, a] of anu.agenda) { clearTimeout(a.timer); anu.resultado?.set(n, '✖ cancelado'); }
-      anu.agenda.clear();
+      if (!confirm(`Cancelar ${anu.lista.length} anúncio(s) agendado(s)?`)) return;
+      for (const g of anu.lista) clearTimeout(timersAnu.get(g.id));
+      timersAnu.clear(); anu.lista = []; salvarAnu(); btAnu();
       return abrirAnunciar('agendamentos cancelados');
     }
   });
-  document.getElementById('bt-anunciar').onclick = () => { if (!anu.agenda.size) anu.resultado = null; abrirAnunciar('recarregar'); };
+  document.getElementById('bt-anunciar').onclick = () => abrirAnunciar('recarregar');
+
+  // ---------------------------------------------------------------- ⭐ Pokémons bons → Mercado
+  // Os bons de todas as contas (os que a trava mandou para a Coleção, fora o time e o inicial),
+  // para programar o anúncio de CADA UM, uma vez: preço por pokémon, moeda e dias de pensão em
+  // comum; cada anúncio sai num horário sorteado (1–30 min, um por vez) pelo mesmo agendador
+  // salvo do 📢. Já anunciado (ou agendado) aparece marcado e não entra de novo.
+  const bons = { lista: new Map(), escolha: new Map(), moeda: 'gold', dias: 3, precoTodos: '', de: 1, ate: 3 };
+  // Nota ATUAL abaixo de 3,5: fica guardado na Coleção, mas não vai ao Mercado.
+  const NOTA_MIN_ANUNCIO = 3.5;
+  const anunciavel = (p) => Number(p.nota) >= NOTA_MIN_ANUNCIO;
+  const JS_BONS = `(() => { const e = window.__pokebotCore?.eu; if (!e) return null;
+    const trav = new Set((e.automation?.pokemonTravado || []).map(Number));
+    return e.pokemons.filter((p) => trav.has(Number(p.id)) && p.slot == null && !p.starter)
+      .map((p) => ({ id: p.id, nome: p.apelido || p.nome, nv: p.level, nota: p.nota, shiny: !!p.shiny, pot: p.potencia, ivs: p.ivs ? Object.values(p.ivs).reduce((a, b) => a + (Number(b) || 0), 0) : null }))
+      .sort((a, b) => (b.nota ?? 0) - (a.nota ?? 0)); })()`;
+  const chaveBom = (n, id) => `${n}:${id}`;
+  const jaAnunciado = (n, id) => (cfg.pokemonsAnunciados?.[n] ?? []).includes(id) || anu.lista.some((g) => g.tipo === 'pokemon' && g.n === n && g.pokemonId === id);
+  async function abrirBons(msg = '', recarregar = false) {
+    gxFundo.classList.add('aberto');
+    if (recarregar || !bons.lista.size) {
+      gxModal.innerHTML = '<header><span>⭐ Pokémons bons</span><button data-gx="fechar">×</button></header><section>lendo as Coleções das contas…</section>';
+      bons.lista = new Map(await Promise.all(contas.map(async (x) => [x.n, (await naConta(x, JS_BONS)) ?? null])));
+    }
+    const linhas = contas.flatMap((x) => (bons.lista.get(x.n) ?? []).map((p) => ({ x, p, guardaSo: !anunciavel(p), feito: jaAnunciado(x.n, p.id) || !anunciavel(p), k: chaveBom(x.n, p.id) })));
+    const marcados = linhas.filter((l) => !l.feito && bons.escolha.get(l.k)?.marcado && Number(bons.escolha.get(l.k)?.preco) > 0);
+    const moedaTxt = bons.moeda === 'orb' ? 'Gemas' : 'Coins';
+    gxModal.innerHTML = `<header><span>⭐ Pokémons bons — ${linhas.length} nas Coleções</span><button data-gx="fechar">×</button></header>
+      <section id="bons-modal">
+        <div class="linha">Moeda <select data-bn="moeda"><option value="gold" ${bons.moeda === 'gold' ? 'selected' : ''}>Coins (gold)</option><option value="orb" ${bons.moeda === 'orb' ? 'selected' : ''}>Gemas</option></select>
+          Dias na feira <input data-bn="dias" type="number" min="1" max="30" step="1" value="${escH(bons.dias)}" style="width:70px">
+          <span class="ajuda">(a pensão é paga na hora: pelo padrão do jogo, 100 mil de gold por dia)</span>
+          <button data-bn="recarregar" title="Ler as Coleções de novo">⟳</button></div>
+        <div class="linha">Preço para todos <input data-bn="precoTodos" type="number" min="1" step="1" value="${escH(bons.precoTodos)}" style="width:130px">
+          <button data-bn="aplicarTodos" ${Number(bons.precoTodos) > 0 ? '' : 'disabled'}>✔ preencher e marcar todos</button>
+          <button data-bn="desmarcar">limpar</button></div>
+        <div class="linha">Intervalo entre um anúncio e o próximo: de <input data-bn="de" type="number" min="1" max="720" step="1" value="${escH(bons.de)}" style="width:70px">
+          a <input data-bn="ate" type="number" min="1" max="720" step="1" value="${escH(bons.ate)}" style="width:70px"> minutos
+          <span class="ajuda">o primeiro sai depois desse intervalo e cada um dos seguintes, de novo um intervalo sorteado depois do anterior</span></div>
+        <table><tr><th></th><th>Conta</th><th>Pokémon</th><th>Nv</th><th>Nota</th><th>IVs</th><th>Preço (${moedaTxt})</th><th></th></tr>
+          ${linhas.map((l) => { const e = bons.escolha.get(l.k) ?? {}; return `<tr>
+            <td><input type="checkbox" data-bn="marca" data-k="${l.k}" ${l.feito ? 'disabled' : ''} ${e.marcado && !l.feito ? 'checked' : ''}></td>
+            <td>${escH(l.x.nome)}</td><td>${escH(l.p.nome)}${l.p.shiny ? ' ✨' : ''}${l.p.pot ? ` <span class="ajuda">P${l.p.pot}</span>` : ''}</td>
+            <td>${fmtK(l.p.nv)}</td><td><b>${l.p.nota != null ? Number(l.p.nota).toFixed(2).replace('.', ',') : '?'}</b></td><td>${l.p.ivs ?? '?'}</td>
+            <td><input data-bn="preco" data-k="${l.k}" type="number" min="1" step="1" value="${escH(e.preco ?? '')}" style="width:120px" ${l.feito ? 'disabled' : ''}></td>
+            <td class="ajuda">${l.guardaSo ? `guardado · não vende (nota < ${String(NOTA_MIN_ANUNCIO).replace('.', ',')})` : l.feito ? (anu.lista.some((g) => g.tipo === 'pokemon' && g.n === l.x.n && g.pokemonId === l.p.id) ? '⏰ agendado' : '✓ já anunciado') : ''}</td></tr>`; }).join('') || '<tr><td colspan="8" class="ajuda">nenhum pokémon bom nas Coleções ainda</td></tr>'}
+        </table>
+        <div class="linha" style="margin-top:8px"><button data-bn="programar" class="on" ${marcados.length ? '' : 'disabled'}>⏰ Programar ${marcados.length} anúncio(s)</button>
+          <span class="ajuda">marque e dê um preço para cada um (ou use o "preço para todos"); um anúncio a cada ${escH(bons.de)}–${escH(bons.ate)} min, um atrás do outro</span></div>
+        ${msg ? `<div class="linha">${msg}</div>` : ''}
+        <p class="ajuda">Lista os pokémon da Coleção de cada conta (os de nota 3,5+ e shiny que a trava guardou), fora o time e o inicial. Cada um é anunciado uma vez só: depois de agendado ou anunciado, fica marcado e não entra de novo. Se o servidor recusar (nível ou nota abaixo do mínimo do Mercado, por exemplo), o motivo aparece no histórico do 📢 Anunciar.</p>
+      </section>`;
+  }
+  gxFundo.addEventListener('change', (e) => {
+    const k = e.target.dataset.bn;
+    if (!k) return;
+    if (k === 'moeda') { bons.moeda = e.target.value; return abrirBons(); }
+    if (k === 'dias') { bons.dias = Math.min(30, Math.max(1, Math.floor(Number(e.target.value) || 1))); return abrirBons(); }
+    if (k === 'precoTodos') { bons.precoTodos = e.target.value; return abrirBons(); }
+    if (k === 'de' || k === 'ate') {
+      bons[k] = Math.min(720, Math.max(1, Math.floor(Number(e.target.value) || 1)));
+      if (bons.ate < bons.de) [bons.de, bons.ate] = [bons.ate, bons.de];
+      return abrirBons();
+    }
+    const chave = e.target.dataset.k;
+    const atual = bons.escolha.get(chave) ?? {};
+    if (k === 'marca') bons.escolha.set(chave, { ...atual, marcado: e.target.checked });
+    if (k === 'preco') bons.escolha.set(chave, { ...atual, preco: e.target.value, marcado: atual.marcado || Number(e.target.value) > 0 });
+    abrirBons();
+  });
+  gxFundo.addEventListener('click', async (e) => {
+    const k = e.target.closest('[data-bn]')?.dataset.bn;
+    if (!k || e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+    if (k === 'recarregar') return abrirBons('', true);
+    if (k === 'aplicarTodos' || k === 'desmarcar') {
+      for (const x of contas) for (const p of bons.lista.get(x.n) ?? []) {
+        if (jaAnunciado(x.n, p.id) || !anunciavel(p)) continue;
+        const chave = chaveBom(x.n, p.id);
+        if (k === 'aplicarTodos') bons.escolha.set(chave, { marcado: true, preco: String(Math.floor(Number(bons.precoTodos))) });
+        else bons.escolha.delete(chave);
+      }
+      return abrirBons();
+    }
+    if (k === 'programar') {
+      const lista = contas.flatMap((x) => (bons.lista.get(x.n) ?? []).map((p) => ({ x, p, k: chaveBom(x.n, p.id) })))
+        .filter((l) => !jaAnunciado(l.x.n, l.p.id) && anunciavel(l.p) && bons.escolha.get(l.k)?.marcado && Number(bons.escolha.get(l.k)?.preco) > 0);
+      if (!lista.length) return;
+      // Um atrás do outro: cada anúncio sai um intervalo sorteado (de/até, em min) depois do
+      // anterior — e o primeiro, esse intervalo depois de programar. Fácil de acompanhar e comprar.
+      const minutos = [];
+      let acumulado = 0;
+      for (const _ of lista) { acumulado += bons.de + Math.random() * Math.max(0, bons.ate - bons.de); minutos.push(acumulado); }
+      const agora = Date.now();
+      const plano = lista.map((l, i) => ({ ...l, preco: Math.floor(Number(bons.escolha.get(l.k).preco)), em: agora + Math.round(minutos[i] * 60_000) })).sort((a, b) => a.em - b.em);
+      const moedaTxt = bons.moeda === 'orb' ? 'Gemas' : 'Coins';
+      if (!confirm(`Programar ${plano.length} anúncio(s) de pokémon, ${bons.dias} dia(s) na feira cada (a pensão é cobrada na hora de cada anúncio)?\n\n${plano.map((l) => `• ${horaCurta(l.em)} · ${l.x.nome}: ${l.p.nome} nv ${l.p.nv} (nota ${Number(l.p.nota).toFixed(2)}) por ${fmtK(l.preco)} ${moedaTxt}`).join('\n')}`)) return;
+      for (const l of plano) {
+        const ag = { id: `${Date.now()}-${l.x.n}-${l.p.id}`, tipo: 'pokemon', n: l.x.n, pokemonId: l.p.id, nome: `${l.p.nome} nv ${l.p.nv}`, moeda: bons.moeda, qtd: 1, preco: l.preco, dias: bons.dias, em: l.em };
+        anu.lista.push(ag);
+        agendarAnuncio(ag);
+        bons.escolha.delete(l.k);
+      }
+      salvarAnu(); btAnu();
+      return abrirBons(`<span class="ok">programados ${plano.length}: o primeiro às ${horaCurta(plano[0].em)}, o último às ${horaCurta(plano.at(-1).em)} — acompanhe em 📢 Anunciar</span>`);
+    }
+  });
+  document.getElementById('bt-bons').onclick = () => abrirBons('', true);
+
+  // ---------------------------------------------------------------- 🗺 Spot do dia na Outland
+  // Uma vez por dia: para cada conta, o guia (aba "Onde caçar", com a ficha do pokémon ativo) lista
+  // as hunts da Outland por XP/h, só as seguras. Cada conta pega uma posição diferente dessa lista,
+  // e a posição anda um passo por dia — spots diferentes entre as contas, e um spot novo por dia.
+  // O resultado vai para a 🧭 Rota de cada conta (window.__pokeRota.definirSpotDoDia).
+  const SPOT_TOP = 8; // quantos dos melhores entram no rodízio
+  const diaLocal = (ms = Date.now()) => { const d = new Date(ms); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+  const numeroDoDia = () => Math.floor((Date.now() - new Date().getTimezoneOffset() * 60_000) / 86_400_000);
+  const nomeDoGuia = (t) => { const s = String(t ?? '').trim(); const h = s.length / 2; return Number.isInteger(h) && s.slice(0, h) === s.slice(h) ? s.slice(0, h) : s; };
+  const JS_HUNTS_OUTLAND = `JSON.stringify((window.__pokebotCore?.hunts || []).filter((h) => h.area === 'outland').map((h) => [h.slug, h.nome]))`;
+  let spotsRodando = false;
+  async function escolherSpotsDoDia(forcar = false) {
+    if (spotsRodando) return;
+    const hoje = diaLocal();
+    const salvo = cfg.spotsDoDia;
+    if (!forcar && salvo?.dia === hoje) {
+      // Já escolhido hoje: só reenvia (a conta pode ter reiniciado).
+      for (const x of contas) { const sp = salvo.porConta?.[x.n]; if (sp) await naConta(x, `window.__pokeRota?.definirSpotDoDia(${JSON.stringify(sp)})`); }
+      return;
+    }
+    spotsRodando = true;
+    try {
+      const listas = new Map(); // n → [{ slug, nome, xph }]
+      for (const x of contas) {
+        const ficha = await naConta(x, JS_FICHA_ATIVO);
+        const treinador = await naConta(x, 'window.__pokebotCore?.eu?.level ?? 0');
+        if (!ficha || treinador < 150) continue; // Outland libera com treinador nv 150
+        const r = await window.multi.guiaHunts({ ...ficha, area: 'outland', ordem: 'xp', min: '5' });
+        const mapa = new Map(JSON.parse((await naConta(x, JS_HUNTS_OUTLAND)) || '[]').map(([slug, nome]) => [nome.toLowerCase(), slug]));
+        const cab = r?.cab ?? [];
+        const iXp = cab.findIndex((h) => /XP\/h/i.test(h));
+        const lista = (r?.linhas ?? []).map((l) => ({ nome: nomeDoGuia(l[0]), xph: iXp >= 0 ? String(l[iXp]).match(/[\d.,]+\s*[kMB]?/)?.[0] ?? '' : '' }))
+          .map((h) => ({ ...h, slug: mapa.get(h.nome.toLowerCase()) })).filter((h) => h.slug).slice(0, SPOT_TOP);
+        if (lista.length) listas.set(x.n, lista);
+      }
+      const usados = new Set();
+      const porConta = {};
+      const d = numeroDoDia();
+      contas.forEach((x, i) => {
+        const lista = listas.get(x.n);
+        if (!lista) return;
+        for (let k = 0; k < lista.length; k++) {
+          const sp = lista[(d + i + k) % lista.length];
+          if (usados.has(sp.slug) && k < lista.length - 1) continue; // outra conta já está nele hoje
+          usados.add(sp.slug);
+          porConta[x.n] = { dia: hoje, slug: sp.slug, nome: sp.nome, xph: sp.xph };
+          break;
+        }
+      });
+      cfg.spotsDoDia = { dia: hoje, porConta };
+      window.multi.salvar({ spotsDoDia: cfg.spotsDoDia });
+      for (const x of contas) { const sp = porConta[x.n]; if (sp) await naConta(x, `window.__pokeRota?.definirSpotDoDia(${JSON.stringify(sp)})`); }
+      const resumo = contas.filter((x) => porConta[x.n]).map((x) => `${x.nome}: ${porConta[x.n].nome}`).join(' · ');
+      if (resumo) aviso(`🗺 Spots de hoje na Outland — ${resumo}`, 9000);
+    } catch (e) {
+      console.warn('spots do dia', e);
+    } finally { spotsRodando = false; }
+  }
+  // Na abertura (depois que as contas entram) e, a cada 15 min, confere se o dia virou.
+  setTimeout(() => escolherSpotsDoDia(), 90_000);
+  setInterval(() => { if (cfg.spotsDoDia?.dia !== diaLocal()) escolherSpotsDoDia(); }, 15 * 60_000);
+  for (const ag of anu.lista) agendarAnuncio(ag); // retoma os agendados de antes de reiniciar
+  btAnu();
 
   // ---------------------------------------------------------------- proxy por conta (🌐)
   async function abrirProxy(x, msg = '') {

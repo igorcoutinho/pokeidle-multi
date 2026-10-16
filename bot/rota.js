@@ -11,7 +11,7 @@
 // Desligada por padrão; liga por conta no botão 🧭 do app.
 (() => {
   'use strict';
-  const VERSAO_ROTA = '1.7.0';
+  const VERSAO_ROTA = '1.8.1';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -35,7 +35,8 @@
   // 300": (nv) => (nv >= 300 ? 'brave_charizard' : 'charizard').
   // nv 500+: Numel (Orre, libera com treinador nv 530). Enquanto o treinador não chega lá, segue no
   // Brave Charizard — a lista é de preferência, vale a primeira hunt já liberada.
-  const huntCharizard = (nv) => (nv >= 500 ? ['numel', 'brave_charizard'] : ['brave_charizard']);
+  // No jogo o Numel é `numel_hoenn` (o map-markers.json do site diz `numel`, que o servidor ignora).
+  const huntCharizard = (nv) => (nv >= 500 ? ['numel_hoenn', 'brave_charizard'] : ['brave_charizard']);
   // Degrau da Outland (o seletor do Mapa): mesmos bichos, drops raros mais frequentes. Com o pokémon
   // no nível 500 a conta passa para a Outland 2 — o servidor só aceita com o TREINADOR no 500
   // (tabela em /shared/outland-tiers.mjs do jogo). Só sobe, nunca desce.
@@ -50,6 +51,13 @@
   const PEDRA = { itemId: 142, nome: 'Water Stone' };
 
   const CHAVE_CFG = 'pokerota.v1';
+  // Spot do dia na Outland: a janela do app escolhe um por conta, todo dia, pelo guia (XP/h, só os
+  // seguros) e diferente entre as contas; aqui ele entra no lugar do Brave Charizard fixo. Vale só
+  // no dia em que foi escolhido — sem spot de hoje, volta ao Brave Charizard.
+  const CHAVE_SPOT = 'pokerota.spot.v1';
+  const hojeLocal = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+  let spotDoDia = (() => { try { return JSON.parse(localStorage.getItem(CHAVE_SPOT)); } catch { return null; } })();
+  const spotDeHoje = () => (spotDoDia?.dia === hojeLocal() && spotDoDia.slug ? spotDoDia : null);
   const TICK_MS = 4000;
   // Espera entre tentativas do MESMO passo. Ler e comprar no Mercado são passos separados: com uma
   // espera só, a compra caía sempre dentro da espera da leitura e a leitura vencia antes — nunca comprava.
@@ -139,9 +147,10 @@
       // Por último, a hunt da tabela por nível (Geodude → Diglett → Larvitar → Pupitar): conta nova,
       // com o treinador abaixo do 150, não entra na Outland e ficava parada no Centro.
       const daTabela = [...HUNTS].reverse().find((h) => nv >= h.de && h.hunt !== 'brave_charizard')?.hunt;
-      const opcoes = [...huntCharizard(nv), ...(daTabela ? [daTabela] : [])];
+      const spot = spotDeHoje();
+      const opcoes = [...huntCharizard(nv).map((x) => (x === 'brave_charizard' && spot ? spot.slug : x)), ...(daTabela ? [daTabela] : [])];
       // As hunts de Orre não vêm na lista do `welcome`; o nível delas fica aqui (do map-markers.json do jogo).
-      const NIVEL_FORA_DA_LISTA = { numel: 530, camerupt: 580 };
+      const NIVEL_FORA_DA_LISTA = {};
       const nivelHunt = (slug) => core.hunts?.find((x) => x.slug === slug)?.nivel ?? NIVEL_FORA_DA_LISTA[slug] ?? 0;
       const liberada = (slug) => (e.level ?? 0) >= nivelHunt(slug);
       alvo = opcoes.find(liberada) ?? opcoes.at(-1);
@@ -155,7 +164,8 @@
       return `indo para ${h?.nome ?? alvo}`;
     }
     const nome = core.hunts?.find((x) => x.slug === alvo)?.nome ?? alvo;
-    if (alvo === 'brave_charizard') {
+    const naOutland = (core.hunts?.find((x) => x.slug === alvo)?.area ?? (alvo === 'brave_charizard' ? 'outland' : '')) === 'outland';
+    if (naOutland) {
       const tierAlvo = [...OUTLAND_POR_NIVEL].reverse().find((x) => nv >= x.nivel)?.tier ?? 1;
       const tierAtual = Number(e.outlandTier ?? 1);
       if (tierAlvo > tierAtual) {
@@ -188,6 +198,9 @@
       status = cfg.ativo ? 'começando…' : 'desligada';
       return cfg.ativo;
     },
+    /** A janela do app manda o spot do dia desta conta: { dia, slug, nome, xph }. */
+    definirSpotDoDia(s) { spotDoDia = s && s.slug ? { dia: s.dia ?? hojeLocal(), slug: s.slug, nome: s.nome ?? s.slug, xph: s.xph ?? '' } : null; try { localStorage.setItem(CHAVE_SPOT, JSON.stringify(spotDoDia)); } catch {} registrar(spotDoDia ? `spot do dia: ${spotDoDia.nome}` : 'spot do dia removido'); return spotDoDia; },
+    get spotDoDia() { return spotDeHoje(); },
     definirPrecoMax(n) { cfg.precoMax = Math.max(0, Number(n) || 0); salvarCfg(); return cfg.precoMax; },
     get precoMax() { return cfg.precoMax; },
     desmontar() { clearInterval(vigia); tirarErro(); },
