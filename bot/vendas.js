@@ -7,7 +7,7 @@
 // A comissão é a do jogo: `shared/taxa-mercado.mjs`, o mesmo arquivo que o servidor usa.
 (() => {
   'use strict';
-  const VERSAO_VENDAS = '1.11.0';
+  const VERSAO_VENDAS = '1.12.0';
 
   const core = window.__pokebotCore;
   if (!core) return;
@@ -64,14 +64,15 @@
   let modo = 'relatorio'; // 'relatorio' | 'rebaixar'
 
   // ---------------------------------------------------------------- anunciar abaixo do mercado
-  // Publica 1 ou 2 unidades de uma pedra em Coins, 5–10% abaixo do menor anúncio atual. NUNCA nas
-  // contas protegidas (a principal): o modo fica bloqueado nelas.
-  const CONTAS_PROTEGIDAS = ['bekazin'];
+  // Publica 1 ou 2 unidades de uma pedra em Coins, 5–10% abaixo do menor anúncio atual. NUNCA na
+  // CONTA MÃE (a ⭐ marcada na barra da conta, na janela do app): o modo fica bloqueado nela.
+  // O 💎 Diamante (1 coin abaixo do SrErva) saiu: limpa o que ele guardou.
+  try { localStorage.removeItem('pokevendas.diamante.v1'); } catch {}
   const CHAVE_REB = 'pokevendas.rebaixar.v1';
   const reb = { itemId: null, qtd: 1, desconto: null, mercado: null, carregando: false, publicando: false, msg: '',
     log: (() => { try { return JSON.parse(localStorage.getItem(CHAVE_REB)) ?? []; } catch { return []; } })() };
   const salvarReb = () => { try { localStorage.setItem(CHAVE_REB, JSON.stringify(reb.log.slice(0, 50))); } catch {} };
-  const contaProtegida = () => CONTAS_PROTEGIDAS.includes(String(core.eu?.nick ?? '').toLowerCase());
+  const contaProtegida = () => window.__pokeContaMae === true;
   const nomeItem = (id) => core.itens?.get?.(Number(id))?.name ?? core.itens?.get?.(Number(id))?.nome ?? `item ${id}`;
 
   /** As pedras da bolsa desta conta: itens com "Stone"/"Pedra" no nome e quantidade > 0. */
@@ -140,7 +141,7 @@
    * o anúncio da anterior como "menor" e baixaria de novo, em cascata.
    */
   async function rebaixarAgora({ nome, qtd = 1, desconto = null, preco: precoFixo = null, itemId = null, ref: refFixo = null }) {
-    if (contaProtegida()) return { ok: false, protegida: true, msg: 'conta protegida — pulada' };
+    if (contaProtegida()) return { ok: false, protegida: true, msg: 'conta mãe ⭐ — pulada' };
     const tem = pedrasNaBolsa().find((x) => x.nome.toLowerCase() === String(nome).toLowerCase());
     const pv = precoFixo && itemId && tem
       ? { tem: tem.q, itemId, preco: Math.max(2, Math.floor(precoFixo)), ref: refFixo, desconto: (desconto ?? 0) / 100 }
@@ -187,7 +188,7 @@
   // ---------------------------------------------------------------- reposição automática de pedras
   // Quando uma pedra VIGIADA desta conta vende no Mercado (`marketVendido`), compra as 2 mais baratas
   // do Mercado — até o alvo de compra do Rotom, nunca de uma conta sua — e reanuncia a "alvo + %".
-  // É o estoque das contas alternativas para segurar o preço perto do alvo (a Bekazin compra no alvo).
+  // É o estoque das contas alternativas para segurar o preço perto do alvo (a conta mãe ⭐ compra no alvo).
   // NUNCA roda na conta protegida. Os alvos, os seus nicks e o % de cada conta vêm da janela do app
   // (`window.__pokeReposicao`), lidos do Rotom Sniper.
   const PEDRAS_REPOR = ['Water', 'Rock', 'Earth', 'Fire', 'Leaf'];
@@ -235,7 +236,7 @@
     if (!m) return;
     const tipo = PEDRAS_REPOR.find((p) => p.toLowerCase() === m[1].toLowerCase());
     if (!repor.ativo || !repor.pedras[tipo]) return;
-    if (contaProtegida()) { reporNota(`🔒 ${tipo} Stone vendeu, mas esta conta é protegida — não repõe`); return; }
+    if (contaProtegida()) { reporNota(`🔒 ${tipo} Stone vendeu, mas esta é a conta mãe ⭐ — não repõe`); return; }
     if (Date.now() - (ultimaRepos.get(tipo) ?? 0) < 30_000 || filaRepor.some((x) => x.tipo === tipo)) return;
     filaRepor.push({ tipo, garantir: false });
     processarRepor();
@@ -978,145 +979,6 @@
   const tiqueSni = setInterval(() => { if (estaAbertoSni() && [...sniAnuncios.values()].some((s) => !s.fim) && !document.activeElement?.dataset?.c) pintar(); }, 1000);
   limpezas.push(() => clearInterval(tiqueSni));
 
-  // ---------------------------------------------------------------- 💎 diamante: 1 coin abaixo do SrErva
-  // SÓ na venda de DIAMANTES. A cada 5 min: lê a vitrine de diamantes; se o vendedor-alvo (SrErva)
-  // tem anúncio em Coins, deixa o NOSSO anúncio de diamantes a (preço dele − 1 coin) por diamante:
-  // já temos um aberto → edita o preço (só se mudou: editar reinicia a retenção); não temos → cria
-  // um de 50 diamantes. Ele não está vendendo → não mexe em nada. (O jogo só deixa 1 anúncio de
-  // diamantes por jogador e só vende diamante COMPRADO — a cota.)
-  const CHAVE_DIA = 'pokevendas.diamante.v1';
-  const dia = (() => {
-    const padrao = { ativo: false, alvo: 'SrErva', qtd: 50, cadaMin: 5, log: [], visto: null, meu: null };
-    try { const x = JSON.parse(localStorage.getItem(CHAVE_DIA)) ?? {}; return { ...padrao, ...x, log: x.log ?? [] }; } catch { return padrao; }
-  })();
-  const salvarDia = () => { try { localStorage.setItem(CHAVE_DIA, JSON.stringify({ ...dia, log: dia.log.slice(0, 40) })); } catch {} };
-  let diaUltima = 0, diaLendo = false, diaMsg = '';
-  const diaNota = (txt) => { dia.log.unshift({ em: Date.now(), txt }); dia.log = dia.log.slice(0, 40); salvarDia(); console.log('[Diamante]', txt); };
-  const ehDiamante = (a) => a?.tipo === 'diamante' || !!a?.ficha?.diamante;
-  const diaAberto = (a) => !a.estado || a.estado === 'aberto';
-
-  /** Manda um pedido e junta, por `ms`, as respostas de Mercado (aba e avisos `market.*`). */
-  function enviarEOuvir(msg, ms = 5000, ateAba = null) {
-    return new Promise((ok) => {
-      const ws = core.ws;
-      const visto = { abas: [], avisos: [] };
-      if (!ws || ws.readyState !== 1) return ok({ ...visto, desconectado: true });
-      const fim = () => { clearTimeout(t); ws.removeEventListener('message', f); ok(visto); };
-      const t = setTimeout(fim, ms);
-      function f(ev) {
-        const d = ev.data;
-        if (typeof d !== 'string' || !d.includes('market')) return;
-        let m; try { m = JSON.parse(d); } catch { return; }
-        if (m.t === 'market' && m.aba) { visto.abas.push(m.aba); if (ateAba && m.aba === ateAba) fim(); }
-        if (m.t === 'erro' && m.chave) visto.avisos.push(m.chave);
-        for (const e of m.ev ?? []) if (e.k === 'aviso' && typeof e.msg === 'string' && e.msg.startsWith('market.')) visto.avisos.push(e.msg);
-      }
-      ws.addEventListener('message', f);
-      core.send(msg);
-    });
-  }
-  const AVISO_DIA = {
-    'market.travaDiamanteAberto': 'você já tem um anúncio de diamantes aberto',
-    'market.travaDiamanteEspera': 'seu último anúncio de diamantes saiu há pouco — o jogo pede uns minutos antes de abrir outro',
-    'market.diamanteSemCota': 'sem cota: só dá para vender diamante COMPRADO, e a cota é menor que a quantidade',
-    'market.diamanteQtdInvalida': 'quantidade de diamantes inválida',
-    'market.retencaoEditar': 'o anúncio ainda está em retenção (só dá para remover por enquanto)',
-  };
-  const textoAviso = (k) => AVISO_DIA[k] ?? k;
-
-  async function lerVitrineDiamantes() {
-    const linhas = [];
-    for (let pagina = 0; pagina < 5; pagina++) {
-      const m = await pedir({ t: 'market.listar', tipo: 'diamante', moeda: '', busca: '', ordem: 'baratos', criterios: [], elemento: '', categoria: '',
-        soShiny: false, soP5: false, soTmElemental: false, soTmAoe: false, semOutland: false, pagina, especieId: 0 }, (x) => x.aba === 'vitrine', 9000);
-      const ls = (m.linhas ?? []).filter((a) => a.id != null);
-      linhas.push(...ls);
-      if (!m.temMais || !ls.length) break;
-      await dormir(600);
-    }
-    return linhas.filter((a) => ehDiamante(a) || a.tipo == null);
-  }
-  async function lerMeusDiamantes() {
-    const m = await pedir({ t: 'market.meus' }, (x) => x.aba === 'meus', 9000);
-    return (m.linhas ?? []).filter((a) => ehDiamante(a) && diaAberto(a));
-  }
-
-  async function vigiarDiamante(manual = false) {
-    if (diaLendo || !core.logado) return;
-    diaLendo = true;
-    diaMsg = 'lendo a vitrine de diamantes…';
-    if (estaAbertoDia()) pintar();
-    try {
-      const alvo = String(dia.alvo || 'SrErva').trim().toLowerCase();
-      const vitrine = await lerVitrineDiamantes();
-      const dele = vitrine.filter((a) => String(a.vendedor ?? '').toLowerCase() === alvo && diaAberto(a));
-      const deleGold = dele.filter((a) => (a.moeda ?? 'gold') === 'gold').sort((a, b) => Number(a.preco) - Number(b.preco))[0] ?? null;
-      const meus = await lerMeusDiamantes();
-      const meu = meus.sort((a, b) => Number(a.preco) - Number(b.preco))[0] ?? null;
-      dia.visto = deleGold ? { preco: Number(deleGold.preco), qtd: Number(deleGold.qtd) || 0, em: Date.now() } : null;
-      dia.meu = meu ? { id: meu.id, preco: Number(meu.preco), moeda: meu.moeda ?? 'gold', qtd: Number(meu.qtd) || 0 } : null;
-      if (!deleGold) {
-        diaMsg = dele.length ? `${dia.alvo} está vendendo só em Gemas — não mexi (a regra é 1 coin abaixo)` : `${dia.alvo} não está vendendo diamantes agora — não mexi`;
-        if (manual || dele.length) diaNota(diaMsg);
-        return;
-      }
-      const preco = Number(deleGold.preco) - 1;
-      if (preco < 1) { diaMsg = `o preço de ${dia.alvo} (${fmt(deleGold.preco)}) não deixa ficar 1 coin abaixo`; diaNota(diaMsg); return; }
-      if (meu) {
-        if (Number(meu.preco) === preco && (meu.moeda ?? 'gold') === 'gold') { diaMsg = `ok: ${dia.alvo} a ${fmt(deleGold.preco)} 🪙 · o nosso já está a ${fmt(preco)} 🪙`; if (manual) diaNota(diaMsg); return; }
-        const r = await enviarEOuvir({ t: 'market.editar', id: meu.id, preco, moeda: 'gold' }, 4000);
-        const agora = (await lerMeusDiamantes()).find((a) => a.id === meu.id);
-        if (agora && Number(agora.preco) === preco) {
-          dia.meu = { ...dia.meu, preco };
-          diaMsg = `✏ editei o nosso anúncio (${fmt(meu.qtd)} 💎): ${fmt(meu.preco)} → ${fmt(preco)} 🪙 por diamante (${dia.alvo} a ${fmt(deleGold.preco)})`;
-        } else {
-          diaMsg = `NÃO consegui editar o anúncio para ${fmt(preco)} 🪙${r.avisos.length ? ` — ${r.avisos.map(textoAviso).join('; ')}` : r.desconectado ? ' — conta desconectada' : ''}`;
-        }
-        diaNota(diaMsg);
-      } else {
-        const qtd = Math.max(1, Math.floor(Number(dia.qtd) || 50));
-        const r = await enviarEOuvir({ t: 'market.criar', tipo: 'diamante', itemId: null, pokemonId: null, caixaId: null, casaId: null, bicicletaId: null, qtd, preco, moeda: 'gold', dias: null }, 6000, 'criado');
-        if (r.abas.includes('criado')) {
-          diaMsg = `💎 anunciei ${qtd} diamantes a ${fmt(preco)} 🪙 cada (${dia.alvo} a ${fmt(deleGold.preco)})`;
-          dia.meu = { id: null, preco, moeda: 'gold', qtd };
-        } else {
-          diaMsg = `NÃO consegui anunciar ${qtd} diamantes a ${fmt(preco)} 🪙${r.avisos.length ? ` — ${r.avisos.map(textoAviso).join('; ')}` : r.desconectado ? ' — conta desconectada' : ' — sem confirmação do servidor'}`;
-        }
-        diaNota(diaMsg);
-      }
-    } catch (e) {
-      diaMsg = `não deu para ler o Mercado: ${e.message}`;
-      diaNota(diaMsg);
-    } finally {
-      diaUltima = Date.now();
-      diaLendo = false;
-      salvarDia();
-      if (estaAbertoDia()) pintar();
-    }
-  }
-  const estaAbertoDia = () => document.getElementById('pv-fundo')?.classList.contains('aberto') && modo === 'diamante';
-  const vigiaDia = setInterval(() => {
-    if (dia.ativo && core.logado && Date.now() - diaUltima > Math.max(1, Number(dia.cadaMin) || 5) * 60_000 - 1000) vigiarDiamante();
-  }, 15_000);
-  limpezas.push(() => clearInterval(vigiaDia));
-
-  function htmlDiamante() {
-    const prox = dia.ativo ? Math.max(0, Math.round((diaUltima + (Number(dia.cadaMin) || 5) * 60_000 - Date.now()) / 1000)) : null;
-    return `<section>
-        <div class="pv-linha">
-          <button class="pv-bt ${dia.ativo ? 'on' : ''}" data-a="diaAtivo">${dia.ativo ? '● vigiando' : 'parado'}</button>
-          vendedor-alvo <input class="pv-in" data-c="diaAlvo" value="${esc(dia.alvo)}" spellcheck="false" style="width:120px">
-          · anúncio novo de <input type="number" class="pv-in" data-c="diaQtd" min="1" value="${esc(dia.qtd)}" style="width:60px"> 💎
-          · a cada <input type="number" class="pv-in" data-c="diaCada" min="1" max="60" value="${esc(dia.cadaMin)}" style="width:50px"> min
-          <button class="pv-bt" data-a="diaAgora" ${diaLendo ? 'disabled' : ''}>${diaLendo ? 'verificando…' : '⟳ verificar agora'}</button>
-        </div>
-        <p class="pv-ajuda">SÓ venda de diamantes, nesta conta. Quando <b>${esc(dia.alvo)}</b> está vendendo diamantes em Coins, o nosso anúncio fica a <b>1 coin abaixo</b> do dele (por diamante): se já temos um anúncio de diamantes aberto, o preço é <b>editado</b> (só quando muda — editar reinicia a retenção); se não temos, cria um de ${esc(dia.qtd)} diamantes. Ele não está vendendo (ou só em Gemas) → não mexe em nada.${prox != null ? ` Próxima verificação em ${Math.floor(prox / 60)}:${String(prox % 60).padStart(2, '0')}.` : ''}</p>
-        <table class="pv-tab"><tr><th>${esc(dia.alvo)}</th><th>O nosso anúncio</th><th>Situação</th></tr>
-          <tr><td>${dia.visto ? `${fmt(dia.visto.preco)} 🪙 · ${fmt(dia.visto.qtd)} 💎` : '— (não está vendendo)'}</td><td>${dia.meu ? `${fmt(dia.meu.preco)} ${dia.meu.moeda === 'orb' ? '💎' : '🪙'} · ${fmt(dia.meu.qtd)} 💎` : '— (nenhum aberto)'}</td><td style="white-space:normal">${esc(diaMsg || '—')}</td></tr></table>
-        ${dia.log.length ? `<table class="pv-tab">${dia.log.slice(0, 15).map((l) => `<tr><td>${dataHora(l.em)}</td><td style="text-align:left;white-space:normal">${esc(l.txt)}</td></tr>`).join('')}</table>` : ''}
-      </section>`;
-  }
-
   // ---------------------------------------------------------------- 🔎 vigiar uma espécie no Mercado
   // Lista TODOS os anúncios da espécie (`market.listar` com `especieId`) a cada N min e avisa — com o
   // aviso grande do app — quando aparece o pokémon PROCURADO, reconhecido pelo que não muda: potência,
@@ -1612,11 +1474,9 @@
         <button class="pv-bt ${modo === 'rebaixar' ? 'on' : ''}" data-a="modo" data-v="rebaixar">📉 Anunciar abaixo do mercado</button>
         <button class="pv-bt ${modo === 'favoritos' ? 'on' : ''}" data-a="modo" data-v="favoritos">⭐ Favoritos</button>
         <button class="pv-bt ${modo === 'sniper' ? 'on' : ''}" data-a="modo" data-v="sniper">⚡ Sniper${sni.ativo ? ' ●' : ''}</button>
-        <button class="pv-bt ${modo === 'diamante' ? 'on' : ''}" data-a="modo" data-v="diamante">💎 Diamante${dia.ativo ? ' ●' : ''}</button>
         <button data-a="fechar" title="Fechar">×</button></span></header>`;
     if (modo === 'rebaixar') { modal.innerHTML = cab + htmlRepor() + htmlRebaixar(); return; }
     if (modo === 'sniper') { modal.innerHTML = cab + htmlSniper(); return; }
-    if (modo === 'diamante') { modal.innerHTML = cab + htmlDiamante(); return; }
     if (modo === 'favoritos') { modal.innerHTML = cab + htmlAoe() + htmlEspecies() + htmlFavoritos(); if (fav.ativo && !favUltima && !favLendo) vigiarFavoritos(true); if (fav.ativo && esp.ativo && !espUltima && !espLendo) vigiarEspecies(); return; }
     const foco = document.activeElement?.dataset?.c;
     const cursor = document.activeElement?.selectionStart;
@@ -1719,15 +1579,6 @@
     if (c === 'espCada') { if (e.type === 'change') { esp.cadaMin = Math.max(1, Math.min(60, Number(e.target.value) || 2)); salvarEsp(); pintar(); } return; }
     if (['aoeTetoGold', 'aoeCompraOrb', 'aoeAlertaOrb', 'aoeMaxDia'].includes(c)) { if (e.type === 'change') { const k = { aoeTetoGold: 'tetoGold', aoeCompraOrb: 'compraOrb', aoeAlertaOrb: 'alertaOrb', aoeMaxDia: 'maxDia' }[c]; aoe[k] = Math.max(c === 'aoeMaxDia' ? 0 : 1, Number(e.target.value) || 0); salvarAoe(); pintar(); } return; }
     if (['sniCada', 'sniTokGems', 'sniTokGold'].includes(c)) { if (e.type === 'change') { const k = { sniCada: 'cadaMs', sniTokGems: 'tokenGems', sniTokGold: 'tokenGold' }[c]; sni[k] = c === 'sniCada' ? Math.max(1000, Number(e.target.value) || 1500) : Math.max(0, Number(e.target.value) || 0); salvarSni(); pintar(); } return; }
-    if (['diaAlvo', 'diaQtd', 'diaCada'].includes(c)) {
-      if (e.type === 'change') {
-        if (c === 'diaAlvo') dia.alvo = e.target.value.trim() || 'SrErva';
-        if (c === 'diaQtd') dia.qtd = Math.max(1, Math.floor(Number(e.target.value) || 50));
-        if (c === 'diaCada') dia.cadaMin = Math.max(1, Math.min(60, Number(e.target.value) || 5));
-        salvarDia(); pintar();
-      }
-      return;
-    }
     if (c === 'favCada') { if (e.type === 'change') { fav.cadaMin = Math.max(1, Math.min(60, Number(e.target.value) || 2)); salvarFav(); pintar(); } return; }
     if (c === 'reporTeto') { if (e.type === 'change') { repor.teto = Math.max(0, Math.min(1000, Number(e.target.value) || 0)); salvarRepor(); pintar(); } return; }
     if (c === 'rebDesc') { if (e.type === 'change') { reb.desconto = e.target.value === '' ? null : Number(e.target.value); pintar(); } return; }
@@ -1757,8 +1608,6 @@
     else if (a === 'sniAtivo') alternarSniper();
     else if (a === 'sniOutros') { sni.outros = b.checked; salvarSni(); }
     else if (a === 'sniLimite') { sni.limiteRotom = b.checked; salvarSni(); }
-    else if (a === 'diaAtivo') { dia.ativo = !dia.ativo; diaNota(dia.ativo ? `LIGADO — 1 coin abaixo de ${dia.alvo}` : 'desligado'); if (dia.ativo) { diaUltima = 0; vigiarDiamante(true); } }
-    else if (a === 'diaAgora') vigiarDiamante(true);
     else if (a === 'favAtivo') { fav.ativo = !fav.ativo; salvarFav(); }
     else if (a === 'favAgora') { vigiarFavoritos(true); }
     else if (a === 'espAtivo') { esp.ativo = !esp.ativo; salvarEsp(); }

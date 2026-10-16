@@ -82,12 +82,12 @@ PEDRA ABAIXO DO MERCADO — botão 📉 na barra de cima do app (você dá a ord
   - Base "alvo do Rotom" (padrão quando a pedra tem regra no Rotom Sniper): o preço sai um
     pouco ACIMA do seu alvo de compra (de +8% na 1ª conta até +3% na última, ajustável),
     sempre uma conta abaixo da outra — quem vende tende a ancorar no seu alvo. As regras da
-    Bekazin valem primeiro (só leitura). A tabela mostra o alvo e o menor anúncio atual.
+    da conta mãe ⭐ valem primeiro (só leitura). A tabela mostra o alvo e o menor anúncio atual.
   - 🔁 Reposição automática (💰 Vendas → 📉 Anunciar abaixo do mercado, por conta): quando uma Water,
     Rock, Earth, Fire ou Leaf Stone desta conta vende no Mercado, o bot compra as 2 mais baratas em
     Coins — até o seu alvo do Rotom e nunca de uma conta sua — e reanuncia a alvo + % (a janela do app
     escalona: a 1ª conta alternativa +8%, descendo até +3%). Liga/desliga e escolhe as pedras ali.
-  - A conta Bekazin é PROTEGIDA: nunca anuncia (trava na janela do app e dentro da conta).
+  - A CONTA MÃE ⭐ é protegida: nunca anuncia nem repõe (trava na janela do app e dentro da conta).
   - Também dá para fazer numa conta só: 💰 Vendas → 📉 Anunciar abaixo do mercado.
 
 COMPRAS E VENDAS — botão 💰 Vendas
@@ -110,11 +110,6 @@ COMPRAS E VENDAS — botão 💰 Vendas
     SERVIDOR (corrige o relógio do PC) e repete dentro do sorteio de 3 s; quando o sorteio fecha,
     relê o anúncio e compra a sobra. Sem regra no Rotom, dá para pôr um teto próprio para o token.
     Botão ⚡ Sniper na barra de cada conta: liga/desliga (passe o mouse para ver as regras que segue).
-  - 💎 Diamante (aba própria, por conta) — SÓ venda de diamantes: a cada 5 min lê a vitrine de
-    diamantes; se o SrErva está vendendo em Coins, deixa o nosso anúncio a 1 coin abaixo do dele
-    (por diamante). Já tem anúncio de diamantes aberto → edita o preço (só quando muda); não tem →
-    cria um de 50. Ele não está vendendo (ou só em Gemas) → não mexe. Vendedor, quantidade e
-    intervalo dá para mudar na aba.
 
 PvP — botão ⚔ PvP
   - A cada duelo, guarda a ORDEM em que o rival colocou os pokémon (e a sua), tirada da fita
@@ -238,7 +233,7 @@ VIGIA (reabre o app sozinho) — "Vigia (ligar).bat" na pasta do exe
   - Também entra na Inicialização do Windows: ao entrar no Windows, espera 1 min e roda o vigia
     (que abre o app). O Windows precisa chegar na área de trabalho (login feito).
   - Reabre o PokeIdle Multi (perfil normal; não mexe no Perfil 2 nem na Lite) quando: o app fechou;
-    o app travou (sem sinal de vida há mais de 5 min); ou a conta do Bekazin está deslogada há
+    o app travou (sem sinal de vida há mais de 5 min); ou a conta mãe ⭐ está deslogada há
     mais de 3 min. Mata o app e abre o "PokeIdle Multi 1.x.y.exe" mais novo da pasta.
   - Deslogado que não volta depois de 3 reaberturas seguidas: para de reabrir e só anota no log
     (faça o login na mão). O app grava o sinal de vida em %APPDATA%\PokeIdle Multi\status.json.
@@ -247,3 +242,10 @@ VIGIA (reabre o app sozinho) — "Vigia (ligar).bat" na pasta do exe
   - Fechar a janela principal agora fecha também os Cockpits do Rotom e encerra o app (antes um
     Cockpit aberto deixava o app vivo sem janela e impedia abrir outro). O vigia, ao reabrir, confere
     que não sobrou nenhum processo e que o app novo ficou de pé (tenta 2 vezes).
+
+CONTA MÃE ⭐ — a estrela na barra de cada conta
+  - Marque a conta PRINCIPAL com a ☆ ao lado do número da conta. Só uma conta pode ter a estrela
+    (marcar outra passa a estrela para ela; clicar na marcada desmarca).
+  - A conta mãe é a que compra (Rotom): o 💰 Vendas nunca anuncia nem repõe pedra nela, os alvos do
+    Rotom dela valem primeiro, e o vigia reabre o app se ELA ficar deslogada.
+  - Fica salva no app (multi.json do perfil). Passou o app para outra pessoa: ela marca a dela.

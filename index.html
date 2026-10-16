@@ -31,6 +31,8 @@
   .cab .zoom{min-width:38px;text-align:center;opacity:.8;font-size:12px}
   .cab button{padding:1px 7px;font-size:12px}
   .cab button.eco.on{background:#2f6b3a;border-color:#7fdc8f}
+  .cab button.mae{padding:0 4px;font-size:14px;line-height:1;background:transparent;border-color:transparent;color:#bbb}
+  .cab button.mae.on{color:#ffd54a;text-shadow:0 0 6px rgba(255,213,74,.7)}
   .cab .estado{width:9px;height:9px;border-radius:50%;background:#888}
   .cab .estado.ok{background:#6f6;box-shadow:0 0 5px #6f6}
   .cab .estado.carregando{background:#fc6}
@@ -138,8 +140,30 @@
     return ligado();
   })()`;
 
+  // ⭐ CONTA MÃE: uma só (ou nenhuma), marcada na barra da conta. É a principal: o 💰 Vendas nunca
+  // anuncia nem repõe pedra nela, e o vigia reabre o app se ela deslogar. Fica no multi.json.
+  let contaMae = Number(cfg.contaMae) || null;
+  function definirContaMae(n) {
+    contaMae = n || null;
+    window.multi.salvar({ contaMae });
+    for (const c of contas) {
+      pintarMae(c);
+      naConta(c, `window.__pokeContaMae = ${contaMae === c.n}`);
+    }
+    mandarStatus();
+  }
+  function pintarMae(c) {
+    const b = c.caixa?.querySelector('[data-a="mae"]');
+    if (!b) return;
+    const eu = contaMae === c.n;
+    b.textContent = eu ? '⭐' : '☆';
+    b.classList.toggle('on', eu);
+    b.title = eu ? 'CONTA MÃE (a principal): o 💰 Vendas nunca anuncia nem repõe pedra nela e o vigia reabre o app se ela deslogar. Clique para desmarcar.'
+      : 'Marcar como CONTA MÃE (a principal) — só uma pode ter a estrela';
+  }
+
   async function injetarLogica(c) {
-    try { await c.wv.executeJavaScript(`window.__pokeVariante = ${JSON.stringify(cfg.variante ?? '')};\n${logica}`); }
+    try { await c.wv.executeJavaScript(`window.__pokeVariante = ${JSON.stringify(cfg.variante ?? '')};\nwindow.__pokeContaMae = ${contaMae === c.n};\n${logica}`); }
     catch (e) { console.warn('lógica não entrou na conta', c.n, e); }
   }
 
@@ -157,6 +181,7 @@
     caixa.innerHTML = `
       <div class="cab">
         <span class="num">${n}</span>
+        <button data-a="mae" class="mae" title="Marcar como CONTA MÃE">☆</button>
         <span class="estado carregando" title="conexão"></span>
         <input class="nome" value="${c.nome.replace(/"/g, '&quot;')}" spellcheck="false" title="Clique para renomear">
         <span class="esp"></span>
@@ -220,6 +245,7 @@ Na mira: ${st.mira} anúncio(s)` : ''}`;
     // O modo também pode ser trocado pelo próprio jogo — o botão acompanha.
     setInterval(lerEco, 3000);
     pintar();
+    pintarMae(c);
 
     wv.addEventListener('dom-ready', () => {
       wv.setZoomFactor(c.zoom);
@@ -256,6 +282,9 @@ Na mira: ${st.mira} anúncio(s)` : ''}`;
           lerShiny();
         }
         wv.executeJavaScript(JS_ECO_ALTERNAR).then(pintarEco).catch(() => aviso('Modo Economia: a conta ainda está carregando.'));
+      } else if (a === 'mae') {
+        if (contaMae === n) { if (confirm(`Desmarcar "${c.nome}" como conta mãe? Sem conta mãe, nenhuma conta fica protegida no 💰 Vendas e o vigia não vigia login.`)) definirContaMae(null); }
+        else if (!contaMae || confirm(`Passar a ⭐ conta mãe para "${c.nome}"? (só uma conta pode ter a estrela)`)) definirContaMae(n);
       } else if (a === 'sniper') {
         const st = await wv.executeJavaScript('window.__pokeVendas?.sniperEstado?.() ?? null').catch(() => null);
         if (!st) return aviso('Sniper: a conta ainda está carregando (ou o bot é antigo — aguarde a atualização).');
@@ -313,7 +342,7 @@ Ligar mesmo assim?`)) return;
 
   // ---------------------------------------------------------------- pedra abaixo do mercado, em todas as contas
   // Você dá a ordem; cada conta alternativa anuncia a pedra em Coins, 5–10% abaixo do menor anúncio.
-  // A conta protegida (Bekazin) é sempre pulada — a trava também existe dentro do módulo da conta.
+  // A conta mãe ⭐ é sempre pulada — a trava também existe dentro do módulo da conta.
   const reb = { info: [], nome: '', qtd: 1, desconto: '', previas: null, rodando: false, resultados: null,
     base: 'mercado', acimaMax: 8, acimaMin: 3, regras: new Map() }; // base 'rotom' = um pouco ACIMA do seu alvo de compra no Rotom
   const escH = (x) => String(x ?? '').replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
@@ -322,7 +351,7 @@ Ligar mesmo assim?`)) return;
 
   // ---------------------------------------------------------------- sinal de vida para o vigia
   // A cada minuto: quem está logado em cada conta. O nick fica lembrado por conta (deslogado o jogo
-  // não diz mais quem era) — é assim que o vigia sabe que "a conta do Bekazin" caiu e há quanto tempo.
+  // não diz mais quem era). `mae` = a conta mãe ⭐: é ela que o vigia olha (deslogada há 3 min → reabre).
   const CHAVE_NICKS = 'multi.nickPorConta.v1';
   const nickPorConta = (() => { try { return JSON.parse(localStorage.getItem(CHAVE_NICKS)) ?? {}; } catch { return {}; } })();
   const deslogadoDesde = {};
@@ -333,9 +362,14 @@ Ligar mesmo assim?`)) return;
       const logado = !!r?.logado;
       if (logado && r.nick && nickPorConta[c.n] !== r.nick) { nickPorConta[c.n] = r.nick; try { localStorage.setItem(CHAVE_NICKS, JSON.stringify(nickPorConta)); } catch {} }
       if (logado) delete deslogadoDesde[c.n]; else deslogadoDesde[c.n] ??= Date.now();
-      return { n: c.n, nome: c.nome, nick: r?.nick ?? null, nickUltimo: nickPorConta[c.n] ?? null, logado, deslogadoDesde: deslogadoDesde[c.n] ?? null };
+      return { n: c.n, nome: c.nome, nick: r?.nick ?? null, nickUltimo: nickPorConta[c.n] ?? null, logado, deslogadoDesde: deslogadoDesde[c.n] ?? null, mae: contaMae === c.n };
     }));
     window.multi.status(lista);
+  }
+  // Primeira vez com a ⭐ (multi.json sem `contaMae`): a conta que era a protegida antiga vira a mãe.
+  if (cfg.contaMae === undefined) {
+    const k = Object.entries(nickPorConta).find(([, nick]) => String(nick).toLowerCase() === 'bekazin')?.[0];
+    if (k) setTimeout(() => definirContaMae(Number(k)), 3000);
   }
   setTimeout(mandarStatus, 15_000);
   setInterval(mandarStatus, 60_000);
@@ -389,7 +423,7 @@ Ligar mesmo assim?`)) return;
       const nome = x.i?.nick ?? x.c.nome;
       if (!x.i) return `<tr><td>${escH(x.c.nome)}</td><td colspan="4" class="ajuda">carregando / sem o módulo</td></tr>`;
       if (!x.i.logado) return `<tr><td>${escH(x.c.nome)}</td><td colspan="4" class="ajuda">deslogada</td></tr>`;
-      if (x.i.protegida) return `<tr><td><b>${escH(nome)}</b></td><td colspan="4" class="ruim">🔒 protegida — nunca anuncia</td></tr>`;
+      if (x.i.protegida) return `<tr><td><b>${escH(nome)}</b></td><td colspan="4" class="ruim">🔒 ⭐ conta mãe — nunca anuncia</td></tr>`;
       const pv = reb.previas?.get(x.c.n);
       const res = reb.resultados?.get(x.c.n);
       const tem = (x.i.pedras ?? []).find((p) => p.nome === reb.nome)?.q ?? 0;
@@ -424,7 +458,7 @@ Ligar mesmo assim?`)) return;
           ${reb.rodando ? `<span class="ajuda">${escH(reb.rodando)}</span>` : ''}
         </div>` : '<p class="ajuda">Nenhuma pedra nas contas alternativas logadas.</p>'}
         <p class="ajuda">${reb.base === 'rotom'
-          ? 'Em COINS. Base: seu alvo de compra no Rotom Sniper (regras da conta protegida valem primeiro). Cada conta anuncia um pouco ACIMA do alvo — a 1ª mais alta, descendo até a última, sempre uma abaixo da outra —, para quem vende ancorar no seu alvo.'
+          ? 'Em COINS. Base: seu alvo de compra no Rotom Sniper (regras da conta mãe ⭐ valem primeiro). Cada conta anuncia um pouco ACIMA do alvo — a 1ª mais alta, descendo até a última, sempre uma abaixo da outra —, para quem vende ancorar no seu alvo.'
           : `Em COINS. Preços ESCALONADOS: cada conta um degrau abaixo da anterior (de 5% até 10%; se começar em 10% ou mais, cada uma desce 2,5% a mais), todas sobre o mesmo menor anúncio lido no "Ver preços" — antes de qualquer publicação.`}</p>
       </section>
       <section>
@@ -496,7 +530,7 @@ Ligar mesmo assim?`)) return;
     if (!alvos.length) return;
     const linhas = alvos.map((x) => { const pv = reb.previas.get(x.c.n); return `${x.i.nick}: ${Math.min(pv.tem, reb.qtd)}× por ${fmtN(pv.preco)} Coins`; }).join('\n');
     const baseTxt = reb.base === 'rotom' ? `Base: um pouco acima do seu alvo no Rotom (${fmtN(alvoRotom(reb.nome)?.alvo)}).` : 'Base: abaixo do menor anúncio.';
-    if (!confirm(`Publicar ${reb.nome} em ${alvos.length} conta(s)?\n\n${linhas}\n\n${baseTxt}\nMoeda: COINS. A conta protegida não entra.`)) return;
+    if (!confirm(`Publicar ${reb.nome} em ${alvos.length} conta(s)?\n\n${linhas}\n\n${baseTxt}\nMoeda: COINS. A conta mãe ⭐ não entra.`)) return;
     reb.resultados = new Map();
     reb.rodando = 'publicando…'; pintarReb();
     for (const x of alvos) {
@@ -680,7 +714,7 @@ Ligar mesmo assim?`)) return;
     }
     gxModal.innerHTML = `<header><span>🏆 Ranking de XP do dia</span>${abas}<button data-gx="fechar">×</button></header><section><span class="ajuda">Lendo o ranking do guia…</span></section>`;
     const nicks = (await Promise.all(contas.map((c) => naConta(c, 'window.__pokebotCore?.eu?.nick ?? null')))).filter(Boolean);
-    const r = await window.multi.guiaRankingXp(nicks.length ? nicks : ['Bekazin']);
+    const r = await window.multi.guiaRankingXp(nicks);
     if (r?.erro) { gxModal.querySelector('section').innerHTML = `<span class="ruim">${escH(r.erro)}</span>`; return; }
     const meusSet = new Set(r.meus.map((m) => m.nick.toLowerCase()));
     const linha = (l) => `<tr class="${meusSet.has(l.nick.toLowerCase()) ? 'eu' : ''}"><td>#${l.pos}</td><td>${escH(l.nick)}</td><td>+${fmtGrande(l.ganho)}</td><td>${fmtGrande(l.total)}<span class="ajuda"> (#${l.posTotal ?? '?'} geral)</span></td></tr>`;

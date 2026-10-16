@@ -2,17 +2,16 @@
 # Reabre o app (perfil normal) quando:
 #   - o app nao esta aberto (fechou/caiu);
 #   - o app travou: sem sinal de vida (status.json) ha mais de 5 min;
-#   - a conta do Bekazin esta deslogada ha mais de 3 min.
+#   - a CONTA MAE (a estrela na barra da conta, no app) esta deslogada ha mais de 3 min.
 # Para reabrir: mata SO o app do perfil normal (nao mexe no Perfil 2, na Lite nem no Basico) e abre o
 # "PokeIdle Multi 1.x.y.exe" mais novo desta pasta.
 # Deslogado que nao volta depois de 3 reaberturas seguidas: para de reabrir e so avisa (senao ficaria
-# reabrindo a cada 10 min sem adiantar). Volta ao normal quando o Bekazin logar de novo.
+# reabrindo a cada 10 min sem adiantar). Volta ao normal quando a conta mae logar de novo.
 # Log: %APPDATA%\PokeIdle Multi\vigia.log
 # -Teste: so diz o que faria (nao mata nem abre nada, nao grava estado).
 
 param([switch]$Teste)
 $ErrorActionPreference = 'Continue'
-$NICK = 'bekazin'
 $pasta = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ud = Join-Path $env:APPDATA 'PokeIdle Multi'
 $arqLog = Join-Path $ud 'vigia.log'
@@ -49,9 +48,10 @@ if ($principais.Count -eq 0) {
     $semSinal = if ($st) { [int](($agora - [int64]$st.em) / 60000) } else { '?' }
     $motivo = "app travado (sem sinal ha $semSinal min)"
   } else {
-    $bek = @($st.contas | Where-Object { "$($_.nickUltimo)".ToLower() -eq $NICK })
+    $bek = @($st.contas | Where-Object { $_.mae -eq $true })
+    $NICK = if ($bek.Count -and $bek[0].nickUltimo) { "conta mae ($($bek[0].nickUltimo))" } else { 'conta mae' }
     if ($bek.Count -eq 0) {
-      Log "ok (nao sei qual conta e a do $NICK ainda - ela precisa ter logado uma vez nesta versao)"
+      Log "ok (nenhuma conta mae marcada com a estrela - so vigio se o app fechou/travou)"
     } elseif ($bek[0].logado) {
       if ($estado.seguidasDeslogado -gt 0) { $estado.seguidasDeslogado = 0; SalvarEstado }
       Log "ok ($NICK logado na conta $($bek[0].n))"

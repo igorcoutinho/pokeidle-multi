@@ -2,7 +2,7 @@
 rem Liga o vigia do PokeIdle Multi:
 rem  - tarefa do Agendador do Windows que roda o "Vigia PokeIdle.ps1" desta pasta a cada 10 min, escondido;
 rem  - e na Inicializacao do Windows: ao entrar no Windows, espera 1 min e roda o vigia (abre o app).
-rem Ele reabre o app se fechar, travar ou se o Bekazin deslogar.
+rem Ele reabre o app se fechar, travar ou se a conta mae (a estrela) deslogar.
 rem Para desligar: "Vigia (desligar).bat". Log: %APPDATA%\PokeIdle Multi\vigia.log
 cd /d "%~dp0"
 > "%~dp0vigia.vbs" echo CreateObject("WScript.Shell").Run "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ""%~dp0Vigia PokeIdle.ps1""", 0, False
