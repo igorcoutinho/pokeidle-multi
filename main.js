@@ -16,12 +16,25 @@ const { spawn } = require('child_process');
 const URL_JOGO = 'https://pokeidle.io/app';
 // A variante do .exe (o `npm run build:lite` grava "lite" no package.json empacotado): a Lite não
 // mostra os botões de PvP e Shiny. Tem outro nome de produto, então outra pasta de dados e trava.
-const VARIANTE = (() => { try { return require('./package.json').variante ?? ''; } catch { return ''; } })();
-const N_CONTAS = 4;
+// Rodando pelo código, dá para escolher a Lite sem gerar o .exe: "variante": "lite" no multi.json
+// (ou POKEIDLE_VARIANTE=lite). Aí a pasta de dados é a mesma, então os logins continuam.
+const VARIANTE = (() => {
+  if (process.env.POKEIDLE_VARIANTE != null) return process.env.POKEIDLE_VARIANTE;
+  try { const v = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'multi.json'), 'utf8')).variante; if (v) return v; } catch {}
+  try { return require('./package.json').variante ?? ''; } catch { return ''; }
+})();
+const N_CONTAS = 6; // com as contas sem tela (~1% de CPU cada) a VPS aguenta folgado; com o jogo carregado 5–6 travava
 
 // Electron se anuncia como "Electron/x.y" no User-Agent; aqui fica igual ao Chrome da mesma
-// versão, que é o navegador que ele de fato é.
-const UA = `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${process.versions.chrome} Safari/537.36`;
+// versão, que é o navegador que ele de fato é. O sistema no UA tem que ser o de verdade: o
+// Turnstile confere com navigator.platform e os client hints, e um "Windows" rodando no Linux
+// reprova o captcha.
+const SO_UA = {
+  win32: 'Windows NT 10.0; Win64; x64',
+  darwin: 'Macintosh; Intel Mac OS X 10_15_7',
+  linux: 'X11; Linux x86_64',
+}[process.platform] ?? 'Windows NT 10.0; Win64; x64';
+const UA = `Mozilla/5.0 (${SO_UA}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${process.versions.chrome} Safari/537.36`;
 app.userAgentFallback = UA;
 
 // ------------------------------------------------------------------ a pasta do bot
@@ -45,7 +58,7 @@ function semearPastaDoBot() {
   }
 }
 // core.js entra antes do jogo; o resto é a parte trocada a quente, injetada como um bloco só.
-const ARQUIVOS_BOT = ['core.js', 'logica.js', 'analise.js', 'pvp.js', 'shiny.js', 'vendas.js', 'itens.js'];
+const ARQUIVOS_BOT = ['core.js', 'logica.js', 'analise.js', 'pvp.js', 'shiny.js', 'vendas.js', 'itens.js', 'rota.js'];
 const lerLogica = () => ARQUIVOS_BOT.slice(1).map(lerBot).join('\n;\n');
 const lerBot = (f) => {
   try { return fs.readFileSync(path.join(PASTA_BOT, f), 'utf8'); }
@@ -97,9 +110,18 @@ function criarJanela() {
     },
   });
   if (cfg.maximizada) janela.maximize();
+  // Fechou a janela principal = sair. Sem isto o app seguia vivo e invisível por causa das janelas
+  // escondidas (guia de hunts, Cockpit do Rotom), e a trava de instância única barrava a reabertura.
+  // E se algo segurar o encerramento (janela escondida, um beforeunload de conta em luta), sai à
+  // força em 3 s — antes o processo ficava vivo sem janela e travava a reabertura.
+  janela.on('closed', () => { app.quit(); setTimeout(() => app.exit(0), 3000).unref?.(); });
+  // Minimizada, o Chromium daqui (VPS sem placa de vídeo) continua desenhando as contas; a janela
+  // esconde as telas sozinha (ver index.html) e mostra de novo ao restaurar.
+  janela.on('minimize', () => janela.webContents.send('multi:minimizada', true));
+  janela.on('restore', () => janela.webContents.send('multi:minimizada', false));
   janela.loadFile('index.html');
 
-  // Fechar o app = fechar as 4 abas. No meio de uma luta isso derruba o time e custa XP.
+  // Fechar o app = fechar todas as abas. No meio de uma luta isso derruba o time e custa XP.
   let podeFechar = false;
   janela.on('close', (ev) => {
     const [l, a] = janela.getSize();
@@ -111,7 +133,7 @@ function criarJanela() {
       defaultId: 1,
       cancelId: 1,
       title: 'Fechar o PokeIdle Multi?',
-      message: 'Fechar desconecta as 4 contas.',
+      message: 'Fechar desconecta todas as contas.',
       detail: 'Se alguma estiver no meio de uma luta, o jogo trata como derrota (time ao chão e perda de XP). O ideal é levar todas ao Centro Pokémon antes.',
     });
     if (r === 0) podeFechar = true;
@@ -260,7 +282,7 @@ app.on('web-contents-created', (_ev, wc) => {
 // ------------------------------------------------------------------ IPC
 ipcMain.on('pb:core', (ev) => { ev.returnValue = lerBot('core.js'); });
 ipcMain.handle('pb:logica', () => lerLogica());
-ipcMain.handle('multi:cfg', () => ({ ...lerCfg(), ia: iaConfig(), nContas: N_CONTAS, urlJogo: URL_JOGO, pastaBot: PASTA_BOT, rotom, variante: VARIANTE }));
+ipcMain.handle('multi:cfg', () => ({ ...lerCfg(), proxies: undefined, ia: iaConfig(), nContas: N_CONTAS, urlJogo: URL_JOGO, pastaBot: PASTA_BOT, rotom, variante: VARIANTE }));
 ipcMain.handle('multi:iaConfig', (_e, novo) => { try { return novo ? iaSalvar(novo) : iaConfig(); } catch (e) { return { erro: e.message, ...iaConfig() }; } });
 ipcMain.handle('multi:iaTestar', () => iaPerguntar({ teste: true, sistema: 'Responda só JSON.', usuario: 'Responda {"ok": true, "msg": "<uma frase curta em português>"}', maxTokens: 60, timeoutMs: 20_000 }));
 ipcMain.handle('pb:ia', (_e, pedido) => (VARIANTE === 'lite' ? { ok: false, erro: 'a versão Lite não tem o agente de IA' } : iaPerguntar(pedido ?? {})));
@@ -464,6 +486,191 @@ function abrirLivesNovas(lives) {
 }
 ipcMain.handle('multi:salvar', (_e, parcial) => { salvarCfg({ ...lerCfg(), ...parcial }); return true; });
 ipcMain.handle('multi:abrirPastaBot', () => shell.openPath(PASTA_BOT));
+
+// ------------------------------------------------------------------ proxy por conta
+// Cada conta pode sair por um proxy próprio (http/https/socks4/socks5), aplicado na partição
+// dela — o jogo, o login e o Rotom daquela conta passam todos por ele. Fica em `proxies` no
+// multi.json, por número da conta; a senha vai criptografada (safeStorage), como a chave da IA.
+// Proxy configurado e fora do ar = a conta fica sem rede: o Chromium não cai para a conexão direta.
+const contaDaSessao = (ses) => [...Array(N_CONTAS).keys()].map((i) => i + 1)
+  .find((i) => session.fromPartition(`persist:conta${i}`) === ses);
+function proxyConfig(n) {
+  const p = lerCfg().proxies?.[n] ?? {};
+  return { url: p.url ?? '', usuario: p.usuario ?? '', temSenha: !!p.senhaEnc };
+}
+function proxySenha(n) {
+  const enc = lerCfg().proxies?.[n]?.senhaEnc;
+  if (!enc) return '';
+  try { return safeStorage.decryptString(Buffer.from(enc, 'base64')); } catch { return ''; }
+}
+// Rastreadores de anúncio/estatística que a página do jogo carrega e que não fazem falta para
+// jogar: cortá-los poupa tráfego do proxy (cobrado por GB) e não entrega dados das contas.
+const RASTREADORES = [
+  '*://*.googletagmanager.com/*', '*://*.google-analytics.com/*', '*://*.doubleclick.net/*',
+  '*://connect.facebook.net/*', '*://*.facebook.com/tr*', '*://static.cloudflareinsights.com/*',
+];
+function bloquearRastreadores(ses) {
+  ses.webRequest.onBeforeRequest({ urls: RASTREADORES }, (_d, responder) => responder({ cancel: true }));
+}
+
+async function aplicarProxy(n) {
+  const ses = session.fromPartition(`persist:conta${n}`);
+  const { url } = proxyConfig(n);
+  await ses.setProxy(url ? { proxyRules: url, proxyBypassRules: '<local>' } : { mode: 'direct' });
+  await ses.closeAllConnections(); // o WebSocket do jogo aberto pela rota antiga não fica para trás
+}
+async function proxySalvar(n, { url, usuario, senha, apagarSenha } = {}) {
+  n = Number(n);
+  if (!(n >= 1 && n <= N_CONTAS)) throw new Error('conta inválida');
+  const cfg = lerCfg();
+  const proxies = { ...(cfg.proxies ?? {}) };
+  const texto = String(url ?? '').trim();
+  if (!texto) {
+    delete proxies[n];
+  } else {
+    let u;
+    try { u = new URL(texto.includes('://') ? texto : `http://${texto}`); } catch { throw new Error('endereço inválido — use socks5://host:porta ou http://host:porta'); }
+    if (!['http:', 'https:', 'socks4:', 'socks5:'].includes(u.protocol)) throw new Error('use http://, https://, socks4:// ou socks5://');
+    if (!u.hostname) throw new Error('falta o host');
+    // usuario:senha@host colado no endereço vira usuário e senha
+    if (u.username) { usuario = decodeURIComponent(u.username); senha = decodeURIComponent(u.password); }
+    const p = { ...(proxies[n] ?? {}), url: `${u.protocol}//${u.host}` };
+    if (usuario != null) p.usuario = String(usuario).trim();
+    if (apagarSenha) delete p.senhaEnc;
+    if (senha) {
+      if (!safeStorage.isEncryptionAvailable()) throw new Error('o sistema não liberou a criptografia para guardar a senha');
+      p.senhaEnc = safeStorage.encryptString(String(senha)).toString('base64');
+    }
+    proxies[n] = p;
+  }
+  salvarCfg({ ...cfg, proxies });
+  tentativasProxy.delete(n);
+  await aplicarProxy(n);
+  return proxyConfig(n);
+}
+// IP de saída visto de fora, por uma janela escondida na partição da conta (passa pelo proxy e
+// pela autenticação dele igual ao jogo).
+async function proxyTestar(n) {
+  const w = new BrowserWindow({ show: false, webPreferences: { partition: `persist:conta${n}`, contextIsolation: true, nodeIntegration: false } });
+  const t0 = Date.now();
+  try {
+    await Promise.race([
+      w.loadURL('https://api.ipify.org/?format=json'),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('sem resposta em 20 s')), 20_000)),
+    ]);
+    const { ip } = JSON.parse(await w.webContents.executeJavaScript('document.body.innerText'));
+    return { ok: true, ip, ms: Date.now() - t0, viaProxy: !!proxyConfig(n).url };
+  } catch (e) {
+    return { ok: false, erro: e.message };
+  } finally {
+    w.destroy();
+  }
+}
+// Proxy que pede senha: responde com a da conta. Senha errada faz o Chromium perguntar de novo
+// em loop — depois de 3 tentativas desiste (até salvar de novo).
+const tentativasProxy = new Map();
+app.on('login', (ev, wc, _detalhes, auth, responder) => {
+  if (!auth.isProxy) return;
+  const n = contaDaSessao(wc?.session);
+  const { usuario } = n ? proxyConfig(n) : {};
+  if (!usuario) return;
+  const t = (tentativasProxy.get(n) ?? 0) + 1;
+  tentativasProxy.set(n, t);
+  if (t > 3) return;
+  ev.preventDefault();
+  responder(usuario, proxySenha(n));
+});
+// Com proxy, o WebRTC não pode sair por UDP direto e mostrar o IP real.
+app.on('web-contents-created', (_ev, wc) => {
+  const n = contaDaSessao(wc.session);
+  if (n && proxyConfig(n).url) wc.setWebRTCIPHandlingPolicy('disable_non_proxied_udp');
+});
+// ------------------------------------------------------------------ contas SEM TELA
+// A conta joga sem o jogo carregado: uma janela invisível abre uma página mínima do próprio site
+// (/robots.txt, 144 bytes — só para estar na origem pokeidle.io, onde ficam a sessão e a conexão)
+// e ali rodam o núcleo do bot, a conexão com o servidor e a lógica (compras, rota). Mesma
+// partição = mesma sessão salva, mesmo proxy, mesmo navegador. O jogo é idle e roda no servidor:
+// a tela só desenhava — e processava cada evento —, o que custava 20–85% de CPU por conta.
+// Liga por conta com "semTela": [1, …] no multi.json. A conta sem tela NÃO abre no app (duas
+// sessões na mesma conta se derrubam: o servidor fecha a mais antiga com o código 4001).
+const URL_SEMTELA = 'https://pokeidle.io/robots.txt';
+const janelasSemTela = new Map(); // n → BrowserWindow
+const contasSemTela = () => [...new Set((lerCfg().semTela ?? []).map(Number))].filter((n) => n >= 1 && n <= N_CONTAS);
+
+// A conexão: o que o app.js do jogo faz em `conectar()` — hello com a sessão salva, ping a cada 25 s,
+// reconexão com espera crescente, e parada definitiva se outra sessão tomar a conta (4001).
+const CONECTOR_SEMTELA = `(() => {
+  if (window.__semTela) return;
+  const st = window.__semTela = { estado: 'conectando', tomada: false, tentativas: 0, ultima: 0, desde: Date.now() };
+  let sessao = null;
+  try { sessao = JSON.parse(localStorage.getItem('sessao') || 'null'); } catch {}
+  const dispositivo = localStorage.getItem('id-dispositivo');
+  if (!sessao?.nick || !sessao?.token) { st.estado = 'sem sessão salva — entre nesta conta pelo app'; return; }
+  st.nick = sessao.nick;
+  const enviar = (o) => { if (st.ws?.readyState === 1) st.ws.send(JSON.stringify(o)); };
+  function conectar() {
+    if (st.tomada) return;
+    const ws = new WebSocket('wss://' + location.host);
+    st.ws = ws;
+    ws.onopen = () => { st.estado = 'entrando'; st.ultima = Date.now(); enviar({ t: 'hello', nick: sessao.nick, token: sessao.token, delta: 1, dispositivo }); };
+    ws.onmessage = (ev) => {
+      st.ultima = Date.now();
+      if (typeof ev.data !== 'string') return;
+      if (ev.data.includes('"t":"welcome"')) {
+        st.estado = 'conectada'; st.tentativas = 0;
+        enviar({ t: 'cliente.economia', ativo: true }); // o servidor para de mandar os eventos do mapa
+      } else if (ev.data.includes('"t":"erro"') && /auth|sessao|token/.test(ev.data)) {
+        st.estado = 'login recusado — entre nesta conta pelo app'; st.tomada = true; try { ws.close(); } catch {}
+      }
+    };
+    ws.onclose = (ev) => {
+      if (st.ws !== ws) return;
+      if (ev.code === 4001) { st.tomada = true; st.estado = 'sessão tomada (a conta foi aberta em outro lugar)'; return; }
+      if (st.tomada) return;
+      st.tentativas++;
+      st.estado = 'reconectando (' + st.tentativas + ')';
+      setTimeout(conectar, Math.min(60000, 2000 * st.tentativas));
+    };
+  }
+  setInterval(() => enviar({ t: 'ping' }), 25000);
+  setInterval(() => { if (st.ws?.readyState === 1 && Date.now() - st.ultima > 30000) { try { st.ws.close(); } catch {} } }, 10000);
+  conectar();
+})();`;
+
+async function injetarSemTela(w) {
+  const rodar = (codigo, nome) => w.webContents.executeJavaScript(codigo).catch((e) => console.warn('[sem tela]', nome, e.message));
+  await rodar(lerBot('core.js'), 'core.js');
+  await rodar(CONECTOR_SEMTELA, 'conector');
+  await rodar(`window.__pokeVariante = ${JSON.stringify(VARIANTE)};`, 'variante');
+  // Cada módulo em separado: um que dependa da tela do jogo pode falhar sem levar os outros junto.
+  for (const f of ARQUIVOS_BOT.slice(1)) await rodar(lerBot(f), f);
+}
+
+function abrirSemTela(n) {
+  if (janelasSemTela.get(n) && !janelasSemTela.get(n).isDestroyed()) return;
+  const w = new BrowserWindow({
+    show: false,
+    width: 400,
+    height: 300,
+    webPreferences: { partition: `persist:conta${n}`, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false },
+  });
+  janelasSemTela.set(n, w);
+  w.webContents.on('did-finish-load', () => injetarSemTela(w));
+  // Caiu (processo da página morreu): reabre em 30 s.
+  w.webContents.on('render-process-gone', () => { setTimeout(() => { if (!w.isDestroyed()) w.reload(); }, 30_000); });
+  w.loadURL(URL_SEMTELA).catch((e) => {
+    console.warn('[sem tela] conta', n, 'não carregou', e.message);
+    setTimeout(() => { if (!w.isDestroyed()) w.loadURL(URL_SEMTELA).catch(() => {}); }, 30_000);
+  });
+}
+ipcMain.handle('multi:semTelaExec', async (_e, n, js) => {
+  const w = janelasSemTela.get(Number(n));
+  if (!w || w.isDestroyed()) return null;
+  try { return await w.webContents.executeJavaScript(js); } catch { return null; }
+});
+ipcMain.handle('multi:proxy', (_e, n) => proxyConfig(Number(n)));
+ipcMain.handle('multi:proxySalvar', (_e, n, novo) => proxySalvar(n, novo).catch((e) => ({ erro: e.message })));
+ipcMain.handle('multi:proxyTestar', (_e, n) => proxyTestar(Number(n)));
 ipcMain.handle('multi:sairDaConta', async (_e, n) => {
   // Limpa só a partição daquela conta (cookies + localStorage): equivale a "deslogar" ali.
   await session.fromPartition(`persist:conta${n}`).clearStorageData();
@@ -479,6 +686,13 @@ function vigiarBot() {
     espera = setTimeout(() => {
       const agora = { logica: lerLogica(), core: lerBot('core.js') };
       if (agora.logica !== ultimo.logica) janela?.webContents.send('pb:logicaMudou', agora.logica);
+      // Sem tela: lógica nova entra por cima (os módulos se desmontam e se trocam sozinhos, sem
+      // derrubar a conexão); só o núcleo novo pede recarregar a página.
+      for (const w of janelasSemTela.values()) {
+        if (w.isDestroyed()) continue;
+        if (agora.core !== ultimo.core) w.reload();
+        else if (agora.logica !== ultimo.logica) for (const f of ARQUIVOS_BOT.slice(1)) w.webContents.executeJavaScript(lerBot(f)).catch(() => {});
+      }
       if (agora.core !== ultimo.core) janela?.webContents.send('pb:coreMudou');
       ultimo = agora;
     }, 400);
@@ -507,8 +721,13 @@ async function atualizarDoGitHub() {
 app.whenReady().then(async () => {
   if (!instanciaUnica) return;
   semearPastaDoBot();
+  for (let n = 1; n <= N_CONTAS; n++) {
+    bloquearRastreadores(session.fromPartition(`persist:conta${n}`));
+    await aplicarProxy(n); // antes de qualquer conta abrir conexão
+  }
   await carregarRotom(); // antes das webviews: o content script precisa estar lá quando o jogo abrir
   criarJanela();
+  for (const n of contasSemTela()) abrirSemTela(n);
   vigiarBot();
   if (!EM_DESENVOLVIMENTO) {
     atualizarDoGitHub();

@@ -13,7 +13,12 @@ contextBridge.exposeInMainWorld('multi', {
   guiaHunts: (ficha) => ipcRenderer.invoke('multi:guiaHunts', ficha),
   iaConfig: (novo) => ipcRenderer.invoke('multi:iaConfig', novo),
   iaTestar: () => ipcRenderer.invoke('multi:iaTestar'),
+  proxy: (n) => ipcRenderer.invoke('multi:proxy', n),
+  proxySalvar: (n, novo) => ipcRenderer.invoke('multi:proxySalvar', n, novo),
+  proxyTestar: (n) => ipcRenderer.invoke('multi:proxyTestar', n),
   guiaRankingXp: (nicks) => ipcRenderer.invoke('multi:guiaRankingXp', nicks),
   aoMudarLogica: (fn) => ipcRenderer.on('pb:logicaMudou', (_e, codigo) => fn(codigo)),
   aoMudarCore: (fn) => ipcRenderer.on('pb:coreMudou', () => fn()),
+  aoMinimizar: (fn) => ipcRenderer.on('multi:minimizada', (_e, v) => fn(v)),
+  semTelaExec: (n, js) => ipcRenderer.invoke('multi:semTelaExec', n, js),
 });

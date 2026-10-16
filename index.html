@@ -11,12 +11,40 @@
   #topo{height:38px;display:flex;align-items:center;gap:8px;padding:0 10px;background:var(--barra);border-bottom:2px solid var(--borda)}
   #topo b{color:var(--ouro);letter-spacing:.5px;margin-right:8px}
   #topo .esp{flex:1}
+  /* Janela estreita: a barra fica numa linha só — botões só com o ícone (o nome segue no title),
+     sem o texto da versão do bot, e rolando de lado se ainda não couber. */
+  #topo{overflow-x:auto;overflow-y:hidden;scrollbar-width:none}
+  #topo>*{flex:none;white-space:nowrap}
+  #topo .esp{flex:1 1 0;min-width:0}
+  @media (max-width: 1500px){#topo .rot,#topo .info{display:none}}
   #topo .info{opacity:.75;font-size:12px}
   button{background:#5a3232;border:1px solid #8a5a4a;color:var(--texto);border-radius:6px;padding:4px 9px;cursor:pointer;font:inherit}
   button:hover{background:#6e3d3d}
   button.prim{background:var(--roxo);border-color:var(--ouro);color:#fff}
   #grade{position:absolute;top:38px;left:0;right:0;bottom:0;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;gap:4px;padding:4px}
   #grade.solo{grid-template-columns:1fr;grid-template-rows:1fr}
+  #grade:not(.solo) .conta.fora{display:none}
+  /* Telas ocultas: as contas seguem jogando (bot, rota, PvP), só não são desenhadas — sem placa de
+     vídeo, desenhar é ~4× o custo de uma conta escondida. */
+  #grade.oculto .conta{display:none}
+  #oculto-aviso{display:none;position:absolute;top:38px;left:0;right:0;bottom:0;align-items:center;justify-content:center;flex-direction:column;gap:10px;font-size:15px;opacity:.85}
+  #oculto-aviso.on{display:flex}
+  /* Painel: um cartão por conta com o estado e os comandos; o jogo roda escondido (não é desenhado). */
+  #painel{position:absolute;top:38px;left:0;right:0;bottom:0;display:none;overflow:auto;padding:10px;gap:10px;grid-template-columns:repeat(auto-fill,minmax(370px,1fr));align-content:start}
+  #painel.on{display:grid}
+  .pc{background:#2a1515;border:2px solid #5a3232;border-radius:10px;padding:10px 12px;font-size:13px;line-height:1.55}
+  .pc header{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+  .pc header b{font-size:15px;color:var(--ouro)}
+  .pc .ponto{width:9px;height:9px;border-radius:50%;background:#888}.pc .ponto.ok{background:#6f6;box-shadow:0 0 5px #6f6}.pc .ponto.ruim{background:#f66}
+  .pc .rot{opacity:.7}
+  .pc .acoes{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;align-items:center}
+  .pc select{background:#3a2020;border:1px solid #8a5a4a;color:var(--texto);border-radius:6px;padding:3px 6px;max-width:200px;font:inherit}
+  .pc .log{margin-top:6px;font-size:11px;opacity:.75;white-space:pre-wrap;max-height:4.8em;overflow:hidden}
+  .pc button.on{background:#2f6b3a;border-color:#7fdc8f}
+  .pc .drops b{color:#7fdc8f}
+  #painel-total{grid-column:1/-1;background:#3a2020;border:2px solid var(--borda);border-radius:10px;padding:8px 12px;font-size:13px}
+  #painel-total b{color:var(--ouro)}
+  #paginas{display:flex;gap:4px}
   #grade.solo .conta:not(.foco){display:none}
   #abas-1x1{display:none;gap:4px}#abas-1x1.on{display:flex}
   #abas-1x1 button.on{background:var(--roxo);border-color:var(--ouro);color:#fff}
@@ -27,9 +55,18 @@
   .cab input.nome{background:transparent;border:1px solid transparent;color:var(--texto);font:600 13px system-ui;width:140px;border-radius:5px;padding:2px 4px}
   .cab input.nome:hover,.cab input.nome:focus{border-color:#8a5a4a;outline:none;background:#2a1515}
   .cab .esp{flex:1}
+  /* Quadro estreito (grade 2×2 em tela pequena): os botões ficam só com o ícone — o nome continua
+     no title — e, se ainda não couber, a barra rola de lado em vez de quebrar os botões. */
+  .conta{container-type:inline-size}
+  .cab{overflow-x:auto;overflow-y:hidden;scrollbar-width:none}
+  .cab>*{flex:none}
+  .cab .esp{flex:1 1 0;min-width:0}
+  .cab button{white-space:nowrap}
+  @container (max-width: 1150px){.conta .cab .rot{display:none}.conta .cab input.nome{width:100px}}
+  @container (max-width: 700px){.conta .cab{gap:3px;padding:0 3px}.conta .cab button{padding:1px 5px}.conta .cab input.nome{width:70px}.conta .cab .zoom{min-width:30px}}
   .cab .zoom{min-width:38px;text-align:center;opacity:.8;font-size:12px}
   .cab button{padding:1px 7px;font-size:12px}
-  .cab button.eco.on{background:#2f6b3a;border-color:#7fdc8f}
+  .cab button.eco.on,.cab button.proxy.on{background:#2f6b3a;border-color:#7fdc8f}
   .cab .estado{width:9px;height:9px;border-radius:50%;background:#888}
   .cab .estado.ok{background:#6f6;box-shadow:0 0 5px #6f6}
   .cab .estado.carregando{background:#fc6}
@@ -59,25 +96,31 @@
   #gx-modal td{padding:5px 6px;border-top:1px solid #4a2a2a;vertical-align:top}
   #gx-modal tr.eu td{background:#4a2a5a;font-weight:700}
   #gx-modal .ajuda{opacity:.7;font-size:12px}
-  #ia-modal input,#ia-modal select{background:#2a1515;border:1px solid #8a5a4a;color:var(--texto);border-radius:6px;padding:4px 8px;font:inherit}#gx-modal .ok{color:#7fdc8f;font-weight:700}#gx-modal .ruim{color:#ff8a8a;font-weight:700}
+  #ia-modal input,#ia-modal select,#px-modal input,#anu-modal input,#anu-modal select{background:#2a1515;border:1px solid #8a5a4a;color:var(--texto);border-radius:6px;padding:4px 8px;font:inherit}#gx-modal .ok{color:#7fdc8f;font-weight:700}#gx-modal .ruim{color:#ff8a8a;font-weight:700}
   #aviso{position:fixed;left:50%;top:48px;transform:translateX(-50%);z-index:10;background:#2a1515;border:2px solid var(--ouro);border-radius:10px;padding:8px 14px;font-weight:600;display:none}
 </style>
 </head>
 <body>
 <div id="topo">
   <b>🤖 PokeIdle Multi</b>
-  <button id="bt-grade" class="prim" title="Mostrar as 4 contas">Grade 2×2</button>
+  <button id="bt-grade" class="prim" title="Mostrar as 4 contas da página">Grade 2×2</button>
   <button id="bt-1x1" title="Uma conta por vez, ocupando a janela toda — troque pelas abas">1×1</button>
+  <span id="paginas"></span>
+  <button id="bt-painel" title="Painel: o estado de cada conta e os comandos, sem desenhar o jogo (o mais leve para a VPS)">📋<span class="rot"> Painel</span></button>
+  <button id="bt-anunciar" title="Anunciar no Mercado um item escolhido, em todas as contas de uma vez">📢<span class="rot"> Anunciar</span></button>
+  <button id="bt-ocultar" title="Esconde as telas das contas para poupar a VPS — elas continuam jogando">🙈<span class="rot"> Ocultar telas</span></button>
   <span id="abas-1x1"></span>
   <span class="esp"></span>
   <span class="info" id="info-bot">bot: carregando…</span>
-  <button id="bt-ia" class="so-completa" title="Agente de IA (OpenAI/Anthropic) que decide a formação do PvP e aprende com as partidas">🤖 Agente IA</button>
-  <button id="bt-rankxp" title="Top 10 do ranking de XP do dia (dados do guiapokeidlehardtocapture.site) e a posição das suas contas">🏆 Ranking XP</button>
+  <button id="bt-ia" class="so-completa" title="Agente de IA (OpenAI/Anthropic) que decide a formação do PvP e aprende com as partidas">🤖<span class="rot"> Agente IA</span></button>
+  <button id="bt-rankxp" title="Top 10 do ranking de XP do dia (dados do guiapokeidlehardtocapture.site) e a posição das suas contas">🏆<span class="rot"> Ranking XP</span></button>
   <button id="bt-twitch" title="Quando uma live oficial do jogo entra no ar (bônus de XP), abre no seu Chrome — uma vez por live">📺 Lives → Chrome</button>
-  <button id="bt-rebaixar" title="Anunciar uma pedra abaixo do mercado em todas as contas alternativas, de uma vez">📉 Pedra abaixo do mercado</button>
-  <button id="bt-pasta" title="Abre a pasta onde ficam core.js e logica.js">Pasta do bot</button>
+  <button id="bt-rebaixar" title="Anunciar uma pedra abaixo do mercado em todas as contas alternativas, de uma vez">📉<span class="rot"> Pedra abaixo do mercado</span></button>
+  <button id="bt-pasta" title="Abre a pasta onde ficam core.js e logica.js">📁<span class="rot"> Pasta do bot</span></button>
 </div>
 <div id="grade"></div>
+<div id="painel"></div>
+<div id="oculto-aviso"><div>🙈 Telas ocultas — as contas continuam jogando normalmente.</div><button id="bt-mostrar" class="prim">Mostrar as telas</button></div>
 <div id="aviso"></div>
 <div id="reb-fundo"><div id="reb-modal"></div></div>
 <div id="gx-fundo"><div id="gx-modal"></div></div>
@@ -129,6 +172,18 @@
   }
 
   const lite = cfg.variante === 'lite';
+  // Definida aqui em cima: no modo 1×1 o pintarLayout() roda já na montagem e usava escH antes de
+  // ela existir — o erro parava o script e as abas de troca de conta nunca apareciam.
+  const escH = (x) => String(x ?? '').replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+  // À vista = a conta em foco (grade 1×1 / ⛶) ou, na grade, as da página aberta.
+  // Zoom de uma conta: a em foco (1×1 / ⛶) fica maior. Só com a página pronta — antes do dom-ready o
+  // setZoomFactor lança erro, e no 1×1 isso derrubava a montagem da janela inteira na abertura.
+  const aplicarZoom = (x) => {
+    if (!x?.pronta) return;
+    const foco = grade.classList.contains('solo') && x.caixa.classList.contains('foco');
+    try { x.wv.setZoomFactor(foco ? Math.min(1, x.zoom * 1.6) : x.zoom); } catch {}
+  };
+  const contaEscondida = (c) => grade.classList.contains('oculto') || (grade.classList.contains('solo') ? !c.caixa.classList.contains('foco') : c.caixa.classList.contains('fora'));
   if (lite) document.title = `${document.title} Lite`;
   for (let n = 1; n <= cfg.nContas; n++) {
     const salvo = cfg.contas?.[n - 1] ?? {};
@@ -142,25 +197,52 @@
         <span class="estado carregando" title="conexão"></span>
         <input class="nome" value="${c.nome.replace(/"/g, '&quot;')}" spellcheck="false" title="Clique para renomear">
         <span class="esp"></span>
-        ${lite ? '' : '<button data-a="shiny" class="eco" title="Caçador de shiny: registra os bichos do mapa e arremessa Great Ball quando um shiny cai">✨ Shiny</button>'}
-        <button data-a="hunts" title="Onde caçar com o pokémon ativo desta conta — calculado pelo guiapokeidlehardtocapture.site">🗺 Hunts</button>
-        <button data-a="itens" title="Itens principais (Boss Token, peças de TM, fragmentos) e histórico de drops por boss">📦 Itens</button>
-        <button data-a="vendas" title="Relatório de compras e vendas no Mercado: preço médio, taxa, lucro e preço de venda">💰 Vendas</button>
-        ${lite ? '' : '<button data-a="pvp" class="eco" title="PvP: ordem que cada rival usou e trava da fila automática">⚔ PvP</button>'}
-        ${lite ? '' : '<button data-a="time" title="Análise do time para PvP: quem colocar no lugar de quem">📊 Time</button>'}
-        <button data-a="eco" class="eco" title="Ligar/desligar o Modo Economia do jogo nesta conta">🍃 Eco</button>
-        ${cfg.rotom ? '<button data-a="rotom" title="Abrir o Cockpit do Rotom Sniper desta conta">🎯 Rotom</button>' : ''}
+        ${lite ? '' : '<button data-a="shiny" class="eco" title="Caçador de shiny: registra os bichos do mapa e arremessa Great Ball quando um shiny cai">✨<span class="rot"> Shiny</span></button>'}
+        <button data-a="rota" class="eco" title="Rota de upar: Geodude → Diglett → (40: Centro, 2 Water Stone, evolui) → Larvitar → (80: evolui) → Pupitar → (200) Brave Charizard na Outland">🧭<span class="rot"> Rota</span></button>
+        <button data-a="hunts" title="Onde caçar com o pokémon ativo desta conta — calculado pelo guiapokeidlehardtocapture.site">🗺<span class="rot"> Hunts</span></button>
+        <button data-a="itens" title="Itens principais (Boss Token, peças de TM, fragmentos) e histórico de drops por boss">📦<span class="rot"> Itens</span></button>
+        <button data-a="vendas" title="Relatório de compras e vendas no Mercado: preço médio, taxa, lucro e preço de venda">💰<span class="rot"> Vendas</span></button>
+        ${lite ? '' : '<button data-a="pvp" class="eco" title="PvP: ordem que cada rival usou e trava da fila automática">⚔<span class="rot"> PvP</span></button>'}
+        ${lite ? '' : '<button data-a="time" title="Análise do time para PvP: quem colocar no lugar de quem">📊<span class="rot"> Time</span></button>'}
+        <button data-a="eco" class="eco" title="Ligar/desligar o Modo Economia do jogo nesta conta">🍃<span class="rot"> Eco</span></button>
+        ${cfg.rotom ? '<button data-a="rotom" title="Abrir o Cockpit do Rotom Sniper desta conta">🎯<span class="rot"> Rotom</span></button>' : ''}
         <button data-a="menos" title="Diminuir zoom">−</button>
         <span class="zoom"></span>
         <button data-a="mais" title="Aumentar zoom">+</button>
         <button data-a="som" title="Som desta conta"></button>
         <button data-a="foco" title="Expandir / voltar à grade">⛶</button>
         <button data-a="recarregar" title="Recarregar esta conta">⟳</button>
+        <button data-a="proxy" class="proxy" title="Proxy desta conta">🌐</button>
         <button data-a="sair" title="Deslogar esta conta">Sair</button>
       </div>`;
     const wv = document.createElement('webview');
     wv.setAttribute('partition', `persist:conta${n}`);
-    wv.setAttribute('src', cfg.urlJogo);
+    // Carga sob demanda: na abertura só entram as contas da página que aparece e as que já estavam
+    // logadas — uma conta parada na tela de login gasta ~200 MB à toa. As outras carregam quando a
+    // página (ou a aba 1×1) delas é aberta. Até lá, executeJavaScript dela falha como "carregando".
+    const naPaginaInicial = Math.floor((n - 1) / 4) === (cfg.pagina ?? 0);
+    // Conta sem tela: joga numa janela invisível do processo principal (ver main.js), sem o jogo.
+    // A webview dela nunca carrega — duas sessões na mesma conta se derrubariam.
+    c.semTela = (cfg.semTela ?? []).map(Number).includes(n);
+    c.pendente = c.semTela || (!naPaginaInicial && !cfg.logadas?.[n]);
+    if (c.pendente) {
+      const executar = wv.executeJavaScript.bind(wv);
+      wv.executeJavaScript = (...args) => (c.pendente ? Promise.reject(new Error('conta ainda não carregada')) : executar(...args));
+    } else {
+      wv.setAttribute('src', cfg.urlJogo);
+    }
+    c.carregar = () => {
+      if (c.semTela) return;
+      if (c.descarregada) { c.descarregada = false; wv.loadURL(cfg.urlJogo).catch(() => {}); return; }
+      if (!c.pendente || c.carregando) return;
+      c.carregando = true;
+      wv.setAttribute('src', cfg.urlJogo);
+    };
+    // Deslogada e escondida: a tela de login do jogo tem o captcha da Cloudflare, que recria um
+    // processo a cada minuto (20–35% de CPU cada). Descarrega; volta ao abrir a página dela.
+    c.descarregar = () => { if (c.pendente || c.descarregada) return; c.descarregada = true; c.pronta = false; wv.loadURL('about:blank').catch(() => {}); };
+    // Avisa a página se ela está à vista — o limite de quadros da lógica cai para 1/s escondida.
+    c.avisarVisibilidade = () => { if (c.pronta && !c.descarregada) wv.executeJavaScript(`window.__pbEscondida = ${contaEscondida(c)}`).catch(() => {}); };
     wv.setAttribute('allowpopups', '');
     wv.setAttribute('webpreferences', 'backgroundThrottling=no');
     caixa.appendChild(wv);
@@ -178,39 +260,99 @@
     const elEco = caixa.querySelector('[data-a="eco"]');
     const pintarEco = (ligado) => {
       elEco.classList.toggle('on', ligado);
-      elEco.textContent = ligado ? '🍃 Eco ON' : '🍃 Eco';
+      elEco.innerHTML = `🍃<span class="rot"> Eco${ligado ? ' ON' : ''}</span>`;
     };
     const elShiny = caixa.querySelector('[data-a="shiny"]');
     const lerShiny = () => !elShiny ? Promise.resolve() : wv.executeJavaScript('!!window.__pokeShiny?.ativo')
-      .then((on) => { elShiny.classList.toggle('on', on); elShiny.textContent = on ? '✨ Shiny ON' : '✨ Shiny'; })
+      .then((on) => { elShiny.classList.toggle('on', on); elShiny.innerHTML = `✨<span class="rot"> Shiny${on ? ' ON' : ''}</span>`; })
       .catch(() => {});
     const elPvp = caixa.querySelector('[data-a="pvp"]');
     const lerPvp = () => !elPvp ? Promise.resolve() : wv.executeJavaScript('!!window.__pokePvp?.trava')
       .then((on) => { elPvp.classList.toggle('on', on); elPvp.title = on ? 'PvP: trava da fila automática ligada' : 'PvP: ordem que cada rival usou e trava da fila automática'; })
       .catch(() => {});
-    const lerEco = () => { lerShiny(); lerPvp(); return wv.executeJavaScript(JS_ECO_ESTADO).then(pintarEco).catch(() => {}); };
+    const elRota = caixa.querySelector('[data-a="rota"]');
+    const lerRota = () => wv.executeJavaScript('window.__pokeRota ? { on: window.__pokeRota.ativo, st: window.__pokeRota.status } : null')
+      .then((r) => { elRota.classList.toggle('on', !!r?.on); elRota.innerHTML = `🧭<span class="rot"> Rota${r?.on ? ' ON' : ''}</span>`; elRota.title = r?.on ? `Rota: ${r.st}` : 'Rota de upar: Geodude → Diglett → (40: Centro, 2 Water Stone, evolui) → Larvitar → (80: evolui) → Pupitar → (200) Brave Charizard na Outland'; })
+      .catch(() => {});
+    // Lembra quem está logado, para carregar essa conta já na abertura da próxima vez.
+    const lerLogada = () => wv.executeJavaScript('({ l: !!window.__pokebotCore?.logado, nick: window.__pokebotCore?.eu?.nick ?? null })').then(({ l, nick }) => {
+      // Nome da conta = nick do jogo, enquanto ela tiver o nome padrão ("Conta N") ou o nick anterior;
+      // um nome escrito à mão no cabeçalho continua valendo.
+      if (nick && nick !== c.nome && (/^Conta \d+$/.test(c.nome) || c.nome === c.nickAnterior)) {
+        c.nome = c.nickAnterior = nick;
+        caixa.querySelector('.nome').value = nick;
+        salvar();
+        pintarLayout();
+      } else if (nick) c.nickAnterior ??= nick === c.nome ? nick : undefined;
+      c.logada = l;
+      // Descarregar só a conta deslogada de propósito (botão Sair). Uma conta logada também fica com
+      // `logado` falso quando cai a conexão com o servidor — antes isso descarregava as escondidas
+      // do 1×1 e elas paravam de jogar até alguém abrir a aba delas.
+      if (!l && !cfg.logadas?.[n] && contaEscondida(c) && !c.pendente && !c.descarregada) {
+        c.escondidaDesde ??= Date.now();
+        if (Date.now() - c.escondidaDesde > 120_000) c.descarregar();
+      } else c.escondidaDesde = null;
+      // Conta logada e desconectada há mais de 3 min (queda do servidor, do proxy): recarrega para
+      // reconectar. O jogo segura a saída se estiver em luta (ver 'will-prevent-unload' no main.js).
+      if (!l && cfg.logadas?.[n] && c.pronta && !c.descarregada) {
+        c.semConexaoDesde ??= Date.now();
+        if (Date.now() - c.semConexaoDesde > 180_000) { c.semConexaoDesde = null; try { wv.reload(); } catch {} }
+      } else c.semConexaoDesde = null;
+      // Só anota o login. "Deslogada" só pelo botão Sair: o `false` também aparece em recargas e
+      // reconexões, e uma conta anotada errado não carregava na abertura seguinte.
+      if (!l || cfg.logadas?.[n]) return;
+      cfg.logadas = { ...(cfg.logadas ?? {}), [n]: true };
+      window.multi.salvar({ logadas: cfg.logadas });
+    }).catch(() => {});
+    const lerEco = () => { lerShiny(); lerPvp(); lerRota(); lerLogada(); return wv.executeJavaScript(JS_ECO_ESTADO).then(pintarEco).catch(() => {}); };
     // O modo também pode ser trocado pelo próprio jogo — o botão acompanha.
     setInterval(lerEco, 3000);
     pintar();
+    const elProxy = caixa.querySelector('[data-a="proxy"]');
+    c.pintarProxy = (p) => {
+      elProxy.classList.toggle('on', !!p?.url);
+      elProxy.title = p?.url ? `Proxy: ${p.url}${p.usuario ? ` (usuário ${p.usuario})` : ''}` : 'Proxy desta conta: nenhum (conexão direta)';
+    };
+    window.multi.proxy(n).then(c.pintarProxy);
 
     wv.addEventListener('dom-ready', () => {
-      wv.setZoomFactor(c.zoom);
+      if (wv.getURL().startsWith('about:')) return; // conta descarregada
+      c.pendente = false;
+      c.pronta = true; // dom-ready: daqui em diante dá para falar com a página
+      aplicarZoom(c);
       wv.setAudioMuted(c.mudo);
-      injetarLogica(c);
+      injetarLogica(c).then(c.avisarVisibilidade);
     });
     wv.addEventListener('did-start-loading', () => (elEstado.className = 'estado carregando'));
     wv.addEventListener('did-stop-loading', () => (elEstado.className = 'estado ok'));
     wv.addEventListener('did-fail-load', (e) => { if (e.errorCode !== -3) elEstado.className = 'estado'; });
 
-    caixa.querySelector('.nome').onchange = (e) => { c.nome = e.target.value.trim() || `Conta ${n}`; salvar(); };
+    // Cabeçalho que não coube: a rodinha do mouse rola ele de lado (a barra de rolagem fica escondida).
+    caixa.querySelector('.cab').addEventListener('wheel', (e) => {
+      const cab = e.currentTarget;
+      if (cab.scrollWidth <= cab.clientWidth || !e.deltaY) return;
+      cab.scrollLeft += e.deltaY;
+      e.preventDefault();
+    }, { passive: false });
+    caixa.querySelector('.nome').onchange =(e) => { c.nome = e.target.value.trim() || `Conta ${n}`; salvar(); };
     caixa.querySelector('.cab').onclick = async (e) => {
       const a = e.target.closest('button')?.dataset.a;
       if (!a) return;
       if (a === 'mais' || a === 'menos') {
         c.zoom = Math.min(1.5, Math.max(0.3, +(c.zoom + (a === 'mais' ? 0.05 : -0.05)).toFixed(2)));
-        wv.setZoomFactor(c.zoom); pintar(); salvar();
+        aplicarZoom(c); pintar(); salvar();
       } else if (a === 'shiny') {
         wv.executeJavaScript('window.__pokeShiny?.abrir()').catch(() => aviso('Shiny: a conta ainda está carregando.'));
+      } else if (a === 'rota') {
+        const r = await wv.executeJavaScript('window.__pokeRota ? { on: window.__pokeRota.ativo, st: window.__pokeRota.status, max: window.__pokeRota.precoMax, log: window.__pokeRota.log.slice(0, 8) } : null').catch(() => null);
+        if (!r) return aviso('Rota: a conta ainda está carregando.');
+        const ultimas = r.log.length ? `\n\nÚltimos passos:\n${r.log.join('\n')}` : '';
+        if (r.on) {
+          if (confirm(`${c.nome}: rota LIGADA — ${r.st}${ultimas}\n\nDesligar a rota nesta conta?`)) await wv.executeJavaScript('window.__pokeRota.definirAtivo(false)');
+        } else if (confirm(`${c.nome}: ligar a rota de upar no pokémon ATIVO?\n\n• nv 1–10 Geodude · 11–39 Diglett\n• nv 40: volta ao Centro, compra 2 Water Stone no Mercado (até ${r.max.toLocaleString('pt-BR')} Coins cada) e evolui (Squirtle → Wartortle), depois Larvitar\n• nv 80: Centro e evolui de novo (Wartortle → Blastoise), volta ao Larvitar\n• nv 100–199 Pupitar\n• nv 200: Brave Charizard, na Outland (libera com treinador nv 150)${ultimas}`)) {
+          await wv.executeJavaScript('window.__pokeRota.definirAtivo(true)');
+        }
+        lerRota();
       } else if (a === 'hunts') {
         gxHunts(c);
       } else if (a === 'itens') {
@@ -240,8 +382,12 @@
         // Sem confirmação aqui: se a conta estiver em risco (hunt, boss, Arena), o próprio jogo
         // segura a saída e o app pergunta (ver 'will-prevent-unload' no main.js).
         wv.reload();
+      } else if (a === 'proxy') {
+        abrirProxy(c);
       } else if (a === 'sair') {
         if (confirm(`Deslogar "${c.nome}"? Os dados de login desta conta neste app serão apagados.`)) {
+          cfg.logadas = { ...(cfg.logadas ?? {}), [n]: false };
+          window.multi.salvar({ logadas: cfg.logadas });
           window.multi.sairDaConta(n).then(() => wv.loadURL(cfg.urlJogo));
         }
       }
@@ -249,11 +395,12 @@
   }
 
   function focar(c) {
+    c?.carregar?.();
     for (const x of contas) x.caixa.classList.toggle('foco', x === c);
     grade.classList.toggle('solo', !!c);
-    if (c) c.wv.setZoomFactor(Math.min(1, c.zoom * 1.6));
-    else for (const x of contas) x.wv.setZoomFactor(x.zoom);
+    for (const x of contas) aplicarZoom(x);
     pintarLayout();
+    for (const x of contas) x.avisarVisibilidade();
   }
   // Grade 1×1: uma conta por vez na janela toda, trocada pelas abas da barra de cima. Fica gravada.
   let modo1x1 = cfg.layout === '1x1';
@@ -275,6 +422,159 @@
   abas1x1.onclick = (e) => { const b = e.target.closest('button[data-n]'); if (b) usar1x1(Number(b.dataset.n)); };
   bt1x1.onclick = () => usar1x1(contas.find((x) => x.caixa.classList.contains('foco'))?.n ?? cfg.conta1x1 ?? 1);
   btGrade.onclick = () => { modo1x1 = false; window.multi.salvar({ layout: '2x2' }); focar(null); };
+  // Páginas da grade: 4 contas por vez (1–4, 5–8). As da outra página continuam rodando (bot,
+  // hunts, PvP) — só ficam escondidas. Fica gravada.
+  const POR_PAGINA = 4;
+  const nPaginas = Math.ceil(contas.length / POR_PAGINA);
+  let pagina = Math.min(cfg.pagina ?? 0, nPaginas - 1);
+  const elPaginas = document.getElementById('paginas');
+  function mostrarPagina(p) {
+    pagina = p;
+    contas.forEach((x, i) => { if (Math.floor(i / POR_PAGINA) === p) x.carregar(); });
+    contas.forEach((x, i) => x.caixa.classList.toggle('fora', Math.floor(i / POR_PAGINA) !== p));
+    for (const x of contas) x.avisarVisibilidade();
+    elPaginas.innerHTML = nPaginas > 1 ? [...Array(nPaginas).keys()].map((i) => `<button data-p="${i}" class="${i === pagina ? 'prim' : ''}" title="Mostrar as contas ${i * POR_PAGINA + 1} a ${Math.min(contas.length, (i + 1) * POR_PAGINA)} na grade">Contas ${i * POR_PAGINA + 1}–${Math.min(contas.length, (i + 1) * POR_PAGINA)}</button>`).join('') : '';
+  }
+  elPaginas.onclick = (e) => {
+    const b = e.target.closest('button[data-p]');
+    if (!b) return;
+    mostrarPagina(Number(b.dataset.p));
+    window.multi.salvar({ pagina });
+    if (modo1x1 || grade.classList.contains('solo')) btGrade.click(); // escolher página = voltar à grade dela
+  };
+  mostrarPagina(pagina);
+  // Ocultar telas: à mão (botão) ou sozinho enquanto a janela está minimizada.
+  let ocultoManual = false, minimizada = false, modoPainel = !!cfg.modoPainel;
+  function pintarOculto() {
+    const oculto = ocultoManual || minimizada || modoPainel;
+    grade.classList.toggle('oculto', oculto);
+    document.getElementById('oculto-aviso').classList.toggle('on', oculto && !modoPainel);
+    document.getElementById('painel').classList.toggle('on', modoPainel);
+    document.getElementById('bt-painel').classList.toggle('prim', modoPainel);
+    document.getElementById('bt-ocultar').classList.toggle('prim', ocultoManual);
+    for (const x of contas) x.avisarVisibilidade();
+  }
+  document.getElementById('bt-ocultar').onclick = () => { ocultoManual = !ocultoManual; pintarOculto(); };
+  document.getElementById('bt-mostrar').onclick = () => { ocultoManual = false; minimizada = false; pintarOculto(); };
+  window.multi.aoMinimizar?.((v) => { minimizada = v; pintarOculto(); });
+
+  // ---------------------------------------------------------------- 📋 Painel
+  // O jogo continua rodando em cada conta (login, conexão, bot, rota), mas escondido: não é
+  // desenhado, que é o que pesa sem placa de vídeo. Aqui fica um cartão por conta, lido do estado
+  // que o núcleo do bot já remonta (window.__pokebotCore), e os comandos vão pelo mesmo WebSocket.
+  const JS_PAINEL = `(() => {
+    const c = window.__pokebotCore, e = c?.eu;
+    if (!e) return { logado: !!c?.logado, semTela: window.__semTela?.estado ?? null };
+    const pk = e.pokemons?.find((p) => p.id === e.activeId);
+    const bola = (n) => { const b = (c.catalogoBolas || []).find((x) => (x.nome ?? x.name) === n); return b ? (e.balls?.[b.id] ?? 0) : null; };
+    const pocoes = [...c.itens.values()].filter((i) => i.category === 'heal').reduce((s, i) => s + (e.items?.[i.id] ?? 0), 0);
+    const h = (c.hunts || []).find((x) => x.slug === e.huntSlug);
+    return {
+      logado: !!c.logado, nick: e.nick, nivel: e.level, gold: e.gold, diamantes: e.diamonds, gemas: e.orbs, vip: !!e.loja?.vip,
+      hunt: h ? h.nome + (h.area === 'outland' ? ' · Outland ' + (e.outlandTier ?? 1) : '') : (e.huntSlug ?? '—'),
+      area: h?.area ?? '', centro: !!e.noCentro,
+      pk: pk ? { nome: pk.nome, nv: pk.level, hp: pk.hp, max: pk.maxHp } : null,
+      ultra: bola('Ultra Ball'), pocoes, water: e.items?.[142] ?? 0, semParar: !!e.automation?.autoBallSemParar,
+      rota: window.__pokeRota ? { on: window.__pokeRota.ativo, st: window.__pokeRota.status } : null,
+      semTela: window.__semTela?.estado ?? null,
+      drops: window.__pokeItens?.resumoDrops?.() ?? null,
+      log: [...(c.memoria?.rotaLog || []).slice(0, 2), ...(c.log || []).slice(0, 2)],
+    };
+  })()`;
+  const JS_HUNTS = `JSON.stringify((window.__pokebotCore?.hunts || []).filter((h) => h.nivel <= (window.__pokebotCore?.eu?.level ?? 0)).sort((a, b) => b.nivel - a.nivel).map((h) => [h.slug, h.nome, h.area, h.nivel]))`;
+  const fmtK = (n) => (n == null ? '?' : Number(n).toLocaleString('pt-BR', { maximumFractionDigits: 0 }));
+  const elPainel = document.getElementById('painel');
+  const elTotal = document.createElement('div');
+  elTotal.id = 'painel-total';
+  elTotal.innerHTML = '<b>Drops de hoje (4 contas)</b> · <span class="rot">carregando…</span>';
+  elPainel.appendChild(elTotal);
+  for (const x of contas) {
+    const card = document.createElement('div');
+    card.className = 'pc';
+    card.innerHTML = `
+      <header><span class="ponto"></span><b data-p="nick">${escH(x.nome)}</b><span class="rot" data-p="conta">conta ${x.n}</span></header>
+      <div data-p="linhas"><span class="rot">carregando…</span></div>
+      <div class="acoes">
+        <button data-pa="centro" title="Voltar ao Centro Pokémon">🏥 Centro</button>
+        <select data-pa="hunt" title="Hunts liberadas para o treinador desta conta"><option value="">Ir para hunt…</option></select>
+        <button data-pa="rota" title="Liga/desliga a rota automática desta conta">🧭 Rota</button>
+        <button data-pa="ver" title="Mostra a tela do jogo desta conta (para login, captcha ou olhar algo)">👁 Ver tela</button>
+        <button data-pa="recarregar" title="Recarregar esta conta">⟳</button>
+      </div>
+      <div class="log" data-p="log"></div>`;
+    elPainel.appendChild(card);
+    x.card = card;
+    const sel = card.querySelector('[data-pa="hunt"]');
+    // A lista de hunts só é montada quando o seletor é aberto (são centenas).
+    sel.addEventListener('mousedown', async () => {
+      if (sel.dataset.ok) return;
+      const lista = JSON.parse((await naConta(x, JS_HUNTS)) || '[]');
+      sel.innerHTML = '<option value="">Ir para hunt…</option>' + lista.map(([slug, nome, area, nv]) => `<option value="${escH(slug)}">${escH(nome)} · ${escH(area)} · nv ${nv}</option>`).join('');
+      sel.dataset.ok = '1';
+    });
+    sel.onchange = async () => {
+      const slug = sel.value;
+      if (!slug) return;
+      // Hunt escolhida à mão: desliga a rota desta conta, senão ela levaria de volta em segundos.
+      await naConta(x, `window.__pokeRota?.ativo && window.__pokeRota.definirAtivo(false); window.__pokebotCore.send({ t: 'hunt.select', slug: ${JSON.stringify(slug)} })`);
+      aviso(`${x.nome}: indo para ${sel.options[sel.selectedIndex].text.split(' · ')[0]} (rota desligada nesta conta)`);
+      sel.value = '';
+    };
+    card.querySelector('.acoes').addEventListener('click', async (ev) => {
+      const a = ev.target.closest('button[data-pa]')?.dataset.pa;
+      if (!a) return;
+      if (a === 'centro') { await naConta(x, `window.__pokebotCore.send({ t: 'centro.ir' })`); aviso(`${x.nome}: voltando ao Centro`); }
+      else if (a === 'rota') { await naConta(x, 'window.__pokeRota && window.__pokeRota.definirAtivo(!window.__pokeRota.ativo)'); }
+      else if (a === 'ver') {
+        if (x.semTela) return aviso(`${x.nome} está sem tela — para ver o jogo dela, tire a conta do modo sem tela (me peça).`, 6000);
+        definirPainel(false); usar1x1(x.n);
+      }
+      else if (a === 'recarregar') { if (!x.semTela) { try { x.wv.reload(); } catch {} } }
+      pintarPainel();
+    });
+  }
+  async function pintarPainel() {
+    if (!modoPainel) return;
+    await Promise.all(contas.map(async (x) => {
+      const d = x.pronta || x.semTela ? await naConta(x, JS_PAINEL) : null;
+      const q = (k) => x.card.querySelector(`[data-p="${k}"]`);
+      x.card.querySelector('.ponto').className = `ponto ${d?.logado ? 'ok' : d ? 'ruim' : ''}`;
+      if (!d) { q('linhas').innerHTML = `<span class="rot">${x.descarregada || x.pendente ? 'não carregada — use 👁 Ver tela' : 'carregando…'}</span>`; return; }
+      if (!d.nivel) { q('linhas').innerHTML = `<span class="rot">${x.semTela ? `sem tela: ${escH(d.semTela ?? 'iniciando…')}` : 'deslogada / sem conexão — use 👁 Ver tela para entrar'}</span>`; return; }
+      q('nick').textContent = d.nick ?? x.nome;
+      const hp = d.pk?.max ? Math.round((d.pk.hp / d.pk.max) * 100) : null;
+      q('linhas').innerHTML = [
+        ...(x.semTela ? [`<span class="rot">Modo</span> 🖥️ sem tela · ${escH(d.semTela ?? '?')}`] : []),
+        `<span class="rot">Treinador</span> nv <b>${fmtK(d.nivel)}</b> · 💰 ${fmtK(d.gold)} · 💠 <b>${fmtK(d.gemas)}</b> gemas · 💎 ${fmtK(d.diamantes)} diamantes${d.vip ? ' · VIP' : ''}`,
+        `<span class="rot">Pokémon</span> <b>${escH(d.pk?.nome ?? '—')}</b> nv <b>${fmtK(d.pk?.nv)}</b>${hp != null ? ` · HP ${hp}%` : ''}`,
+        `<span class="rot">Onde</span> ${d.centro ? '🏥 Centro Pokémon' : `🗺 ${escH(d.hunt)}`}`,
+        `<span class="rot">Bolsa</span> Ultra ${fmtK(d.ultra)} · Poções ${fmtK(d.pocoes)} · Water Stone ${fmtK(d.water)} · ${d.semParar ? 'lançar sem parar ✓' : 'lançar sem parar ✗'}`,
+        `<span class="rot">Rota</span> ${d.rota ? (d.rota.on ? `✓ ${escH(d.rota.st)}` : 'desligada') : '—'}`,
+        `<span class="drops"><span class="rot">Caiu hoje</span> ${d.drops?.hoje?.length ? d.drops.hoje.map((x) => `${escH(x.nome)} <b>×${fmtK(x.qtd)}</b>`).join(' · ') : '<span class="rot">nada ainda</span>'}</span>`,
+        ...(d.drops?.ontem?.length ? [`<span class="rot">Ontem</span> ${d.drops.ontem.map((x) => `${escH(x.nome)} ×${fmtK(x.qtd)}`).join(' · ')}`] : []),
+        ...(d.drops?.bolsa?.length ? [`<span class="rot">Na bolsa</span> ${d.drops.bolsa.map((x) => `${escH(x.nome)} ${fmtK(x.qtd)}`).join(' · ')}`] : []),
+        ...(d.drops?.boss?.length ? [`<span class="rot">Boss</span> ${d.drops.boss.map((b) => `${escH(b.nome)} ${b.venceu ? '✓' : '✗'}${b.drops.length ? ` (${escH(b.drops.join(', '))})` : ''}`).join(' · ')}`] : []),
+      ].join('<br>');
+      x.card.querySelector('[data-pa="rota"]').classList.toggle('on', !!d.rota?.on);
+      x.dropsHoje = d.drops?.hoje ?? [];
+      q('log').textContent = (d.log ?? []).join('\n');
+    }));
+    const total = {};
+    for (const x of contas) for (const it of x.dropsHoje ?? []) total[it.nome] = (total[it.nome] ?? 0) + it.qtd;
+    const itens = Object.entries(total).sort((a, b) => b[1] - a[1]);
+    elTotal.innerHTML = `<b>Drops de hoje (${contas.length} contas)</b> · ${itens.length ? itens.map(([n, q]) => `${escH(n)} <b>×${fmtK(q)}</b>`).join(' · ') : '<span class="rot">nada ainda</span>'}`;
+  }
+  function definirPainel(v) {
+    modoPainel = v;
+    window.multi.salvar({ modoPainel });
+    pintarOculto();
+    pintarPainel();
+  }
+  document.getElementById('bt-painel').onclick = () => definirPainel(!modoPainel);
+  setInterval(pintarPainel, 3000);
+  // Escolher um layout (1×1, Grade, aba de conta) sai do painel.
+  for (const id of ['bt-1x1', 'bt-grade', 'abas-1x1']) document.getElementById(id).addEventListener('click', () => { if (modoPainel) definirPainel(false); });
+  if (modoPainel) setTimeout(() => { pintarOculto(); pintarPainel(); }, 0); // abriu no painel
   if (modo1x1) usar1x1(cfg.conta1x1 ?? 1); else pintarLayout();
   document.getElementById('bt-pasta').onclick = () => window.multi.abrirPastaBot();
 
@@ -283,9 +583,8 @@
   // A conta protegida (Bekazin) é sempre pulada — a trava também existe dentro do módulo da conta.
   const reb = { info: [], nome: '', qtd: 1, desconto: '', previas: null, rodando: false, resultados: null,
     base: 'mercado', acimaMax: 8, acimaMin: 3, regras: new Map() }; // base 'rotom' = um pouco ACIMA do seu alvo de compra no Rotom
-  const escH = (x) => String(x ?? '').replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
   const fmtN = (n) => Number(n ?? 0).toLocaleString('pt-BR', { maximumFractionDigits: 0 });
-  const naConta = (c, js) => c.wv.executeJavaScript(js).catch(() => null);
+  const naConta = (c, js) => (c.semTela ? window.multi.semTelaExec(c.n, js) : c.wv.executeJavaScript(js)).catch(() => null);
 
   /**
    * Os alvos de compra do Rotom Sniper (item → preço máximo em Coins), lidos das contas. A conta
@@ -582,6 +881,210 @@
     if (a === 'provedor') { await window.multi.iaConfig({ provedor: e.target.value }); abrirIA(); }
   });
   document.getElementById('bt-ia').onclick = () => abrirIA();
+
+  // ---------------------------------------------------------------- 📢 Anunciar em todas as contas
+  // Escolhe um item, a moeda, o preço e quanto de cada conta; confirma; e cada conta publica o
+  // seu anúncio (`market.criar`, o mesmo pedido do Mercado do jogo). Funciona com e sem tela: os
+  // pedidos vão pelo WebSocket de cada conta e a resposta ("criado" ou erro) é lida dele.
+  const anu = { itemId: null, moeda: 'gold', preco: '', modo: 'tudo', n: 1, bolsas: new Map(), ref: null, rodando: '', resultado: null, agenda: new Map() };
+  const horaCurta = (ms) => new Date(ms).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  const JS_BOLSA = `(() => { const c = window.__pokebotCore, e = c?.eu; if (!e || !c.logado) return null;
+    return Object.entries(e.items || {}).filter(([, q]) => q > 0).map(([id, q]) => { const it = c.itens.get(Number(id)); return [Number(id), Math.floor(q), it?.name ?? it?.nome ?? ('item ' + id), it?.category ?? '']; }); })()`;
+  // Pergunta algo ao servidor por uma conta e espera a resposta que `casa` reconhece.
+  const jsPedir = (pedido, casa, ms = 8000) => `new Promise((ok) => {
+    const c = window.__pokebotCore, ws = c?.ws;
+    if (!ws || ws.readyState !== 1) return ok({ erro: 'conta sem conexão' });
+    const f = (ev) => { if (typeof ev.data !== 'string') return; let m; try { m = JSON.parse(ev.data); } catch { return; }
+      if (m.t === 'erro') { ws.removeEventListener('message', f); return ok({ erro: m.msg ?? m.chave ?? 'erro' }); }
+      if (${casa}) { ws.removeEventListener('message', f); ok(m); } };
+    ws.addEventListener('message', f);
+    c.send(${JSON.stringify(pedido)});
+    setTimeout(() => { ws.removeEventListener('message', f); ok({ erro: 'sem resposta do servidor' }); }, ${ms});
+  })`;
+  const PRINCIPAIS_ANU = [70000, 59194, 40530, 70011, 70012, 70013, 70014, 70015];
+  const qtdAnunciar = (tem) => {
+    const n = Math.max(0, Math.floor(Number(anu.n) || 0));
+    if (anu.modo === 'tudo') return tem;
+    if (anu.modo === 'fixo') return Math.min(tem, n);
+    return Math.max(0, tem - n); // 'deixar'
+  };
+  async function abrirAnunciar(msg = '') {
+    gxFundo.classList.add('aberto');
+    if (!anu.bolsas.size || msg === 'recarregar') {
+      gxModal.innerHTML = '<header><span>📢 Anunciar no Mercado</span><button data-gx="fechar">×</button></header><section>lendo as bolsas das contas…</section>';
+      anu.bolsas = new Map(await Promise.all(contas.map(async (x) => [x.n, (await naConta(x, JS_BOLSA)) ?? null])));
+      msg = '';
+    }
+    // Todos os itens que existem em alguma conta: os principais primeiro, depois por nome.
+    const itens = new Map();
+    for (const lista of anu.bolsas.values()) for (const [id, q, nome, cat] of lista ?? []) {
+      const r = itens.get(id) ?? { id, nome, cat, total: 0 };
+      r.total += q; itens.set(id, r);
+    }
+    const ordem = [...itens.values()].sort((a, b) => (PRINCIPAIS_ANU.includes(b.id) - PRINCIPAIS_ANU.includes(a.id)) || a.nome.localeCompare(b.nome));
+    if (anu.itemId == null || !itens.has(anu.itemId)) anu.itemId = ordem[0]?.id ?? null;
+    const tem = (n) => (anu.bolsas.get(n) ?? []).find(([id]) => id === anu.itemId)?.[1] ?? 0;
+    const linhas = contas.map((x) => ({ x, tem: tem(x.n), vai: qtdAnunciar(tem(x.n)), ok: anu.bolsas.get(x.n) != null }));
+    const vao = linhas.filter((l) => l.vai > 0);
+    const totalQtd = vao.reduce((s, l) => s + l.vai, 0);
+    const preco = Math.floor(Number(anu.preco) || 0);
+    const moedaTxt = anu.moeda === 'orb' ? 'Gemas' : 'Coins';
+    const ref = anu.ref && anu.ref.itemId === anu.itemId ? anu.ref : null;
+    const refTxt = ref ? (ref.erro ? `<span class="ruim">${escH(ref.erro)}</span>` :
+      `menor anúncio: <b>${ref.min ? fmtK(ref.min) : '—'}</b> ${moedaTxt} (${fmtK(ref.anuncios ?? 0)} anúncios) · média 7 dias: <b>${ref.media ? fmtK(ref.media) : '—'}</b>`) : '';
+    gxModal.innerHTML = `<header><span>📢 Anunciar no Mercado — todas as contas</span><button data-gx="fechar">×</button></header>
+      <section id="anu-modal">
+        <div class="linha">Item <select data-an="item">${ordem.map((it) => `<option value="${it.id}" ${it.id === anu.itemId ? 'selected' : ''}>${escH(it.nome)} — ${fmtK(it.total)} no total</option>`).join('')}</select>
+          <button data-an="recarregar" title="Ler as bolsas de novo">⟳</button></div>
+        <div class="linha">Moeda <select data-an="moeda"><option value="gold" ${anu.moeda === 'gold' ? 'selected' : ''}>Coins (gold)</option><option value="orb" ${anu.moeda === 'orb' ? 'selected' : ''}>Gemas</option></select>
+          Preço por unidade <input data-an="preco" type="number" min="1" step="1" value="${escH(anu.preco)}" style="width:120px">
+          <button data-an="ref">🔎 preço do mercado</button></div>
+        ${refTxt ? `<div class="linha ajuda">${refTxt}</div>` : ''}
+        <div class="linha">Quanto, por conta:
+          <label><input type="radio" name="anu-modo" data-an="modo" value="tudo" ${anu.modo === 'tudo' ? 'checked' : ''}> tudo</label>
+          <label><input type="radio" name="anu-modo" data-an="modo" value="fixo" ${anu.modo === 'fixo' ? 'checked' : ''}> até</label>
+          <label><input type="radio" name="anu-modo" data-an="modo" value="deixar" ${anu.modo === 'deixar' ? 'checked' : ''}> deixar na bolsa</label>
+          <input data-an="n" type="number" min="0" step="1" value="${escH(anu.n)}" style="width:80px" ${anu.modo === 'tudo' ? 'disabled' : ''}></div>
+        <table><tr><th>Conta</th><th>Tem</th><th>Vai anunciar</th><th>Resultado</th></tr>
+          ${linhas.map((l) => `<tr><td>${escH(l.x.nome)}</td><td>${l.ok ? fmtK(l.tem) : '<span class="ajuda">sem conexão</span>'}</td><td>${l.vai ? `<b>${fmtK(l.vai)}</b>` : '—'}</td><td>${escH(anu.resultado?.get(l.x.n) ?? '')}</td></tr>`).join('')}
+        </table>
+        <div class="linha" style="margin-top:8px"><button data-an="publicar" class="on" ${anu.rodando || !vao.length || preco < 1 ? 'disabled' : ''}>📢 Publicar ${fmtK(totalQtd)} em ${vao.length} conta(s) a ${preco ? fmtK(preco) : '?'} ${moedaTxt} cada</button>
+          ${anu.agenda.size ? `<button data-an="cancelar">✖ Cancelar ${anu.agenda.size} agendado(s)</button>` : ''}
+          ${anu.rodando ? `<span class="ajuda">${escH(anu.rodando)}</span>` : ''}</div>
+        ${msg ? `<div class="linha">${msg}</div>` : ''}
+        <p class="ajuda">Ao publicar, cada conta é agendada para um momento diferente, sorteado entre 1 e 30 minutos depois (fica na coluna Resultado). O agendamento vive nesta janela do app: fechar o app cancela os que ainda não foram. Cada conta publica um anúncio com a quantidade da coluna "Vai anunciar". O Mercado cobra a taxa dele na venda. Itens trancados pela venda automática (Boss Token, fragmentos, peças de TM) podem ser anunciados normalmente — o cadeado só os protege da venda automática ao NPC.</p>
+      </section>`;
+  }
+  gxFundo.addEventListener('change', (e) => {
+    const k = e.target.dataset.an;
+    if (!k) return;
+    if (k === 'item') { anu.itemId = Number(e.target.value); anu.ref = null; if (!anu.agenda.size) anu.resultado = null; }
+    else if (k === 'moeda') { anu.moeda = e.target.value; anu.ref = null; }
+    else if (k === 'preco') anu.preco = e.target.value;
+    else if (k === 'modo') anu.modo = e.target.value;
+    else if (k === 'n') anu.n = e.target.value;
+    abrirAnunciar();
+  });
+  gxFundo.addEventListener('click', async (e) => {
+    const k = e.target.closest('[data-an]')?.dataset.an;
+    if (!k || e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+    if (k === 'recarregar') { anu.ref = null; if (!anu.agenda.size) anu.resultado = null; return abrirAnunciar('recarregar'); }
+    if (k === 'ref') {
+      const x = contas.find((y) => (anu.bolsas.get(y.n) ?? null) != null);
+      if (!x) return abrirAnunciar('<span class="ruim">nenhuma conta conectada</span>');
+      anu.rodando = 'lendo o Mercado…'; abrirAnunciar();
+      const m = await naConta(x, jsPedir({ t: 'market.itens' }, "m.t === 'market' && m.aba === 'itens'"));
+      const r = m?.resumo?.[anu.itemId];
+      const med = m?.medias?.[anu.itemId]?.[anu.moeda];
+      anu.ref = m?.erro ? { itemId: anu.itemId, erro: m.erro } : { itemId: anu.itemId, anuncios: r?.anuncios ?? 0, min: anu.moeda === 'orb' ? r?.minOrb : r?.minGold, media: med?.media ? Math.round(med.media) : null };
+      anu.rodando = '';
+      return abrirAnunciar();
+    }
+    if (k === 'publicar') {
+      const preco = Math.floor(Number(anu.preco) || 0);
+      const nome = gxModal.querySelector('[data-an="item"]')?.selectedOptions[0]?.text.split(' — ')[0] ?? `item ${anu.itemId}`;
+      const moedaTxt = anu.moeda === 'orb' ? 'Gemas' : 'Coins';
+      const lista = contas.map((x) => ({ x, vai: qtdAnunciar((anu.bolsas.get(x.n) ?? []).find(([id]) => id === anu.itemId)?.[1] ?? 0) })).filter((l) => l.vai > 0);
+      const ref = anu.ref && anu.ref.itemId === anu.itemId && !anu.ref.erro ? anu.ref : null;
+      const alerta = ref?.min && preco < ref.min * 0.7 ? `\n\n⚠ ATENÇÃO: ${Math.round((1 - preco / ref.min) * 100)}% abaixo do menor anúncio atual (${fmtK(ref.min)}).` : '';
+      // Um momento sorteado por conta, entre 1 e 30 min, todos diferentes (ao menos 1 min de distância).
+      const minutos = [];
+      for (const _ of lista) {
+        let m, tentativas = 0;
+        do { m = 1 + Math.random() * 29; tentativas++; } while (minutos.some((x) => Math.abs(x - m) < 1) && tentativas < 200);
+        minutos.push(m);
+      }
+      const agora = Date.now();
+      const plano = lista.map((l, i) => ({ ...l, em: agora + Math.round(minutos[i] * 60_000) })).sort((a, b) => a.em - b.em);
+      if (!confirm(`Anunciar ${nome} a ${fmtK(preco)} ${moedaTxt} cada?\n\nCada conta publica num momento diferente, sorteado entre 1 e 30 min:\n${plano.map((l) => `• ${l.x.nome}: ${fmtK(l.vai)} às ${horaCurta(l.em)}`).join('\n')}\n\nTotal: ${fmtK(plano.reduce((s, l) => s + l.vai, 0))} unidades.${alerta}`)) return;
+      anu.resultado ??= new Map();
+      const itemId = anu.itemId, moeda = anu.moeda;
+      for (const l of plano) {
+        const antigo = anu.agenda.get(l.x.n);
+        if (antigo) clearTimeout(antigo.timer);
+        anu.resultado.set(l.x.n, `⏰ agendado às ${horaCurta(l.em)} (${fmtK(l.vai)}× ${nome})`);
+        const timer = setTimeout(async () => {
+          anu.agenda.delete(l.x.n);
+          // Na hora, confere a bolsa de novo: se a conta já não tem tanto, anuncia o que tiver.
+          const bolsa = (await naConta(l.x, JS_BOLSA)) ?? [];
+          const temAgora = bolsa.find(([id]) => id === itemId)?.[1] ?? 0;
+          const qtd = Math.min(l.vai, temAgora);
+          let txt;
+          if (!qtd) txt = '✗ na hora não tinha mais o item';
+          else {
+            const pedido = { t: 'market.criar', tipo: 'item', itemId, pokemonId: null, caixaId: null, casaId: null, bicicletaId: null, qtd, preco, moeda, dias: null };
+            const r = await naConta(l.x, jsPedir(pedido, "m.t === 'market' && m.aba === 'criado'"));
+            txt = r && !r.erro ? `✓ ${fmtK(qtd)} anunciado(s) às ${horaCurta(Date.now())}` : `✗ ${r?.erro ?? 'sem resposta'} (${horaCurta(Date.now())})`;
+          }
+          anu.resultado.set(l.x.n, txt);
+          aviso(`📢 ${l.x.nome}: ${txt}`, 6000);
+          if (gxFundo.classList.contains('aberto') && gxModal.querySelector('#anu-modal')) abrirAnunciar();
+        }, l.em - agora);
+        anu.agenda.set(l.x.n, { timer, em: l.em });
+      }
+      return abrirAnunciar(`<span class="ok">agendado: ${plano.length} conta(s), a primeira às ${horaCurta(plano[0].em)} e a última às ${horaCurta(plano.at(-1).em)}</span>`);
+    }
+    if (k === 'cancelar') {
+      for (const [n, a] of anu.agenda) { clearTimeout(a.timer); anu.resultado?.set(n, '✖ cancelado'); }
+      anu.agenda.clear();
+      return abrirAnunciar('agendamentos cancelados');
+    }
+  });
+  document.getElementById('bt-anunciar').onclick = () => { if (!anu.agenda.size) anu.resultado = null; abrirAnunciar('recarregar'); };
+
+  // ---------------------------------------------------------------- proxy por conta (🌐)
+  async function abrirProxy(x, msg = '') {
+    const p = await window.multi.proxy(x.n);
+    x.pintarProxy(p);
+    gxFundo.classList.add('aberto');
+    gxModal.innerHTML = `<header><span>🌐 Proxy — ${escH(x.nome)}</span><button data-gx="fechar">×</button></header>
+      <section id="px-modal" data-n="${x.n}">
+        <div class="linha">Endereço <input data-px="url" value="${escH(p.url)}" placeholder="socks5://1.2.3.4:1080 ou http://host:porta — vazio = sem proxy" style="width:380px" spellcheck="false" autocomplete="off"></div>
+        <div class="linha">Usuário <input data-px="usuario" value="${escH(p.usuario)}" style="width:160px" spellcheck="false" autocomplete="off">
+          Senha <input data-px="senha" type="password" placeholder="${p.temSenha ? '•••••••• (salva)' : 'opcional'}" style="width:160px" autocomplete="off">
+          ${p.temSenha ? '<button data-px="apagarSenha">apagar senha</button>' : ''}</div>
+        <div class="linha"><label><input type="checkbox" data-px="todas" style="width:auto"> usar este usuário e senha em <b>todas as contas</b> que têm proxy (cada uma continua com o próprio endereço)</label></div>
+        <div class="linha"><button data-px="salvar">💾 salvar e reconectar</button><button data-px="testar">⚡ testar IP de saída</button></div>
+        ${msg ? `<div class="linha">${msg}</div>` : ''}
+        <p class="ajuda">Tudo desta conta (jogo, login, Rotom) sai pelo proxy; as outras contas não são afetadas. Salvar recarrega a conta. Se o proxy cair, a conta fica sem conexão — ela não volta sozinha para a conexão direta. Proxy SOCKS com usuário e senha não é suportado pelo Chromium: para proxy com senha use http://. A senha fica criptografada no seu PC. O teste consulta o seu IP de saída em api.ipify.org.</p>
+      </section>`;
+  }
+  gxFundo.addEventListener('click', async (e) => {
+    const a = e.target.closest('[data-px]')?.dataset.px;
+    if (!a || e.target.tagName === 'INPUT') return;
+    const sec = gxModal.querySelector('#px-modal');
+    const x = contas.find((y) => y.n === Number(sec?.dataset.n));
+    if (!x) return;
+    const val = (k) => sec.querySelector(`[data-px="${k}"]`).value;
+    if (a === 'salvar' || a === 'apagarSenha') {
+      const r = await window.multi.proxySalvar(x.n, a === 'salvar'
+        ? { url: val('url'), usuario: val('usuario'), senha: val('senha') || null }
+        : { url: val('url'), apagarSenha: true });
+      if (r.erro) return abrirProxy(x, `<span class="ruim">✗ ${escH(r.erro)}</span>`);
+      x.wv.reload();
+      if (a === 'salvar' && sec.querySelector('[data-px="todas"]').checked) {
+        // Mesma credencial nas outras contas que já têm endereço de proxy (na Webshare o usuário e a
+        // senha são os mesmos para todos os proxies do plano).
+        const feitas = [];
+        for (const y of contas) {
+          if (y === x) continue;
+          const py = await window.multi.proxy(y.n);
+          if (!py.url) continue;
+          const ry = await window.multi.proxySalvar(y.n, { url: py.url, usuario: val('usuario'), senha: val('senha') || null });
+          if (ry.erro) continue;
+          y.pintarProxy(ry);
+          if (!y.pendente) y.wv.reload();
+          feitas.push(y.n);
+        }
+        return abrirProxy(x, `<span class="ok">salvo nesta conta e nas contas ${feitas.join(', ') || '(nenhuma outra tem endereço de proxy)'} — recarregadas</span>`);
+      }
+      abrirProxy(x, `<span class="ok">salvo — conta recarregada ${r.url ? `pelo proxy ${escH(r.url)}` : 'sem proxy (conexão direta)'}</span>`);
+    } else if (a === 'testar') {
+      e.target.disabled = true; e.target.textContent = 'testando…';
+      const r = await window.multi.proxyTestar(x.n);
+      abrirProxy(x, r.ok ? `<span class="ok">✓ IP de saída: <b>${escH(r.ip)}</b> (${r.ms} ms${r.viaProxy ? ', pelo proxy' : ', conexão direta'})</span>` : `<span class="ruim">✗ ${escH(r.erro)}</span>`);
+    }
+  });
   // Lite: sem agente, sem PvP, sem análise de multi-acc.
   if (lite) for (const el of document.querySelectorAll('.so-completa')) el.remove();
 
@@ -593,7 +1096,7 @@
   // A cada minuto junta as 4 contas e manda abrir as lives que ninguém está assistindo.
   let twitchLigado = cfg.twitchChrome !== false;
   const btTwitch = document.getElementById('bt-twitch');
-  const pintarTwitch = () => { btTwitch.classList.toggle('prim', twitchLigado); btTwitch.textContent = `📺 Lives → Chrome: ${twitchLigado ? 'ON' : 'off'}`; };
+  const pintarTwitch = () => { btTwitch.classList.toggle('prim', twitchLigado); btTwitch.innerHTML = `📺<span class="rot"> Lives → Chrome:</span> ${twitchLigado ? 'ON' : 'off'}`; };
   btTwitch.onclick = () => { twitchLigado = !twitchLigado; window.multi.salvar({ twitchChrome: twitchLigado }); pintarTwitch(); if (twitchLigado) vigiarTwitch(); };
   pintarTwitch();
   async function vigiarTwitch() {

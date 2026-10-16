@@ -262,6 +262,49 @@
     return hoje.getTime() - (p.dias - 1) * DIA;
   }
 
+  // ---------------------------------------------------------------- drops pela bolsa
+  // Os drops acima vêm dos eventos de luta (`batalha`), que não chegam com o Modo Economia ligado
+  // — e as contas sem tela rodam sempre nele. Aqui a conta é feita pela BOLSA: subiu a quantidade
+  // de um item principal entre um `estado` e o seguinte, caiu. Vale com e sem tela. Saltos enormes
+  // (bolsa remontada inteira, troca de conta) são ignorados.
+  const CHAVE_BOLSA = 'pokeitens.bolsa.v1'; // { 'AAAA-MM-DD': { itemId: qtd } }
+  let ganhosBolsa = ler(CHAVE_BOLSA, {});
+  let bolsaAnterior = null;
+  const tirarVigiaBolsa = core.on((m) => {
+    if (m.t !== 'estado' && m.t !== 'welcome') return;
+    const it = core.eu?.items;
+    if (!it) return;
+    const agora = Object.fromEntries(PRINCIPAIS.map((p) => [p.id, Number(it[p.id] ?? 0)]));
+    if (bolsaAnterior && m.t === 'estado') {
+      const dia = diaDe(Date.now());
+      let mudou = false;
+      for (const p of PRINCIPAIS) {
+        const ganho = agora[p.id] - bolsaAnterior[p.id];
+        if (ganho > 0 && ganho < 500) { const d = (ganhosBolsa[dia] ??= {}); d[p.id] = (d[p.id] ?? 0) + ganho; mudou = true; }
+      }
+      if (mudou) {
+        const limite = diaDe(Date.now() - DIAS_GUARDADOS * DIA);
+        for (const k of Object.keys(ganhosBolsa)) if (k < limite) delete ganhosBolsa[k];
+        gravar(CHAVE_BOLSA, ganhosBolsa);
+      }
+    }
+    bolsaAnterior = agora;
+  });
+  limpezas.push(tirarVigiaBolsa);
+  /** Para o 📋 Painel: o que caiu hoje (pela bolsa) e as últimas lutas de boss. */
+  I.resumoDrops = () => {
+    const hoje = diaDe(Date.now());
+    const ontem = diaDe(Date.now() - DIA);
+    const nomeDe = (id) => PRINCIPAIS.find((p) => p.id === Number(id))?.nome ?? `#${id}`;
+    const lista = (o) => Object.entries(o ?? {}).filter(([, q]) => q > 0).map(([id, q]) => ({ nome: nomeDe(id), qtd: q }));
+    return {
+      hoje: lista(ganhosBolsa[hoje]),
+      ontem: lista(ganhosBolsa[ontem]),
+      bolsa: PRINCIPAIS.map((p) => ({ nome: p.nome, qtd: Number(core.eu?.items?.[p.id] ?? 0) })).filter((x) => x.qtd > 0),
+      boss: bosses.slice(0, 3).map((b) => ({ em: b.em, nome: b.nome, venceu: b.venceu, drops: b.drops.map((x) => `${x.nome} ×${x.qtd}`) })),
+    };
+  };
+
   // ---------------------------------------------------------------- gravação dos drops
   function somarDrop(itemId, qtd, fonte) {
     if (!ehPrincipal(itemId) || !(qtd > 0)) return;
