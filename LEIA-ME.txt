@@ -228,13 +228,15 @@ POKEBOT EMBUTIDO
         busca a versão nova no GitHub (branch main) a cada 5 minutos. Para desligar, ponha
         "autoAtualizar": false no multi.json (pasta de dados do app).
 
-VIGIA (reabre o app sozinho) — "Vigia (ligar).bat" na pasta do exe
+VIGIA (reabre o app sozinho) — botão 🛡 Vigia na barra de cima do app
+  - Vem DENTRO do app: um clique no 🛡 liga (o app copia o script para %APPDATA%\PokeIdle Multiigia
+    e cria a tarefa), outro desliga. Não precisa de arquivo nenhum além do exe.
   - Liga uma tarefa do Agendador do Windows que roda a cada 10 min, escondida, o "Vigia PokeIdle.ps1".
   - Também entra na Inicialização do Windows: ao entrar no Windows, espera 1 min e roda o vigia
     (que abre o app). O Windows precisa chegar na área de trabalho (login feito).
   - Reabre o PokeIdle Multi (perfil normal; não mexe no Perfil 2 nem na Lite) quando: o app fechou;
     o app travou (sem sinal de vida há mais de 5 min); ou a conta mãe ⭐ está deslogada há
-    mais de 3 min. Mata o app e abre o "PokeIdle Multi 1.x.y.exe" mais novo da pasta.
+    mais de 3 min. Mata o app e abre o exe que estava aberto (ou um "PokeIdle Multi 1.x.y.exe" mais novo na mesma pasta).
   - Deslogado que não volta depois de 3 reaberturas seguidas: para de reabrir e só anota no log
     (faça o login na mão). O app grava o sinal de vida em %APPDATA%\PokeIdle Multi\status.json.
   - Log: %APPDATA%\PokeIdle Multiigia.log · Para desligar: "Vigia (desligar).bat".

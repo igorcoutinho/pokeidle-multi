@@ -299,6 +299,56 @@ ipcMain.on('multi:status', (_e, contas) => {
   } catch (e) { console.warn('status do vigia não gravado', e.message); }
 });
 
+// ------------------------------------------------------------------ 🛡 vigia (reabre o app sozinho)
+// O script do vigia vai DENTRO do app (atalhos/Vigia PokeIdle.ps1). Ligar pelo botão 🛡 da janela:
+// copia o script para <perfil>\vigia, cria a tarefa do Agendador (a cada 10 min, escondida) e a
+// entrada na Inicialização do Windows (1 min depois do login). Só no perfil normal da versão completa.
+const VIGIA_TAREFA = 'PokeIdle Multi - Vigia';
+const VIGIA_PODE = process.platform === 'win32' && !PERFIL && !VARIANTE;
+const pastaVigia = () => path.join(app.getPath('userData'), 'vigia');
+const arqInicializacao = () => path.join(app.getPath('appData'), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup', 'PokeIdle Multi - Vigia.vbs');
+function rodarCmd(cmd, args) {
+  return new Promise((ok) => {
+    let out = '';
+    const p = spawn(cmd, args, { windowsHide: true });
+    p.stdout?.on('data', (d) => (out += d));
+    p.stderr?.on('data', (d) => (out += d));
+    p.on('error', (e) => ok({ code: -1, out: e.message }));
+    p.on('close', (code) => ok({ code, out }));
+  });
+}
+// .vbs em UTF-16 com BOM: o Windows Script Host lê assim mesmo com acento no caminho
+const gravarVbs = (arq, texto) => fs.writeFileSync(arq, Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(texto.replace(/\n/g, '\r\n'), 'utf16le')]));
+async function vigiaLigado() {
+  if (!VIGIA_PODE) return false;
+  return (await rodarCmd('schtasks', ['/Query', '/TN', VIGIA_TAREFA])).code === 0;
+}
+async function instalarVigia() {
+  const dir = pastaVigia();
+  fs.mkdirSync(dir, { recursive: true });
+  const ps1 = path.join(dir, 'Vigia PokeIdle.ps1');
+  fs.writeFileSync(ps1, fs.readFileSync(path.join(__dirname, 'atalhos', 'Vigia PokeIdle.ps1')));
+  const rodaVigia = `CreateObject("WScript.Shell").Run "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ""${ps1}""", 0, False`;
+  const vbs = path.join(dir, 'vigia.vbs');
+  gravarVbs(vbs, `${rodaVigia}\n`);
+  const r = await rodarCmd('schtasks', ['/Create', '/F', '/TN', VIGIA_TAREFA, '/SC', 'MINUTE', '/MO', '10', '/TR', `wscript.exe "${vbs}"`, '/IT']);
+  if (r.code !== 0) return { ok: false, msg: r.out.trim() || `schtasks saiu com ${r.code}` };
+  gravarVbs(arqInicializacao(), `' Vigia do PokeIdle Multi: ao entrar no Windows, espera 1 min e roda o vigia (que abre o app).\nWScript.Sleep 60000\n${rodaVigia}\n`);
+  return { ok: true };
+}
+async function desligarVigia() {
+  const r = await rodarCmd('schtasks', ['/Delete', '/F', '/TN', VIGIA_TAREFA]);
+  try { fs.unlinkSync(arqInicializacao()); } catch {}
+  return { ok: r.code === 0 || !(await vigiaLigado()), msg: r.out.trim() };
+}
+ipcMain.handle('multi:vigia', async (_e, quer) => {
+  if (!VIGIA_PODE) return { disponivel: false };
+  let r = { ok: true };
+  if (quer === true) r = await instalarVigia();
+  else if (quer === false) r = await desligarVigia();
+  return { disponivel: true, ligado: await vigiaLigado(), ...r, log: path.join(app.getPath('userData'), 'vigia.log') };
+});
+
 // Notificação do Windows + ícone piscando na barra de tarefas (alertas grandes das contas).
 ipcMain.handle('multi:notificar', (_e, { titulo, texto } = {}) => {
   try {
@@ -585,6 +635,8 @@ app.whenReady().then(async () => {
   semearPastaDoBot();
   if (VARIANTE !== 'basica') await carregarRotom(); // antes das webviews: o content script precisa estar lá quando o jogo abrir
   criarJanela();
+  // vigia já ligado: atualiza o script para o desta versão (e para a pasta do perfil)
+  if (VIGIA_PODE) vigiaLigado().then((on) => on && instalarVigia()).catch(() => {});
   vigiarBot();
   if (!EM_DESENVOLVIMENTO) {
     atualizarDoGitHub();

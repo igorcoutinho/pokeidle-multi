@@ -86,6 +86,7 @@
   <span id="abas-1x1"></span>
   <span class="esp"></span>
   <span class="info" id="info-bot">bot: carregando…</span>
+  <button id="bt-vigia" class="nao-basica" style="display:none" title="Vigia: reabre o app se ele fechar, travar ou a conta mãe ⭐ deslogar">🛡 Vigia</button>
   <button id="bt-proxy" class="nao-basica" title="Proxy das contas deste app (ex.: túnel até uma VPS) e o IP de saída delas">🌐 …</button>
   <button id="bt-ia" class="so-completa nao-basica" title="Agente de IA (OpenAI/Anthropic) que decide a formação do PvP e aprende com as partidas">🤖 Agente IA</button>
   <button id="bt-rankxp" class="nao-basica" title="Top 10 do ranking de XP do dia (dados do guiapokeidlehardtocapture.site) e a posição das suas contas">🏆 Ranking XP</button>
@@ -797,6 +798,30 @@ Ligar mesmo assim?`)) return;
     }
     mostrarAlerta(c, a);
   });
+
+  // ---------------------------------------------------------------- 🛡 vigia (reabre o app sozinho)
+  const btVigia = document.getElementById('bt-vigia');
+  const pintarVigia = (r) => {
+    if (!r?.disponivel) { btVigia.style.display = 'none'; return; }
+    btVigia.style.display = '';
+    btVigia.textContent = r.ligado ? '🛡 Vigia ON' : '🛡 Vigia';
+    btVigia.classList.toggle('prim', !!r.ligado);
+    btVigia.title = r.ligado
+      ? `Vigia LIGADO: a cada 10 min (e 1 min depois de entrar no Windows) reabre o app se ele fechou, travou ou a conta mãe ⭐ está deslogada há 3 min. Clique para desligar.\nLog: ${r.log}`
+      : 'Vigia desligado. Clique para ligar: reabre o app se ele fechar, travar ou a conta mãe ⭐ deslogar — também abre o app ao entrar no Windows.';
+  };
+  if (window.multi.vigia) window.multi.vigia().then(pintarVigia).catch(() => {});
+  btVigia.onclick = async () => {
+    const atual = await window.multi.vigia();
+    if (atual.ligado) {
+      if (!confirm('Desligar o vigia? O app não será mais reaberto sozinho (nem ao ligar o Windows).')) return;
+    } else if (!confirm('Ligar o vigia?\n\n• A cada 10 min ele confere o app e reabre se fechou, travou ou se a conta mãe ⭐ está deslogada há mais de 3 min.\n• Ao entrar no Windows, abre o app sozinho (1 min depois).\n\nSe for fechar o app de propósito, desligue o vigia antes (senão ele reabre).')) return;
+    btVigia.disabled = true;
+    const r = await window.multi.vigia(!atual.ligado).catch((e) => ({ ok: false, msg: e.message }));
+    btVigia.disabled = false;
+    pintarVigia(r);
+    if (r && r.ok === false) aviso(`Vigia: não deu — ${r.msg ?? 'erro'}`);
+  };
 
   // ---------------------------------------------------------------- 🌐 proxy deste perfil
   const btProxy = document.getElementById('bt-proxy');

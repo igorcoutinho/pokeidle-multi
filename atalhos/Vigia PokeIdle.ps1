@@ -13,7 +13,9 @@
 param([switch]$Teste)
 $ErrorActionPreference = 'Continue'
 $pasta = Split-Path -Parent $MyInvocation.MyCommand.Path
-$ud = Join-Path $env:APPDATA 'PokeIdle Multi'
+# instalado pelo app em <perfil>\vigia: o perfil e a pasta de cima; senao, o perfil normal
+$ud = Split-Path -Parent $pasta
+if (-not (Test-Path (Join-Path $ud 'multi.json'))) { $ud = Join-Path $env:APPDATA 'PokeIdle Multi' }
 $arqLog = Join-Path $ud 'vigia.log'
 $arqEstado = Join-Path $ud 'vigia-estado.json'
 $agora = [DateTimeOffset]::Now.ToUnixTimeMilliseconds()
@@ -71,12 +73,19 @@ if ($principais.Count -eq 0) {
 }
 if (-not $motivo) { exit 0 }
 
-# o exe para abrir: o mais novo desta pasta (sem Lite/Basico); senao, o que estava aberto
-$exe = Get-ChildItem -Path $pasta -Filter 'PokeIdle Multi 1.*.exe' -File -ErrorAction SilentlyContinue |
-  Where-Object { $_.Name -notmatch 'Lite|Basico' } |
-  Sort-Object { [version](($_.BaseName -replace '^PokeIdle Multi ', '') -replace '[^\d.]', '') } -Descending |
-  Select-Object -First 1 -ExpandProperty FullName
-if (-not $exe -and $st -and $st.exe -and (Test-Path $st.exe)) { $exe = $st.exe }
+# o exe para abrir: o "PokeIdle Multi 1.x.y.exe" mais novo da pasta do exe que o app anotou no
+# status (segue as versoes novas baixadas na mesma pasta); senao, o proprio exe anotado; senao,
+# o mais novo da pasta deste script (instalacao antiga, pela pasta dist).
+function MaisNovo($dir) {
+  if (-not $dir -or -not (Test-Path $dir)) { return $null }
+  Get-ChildItem -Path $dir -Filter 'PokeIdle Multi 1.*.exe' -File -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -notmatch 'Lite|Basico' } |
+    Sort-Object { [version](($_.BaseName -replace '^PokeIdle Multi ', '') -replace '[^\d.]', '') } -Descending |
+    Select-Object -First 1 -ExpandProperty FullName
+}
+$exe = $null
+if ($st -and $st.exe -and (Test-Path $st.exe)) { $exe = MaisNovo (Split-Path -Parent $st.exe); if (-not $exe) { $exe = $st.exe } }
+if (-not $exe) { $exe = MaisNovo $pasta }
 if (-not $exe) { Log "$motivo - mas NAO achei o exe do PokeIdle Multi em $pasta"; exit 1 }
 
 if ($Teste) { Write-Output "TESTE - reabriria: $motivo -> $exe (mataria os pids: $(($principais | ForEach-Object { $_.ProcessId }) -join ', '))"; exit 0 }

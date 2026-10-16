@@ -1,7 +1,7 @@
 {
   "name": "pokeidle-multi",
   "productName": "PokeIdle Multi",
-  "version": "1.12.28",
+  "version": "1.12.29",
   "description": "4 contas do PokéIdle em grade, cada uma com sessão própria, com o PokeBot embutido.",
   "main": "main.js",
   "scripts": {
@@ -14,7 +14,7 @@
   "build": {
     "appId": "io.pokeidle.multi",
     "productName": "PokeIdle Multi",
-    "files": ["main.js", "preload-janela.js", "preload-conta.js", "index.html", "bot/**"],
+    "files": ["main.js", "preload-janela.js", "preload-conta.js", "index.html", "bot/**", "atalhos/Vigia PokeIdle.ps1"],
     "win": { "target": "portable" },
     "mac": { "target": "dmg", "category": "public.app-category.games", "identity": null, "artifactName": "PokeIdle Multi ${version} (Mac).${ext}" },
     "dmg": { "title": "PokeIdle Multi ${version}" }
